@@ -1,0 +1,467 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"log"
+	"mime"
+	"net"
+	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
+	"ai-sign-in-gateway/internal/config"
+	"ai-sign-in-gateway/internal/database"
+	"ai-sign-in-gateway/internal/handlers"
+	"ai-sign-in-gateway/internal/migrations"
+	"ai-sign-in-gateway/internal/runtimecontrol"
+	"ai-sign-in-gateway/internal/seed"
+	"ai-sign-in-gateway/internal/services"
+)
+
+const appName = "ai-sign-in-gateway"
+const (
+	defaultBackendPort   = 8972
+	defaultFrontendPort  = 3721
+	maxDesktopPortOffset = 20
+	runtimeProtocol      = 3
+)
+
+var (
+	defaultHost        = "127.0.0.1"
+	defaultOpenBrowser = "true"
+)
+
+type ShellConfig struct {
+	Host               string `json:"host"`
+	Port               int    `json:"port"`
+	OpenBrowserOnStart bool   `json:"open_browser_on_start"`
+	DataDir            string `json:"data_dir"`
+}
+
+func main() {
+	if err := run(); err != nil {
+		log.Fatalf("%s 启动失败: %v", appName, err)
+	}
+}
+
+func run() error {
+	if targetURL := desktopWindowURL(); targetURL != "" {
+		return runDesktopWindow(targetURL)
+	}
+
+	configDir, err := config.UserConfigDir()
+	if err != nil {
+		return err
+	}
+	defaultConfigDir, err := config.DefaultConfigDir()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Join(configDir, "logs"), 0o755); err != nil {
+		return err
+	}
+	logFile, err := os.OpenFile(filepath.Join(configDir, "logs", "shell.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err == nil {
+		defer logFile.Close()
+		log.SetOutput(io.MultiWriter(os.Stdout, logFile))
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	host := envString("AI_SIGN_IN_GATEWAY_HOST", defaultHost)
+	backendPort := envFirstInt([]string{"AI_SIGN_IN_GATEWAY_BACKEND_PORT", "AI_SIGN_IN_GATEWAY_PORT"}, defaultBackendPort)
+	frontendPort := envInt("AI_SIGN_IN_GATEWAY_FRONTEND_PORT", defaultFrontendPort)
+
+	if desktopShellAvailable() && envBool("AI_SIGN_IN_GATEWAY_DESKTOP", true) {
+		if existing, ok := findRunningDesktopService(host, frontendPort, maxDesktopPortOffset); ok {
+			if existing.RuntimeProtocol < runtimeProtocol || runningServiceUsesDifferentConfig(existing, configDir) {
+				if existing.RuntimeProtocol < runtimeProtocol {
+					log.Printf("检测到旧版本本地服务，准备停止默认端口后启动新版: %s", existing.PublicURL)
+				} else {
+					log.Printf("检测到已运行服务使用不同配置目录，准备重启服务: 当前=%s 已运行=%s", configDir, existing.ConfigDir)
+				}
+				results := runtimecontrol.StopAppProcessesOnPorts([]int{
+					frontendPort,
+					backendPort,
+					existing.Port,
+					existing.BackendPort,
+				}, nil, appName)
+				for _, result := range results {
+					log.Printf("停止旧版本端口 %d: %s", result.Port, result.Message)
+				}
+			} else {
+				log.Printf("检测到已运行的本地服务，直接进入桌面窗口: %s", existing.PublicURL)
+				return runDesktopWindow(desktopConsoleURL(existing.PublicURL))
+			}
+		}
+	}
+
+	backendLn, actualBackendPort, err := listenWithPortOffset(host, backendPort, maxDesktopPortOffset)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = backendLn.Close()
+	}()
+	if actualBackendPort != backendPort {
+		log.Printf("后端端口 %d 已占用，已自动切换到 %d", backendPort, actualBackendPort)
+	}
+
+	db, err := database.Open(cfg)
+	if err != nil {
+		return err
+	}
+	defer database.Close(db)
+	if err := migrations.Apply(db); err != nil {
+		return err
+	}
+	if err := seed.InitialData(db, cfg); err != nil {
+		return err
+	}
+
+	api := handlers.NewRouter(db, cfg)
+	backendURL := browserURL(host, actualBackendPort)
+	gatewayURL := backendURL + "/api/gateway"
+
+	if desktopShellAvailable() && envBool("AI_SIGN_IN_GATEWAY_DESKTOP", true) {
+		frontendLn, actualFrontendPort, frontendErr := listenWithPortOffset(host, frontendPort, maxDesktopPortOffset)
+		if frontendErr != nil {
+			return frontendErr
+		}
+		defer func() {
+			_ = frontendLn.Close()
+		}()
+		if actualFrontendPort != frontendPort {
+			log.Printf("前端端口 %d 已占用，已自动切换到 %d", frontendPort, actualFrontendPort)
+		}
+		frontendURL := browserURL(host, actualFrontendPort)
+		handlers.SetRuntimeInfo(handlers.RuntimeInfo{
+			FrontendURL:                 frontendURL,
+			FrontendDefaultPort:         frontendPort,
+			FrontendPort:                actualFrontendPort,
+			FrontendDefaultPortOccupant: defaultPortOwner(host, frontendPort, actualFrontendPort),
+			BackendURL:                  backendURL,
+			BackendDefaultPort:          backendPort,
+			BackendPort:                 actualBackendPort,
+			BackendDefaultPortOccupant:  defaultPortOwner(host, backendPort, actualBackendPort),
+			GatewayURL:                  gatewayURL,
+			RuntimeProtocol:             runtimeProtocol,
+			ConfigDir:                   configDir,
+			DefaultConfigDir:            defaultConfigDir,
+			DatabasePath:                cfg.SQLitePath(),
+		})
+
+		backendServer := &http.Server{
+			Addr:              net.JoinHostPort(host, strconv.Itoa(actualBackendPort)),
+			Handler:           api,
+			ReadHeaderTimeout: 15 * time.Second,
+		}
+		frontendServer := &http.Server{
+			Addr:              net.JoinHostPort(host, strconv.Itoa(actualFrontendPort)),
+			Handler:           desktopFrontendHandler(api, backendURL),
+			ReadHeaderTimeout: 15 * time.Second,
+		}
+
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		go services.RunDatabaseBackupLoop(ctx, cfg.SQLitePath())
+		log.Printf("%s 前端正在监听 %s", appName, frontendURL)
+		log.Printf("%s 后端正在监听 %s", appName, backendURL)
+		log.Printf("网关请求地址: %s", gatewayURL)
+		log.Printf("用户配置目录: %s", configDir)
+		return runDesktopShell(ctx, desktopRuntime{
+			FrontendURL: frontendURL,
+			BackendURL:  backendURL,
+			GatewayURL:  gatewayURL,
+			ConfigDir:   configDir,
+			DB:          db,
+			Backend:     backendServer,
+			Frontend:    frontendServer,
+			BackendLn:   backendLn,
+			FrontendLn:  frontendLn,
+		})
+	}
+
+	handlers.SetRuntimeInfo(handlers.RuntimeInfo{
+		FrontendURL:                 backendURL,
+		FrontendDefaultPort:         frontendPort,
+		FrontendPort:                actualBackendPort,
+		FrontendDefaultPortOccupant: defaultPortOwner(host, frontendPort, actualBackendPort),
+		BackendURL:                  backendURL,
+		BackendDefaultPort:          backendPort,
+		BackendPort:                 actualBackendPort,
+		BackendDefaultPortOccupant:  defaultPortOwner(host, backendPort, actualBackendPort),
+		GatewayURL:                  gatewayURL,
+		RuntimeProtocol:             runtimeProtocol,
+		ConfigDir:                   configDir,
+		DefaultConfigDir:            defaultConfigDir,
+		DatabasePath:                cfg.SQLitePath(),
+	})
+	server := &http.Server{
+		Addr:              net.JoinHostPort(host, strconv.Itoa(actualBackendPort)),
+		Handler:           shellHandler(api),
+		ReadHeaderTimeout: 15 * time.Second,
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go services.RunDatabaseBackupLoop(ctx, cfg.SQLitePath())
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownCtx)
+	}()
+	log.Printf("%s Go 后端正在监听 %s", appName, backendURL)
+	log.Printf("网关请求地址: %s", gatewayURL)
+	log.Printf("用户配置目录: %s", configDir)
+	if envBool("AI_SIGN_IN_GATEWAY_OPEN_BROWSER", defaultOpenBrowserEnabled()) {
+		go openBrowser(backendURL)
+	}
+
+	err = server.Serve(backendLn)
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	return err
+}
+
+func desktopFrontendHandler(api http.Handler, backendURL string) http.Handler {
+	target, err := url.Parse(backendURL)
+	if err != nil {
+		return shellHandler(api)
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	return funcHandler(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api" {
+			proxy.ServeHTTP(w, r)
+			return
+		}
+		if embedded, ok := embeddedFrontend(); ok {
+			serveEmbeddedFrontend(embedded, w, r)
+			return
+		}
+		serveFrontend(findFrontendDist(), w, r)
+	})
+}
+
+type funcHandler func(http.ResponseWriter, *http.Request)
+
+func (fn funcHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	fn(w, r)
+}
+
+func shellHandler(api http.Handler) http.Handler {
+	if embedded, ok := embeddedFrontend(); ok {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api" {
+				api.ServeHTTP(w, r)
+				return
+			}
+			serveEmbeddedFrontend(embedded, w, r)
+		})
+	}
+	dist := findFrontendDist()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api" {
+			api.ServeHTTP(w, r)
+			return
+		}
+		serveFrontend(dist, w, r)
+	})
+}
+
+func findFrontendDist() string {
+	candidates := []string{}
+	if cwd, err := os.Getwd(); err == nil {
+		candidates = append(candidates, filepath.Join(cwd, "frontend", "dist"))
+	}
+	if exe, err := os.Executable(); err == nil {
+		dir := filepath.Dir(exe)
+		candidates = append(candidates, filepath.Join(dir, "frontend", "dist"))
+		candidates = append(candidates, filepath.Join(dir, "..", "frontend", "dist"))
+	}
+	for _, candidate := range candidates {
+		if exists(filepath.Join(candidate, "index.html")) {
+			return candidate
+		}
+	}
+	return filepath.Join("frontend", "dist")
+}
+
+func serveFrontend(dist string, w http.ResponseWriter, r *http.Request) {
+	if !exists(filepath.Join(dist, "index.html")) {
+		http.Error(w, "frontend/dist 不存在，请先执行 npm run build", http.StatusServiceUnavailable)
+		return
+	}
+	cleanPath := filepath.Clean(strings.TrimPrefix(r.URL.Path, "/"))
+	if cleanPath == "." {
+		cleanPath = "index.html"
+	}
+	requested := filepath.Join(dist, cleanPath)
+	if strings.HasPrefix(requested, dist) {
+		if info, err := os.Stat(requested); err == nil && !info.IsDir() {
+			if contentType := mime.TypeByExtension(filepath.Ext(requested)); contentType != "" {
+				w.Header().Set("Content-Type", contentType)
+			}
+			http.ServeFile(w, r, requested)
+			return
+		}
+	}
+	if isStaticAssetRequest(r.URL.Path) {
+		http.NotFound(w, r)
+		return
+	}
+	http.ServeFile(w, r, filepath.Join(dist, "index.html"))
+}
+
+func serveEmbeddedFrontend(frontend fs.FS, w http.ResponseWriter, r *http.Request) {
+	cleanPath := filepath.Clean(strings.TrimPrefix(r.URL.Path, "/"))
+	if cleanPath == "." || cleanPath == "/" {
+		cleanPath = "index.html"
+	}
+	cleanPath = filepath.ToSlash(cleanPath)
+	if strings.HasPrefix(cleanPath, "../") || cleanPath == ".." {
+		http.NotFound(w, r)
+		return
+	}
+	if info, err := fs.Stat(frontend, cleanPath); err == nil && !info.IsDir() {
+		if contentType := mime.TypeByExtension(filepath.Ext(cleanPath)); contentType != "" {
+			w.Header().Set("Content-Type", contentType)
+		}
+		http.ServeContent(w, r, cleanPath, info.ModTime(), mustOpenEmbedded(frontend, cleanPath))
+		return
+	}
+	if isStaticAssetRequest(r.URL.Path) {
+		http.NotFound(w, r)
+		return
+	}
+	index, err := fs.ReadFile(frontend, "index.html")
+	if err != nil {
+		http.Error(w, "embedded frontend/index.html 不存在", http.StatusServiceUnavailable)
+		return
+	}
+	if contentType := mime.TypeByExtension(".html"); contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	}
+	http.ServeContent(w, r, "index.html", time.Time{}, bytes.NewReader(index))
+}
+
+func mustOpenEmbedded(frontend fs.FS, name string) *bytes.Reader {
+	content, err := fs.ReadFile(frontend, name)
+	if err != nil {
+		panic("embedded frontend asset is not readable: " + name)
+	}
+	return bytes.NewReader(content)
+}
+
+func isStaticAssetRequest(requestPath string) bool {
+	cleanPath := strings.TrimSpace(requestPath)
+	if cleanPath == "" || cleanPath == "/" {
+		return false
+	}
+	if strings.HasPrefix(cleanPath, "/assets/") {
+		return true
+	}
+	ext := strings.ToLower(filepath.Ext(cleanPath))
+	switch ext {
+	case ".js", ".mjs", ".css", ".map", ".json", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".woff", ".woff2", ".ttf", ".otf", ".txt", ".xml":
+		return true
+	default:
+		return false
+	}
+}
+
+func browserURL(host string, port int) string {
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	return fmt.Sprintf("http://%s", net.JoinHostPort(host, strconv.Itoa(port)))
+}
+
+func openBrowser(target string) {
+	time.Sleep(500 * time.Millisecond)
+	_ = runtimecontrol.OpenURL(target)
+}
+
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func envString(key, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func envInt(key string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func envFirstInt(keys []string, fallback int) int {
+	for _, key := range keys {
+		value := strings.TrimSpace(os.Getenv(key))
+		if value == "" {
+			continue
+		}
+		parsed, err := strconv.Atoi(value)
+		if err == nil {
+			return parsed
+		}
+	}
+	return fallback
+}
+
+func defaultPortOwner(host string, defaultPort, currentPort int) string {
+	if defaultPort == currentPort {
+		return "当前程序"
+	}
+	if !runtimecontrol.IsPortOccupied(localProbeHost(host), defaultPort) {
+		return "未占用"
+	}
+	return describePortOccupant(defaultPort)
+}
+
+func envBool(key string, fallback bool) bool {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func defaultOpenBrowserEnabled() bool {
+	parsed, err := strconv.ParseBool(strings.TrimSpace(defaultOpenBrowser))
+	if err != nil {
+		return true
+	}
+	return parsed
+}

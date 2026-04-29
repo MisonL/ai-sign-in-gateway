@@ -1,0 +1,343 @@
+package schemas
+
+import (
+	"time"
+
+	"ai-sign-in-gateway/internal/models"
+)
+
+type TokenResponse struct {
+	AccessToken string `json:"access_token"`
+	TokenType   string `json:"token_type"`
+}
+
+type LoginRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type AdminUserResponse struct {
+	ID       uint   `json:"id"`
+	Username string `json:"username"`
+}
+
+type AdminAccountUpdateRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewUsername     string `json:"new_username"`
+	NewPassword     string `json:"new_password"`
+}
+
+type AdminAccountUpdateResponse struct {
+	User        AdminUserResponse `json:"user"`
+	AccessToken string            `json:"access_token"`
+	TokenType   string            `json:"token_type"`
+}
+
+type FieldDescriptor struct {
+	Name        string `json:"name"`
+	Label       string `json:"label"`
+	Type        string `json:"type"`
+	Placeholder string `json:"placeholder"`
+	Required    bool   `json:"required"`
+	HelpText    string `json:"help_text"`
+}
+
+type PluginMetaResponse struct {
+	Key              string            `json:"key"`
+	Name             string            `json:"name"`
+	Description      string            `json:"description"`
+	CredentialFields []FieldDescriptor `json:"credential_fields"`
+	ConfigFields     []FieldDescriptor `json:"config_fields"`
+	Capabilities     []string          `json:"capabilities"`
+	AuthEntryPath    string            `json:"auth_entry_path"`
+	AuthEntryLabel   string            `json:"auth_entry_label"`
+	AuthHint         string            `json:"auth_hint"`
+}
+
+type SiteBase struct {
+	Name         string         `json:"name"`
+	BaseURL      string         `json:"base_url"`
+	PluginKey    string         `json:"plugin_key"`
+	GroupName    string         `json:"group_name"`
+	IsEnabled    bool           `json:"is_enabled"`
+	Notes        string         `json:"notes"`
+	Credentials  models.JSONMap `json:"credentials"`
+	PluginConfig models.JSONMap `json:"plugin_config"`
+}
+
+type SiteCreate = SiteBase
+type SiteUpdate = SiteBase
+
+type SiteResponse struct {
+	SiteBase
+	ID               uint       `json:"id"`
+	LastStatus       *string    `json:"last_status"`
+	ConnectionStatus *string    `json:"connection_status"`
+	LastMessage      *string    `json:"last_message"`
+	LastBalance      *float64   `json:"last_balance"`
+	BalanceDisplay   *string    `json:"balance_display"`
+	PackageDisplay   *string    `json:"package_display"`
+	CheckinStatus    *string    `json:"checkin_status"`
+	LastRunAt        *time.Time `json:"last_run_at"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        *time.Time `json:"updated_at"`
+}
+
+type PublicInviteResponse struct {
+	SiteID      uint    `json:"site_id"`
+	SiteName    string  `json:"site_name"`
+	BaseURL     string  `json:"base_url"`
+	GroupName   string  `json:"group_name"`
+	PluginKey   string  `json:"plugin_key"`
+	InviteLink  string  `json:"invite_link"`
+	InviteCode  string  `json:"invite_code"`
+	PackageName *string `json:"package_name"`
+}
+
+type SiteInviteRefreshResponse struct {
+	SiteID              uint           `json:"site_id"`
+	OK                  bool           `json:"ok"`
+	Message             string         `json:"message"`
+	InviteLink          *string        `json:"invite_link"`
+	InviteCode          *string        `json:"invite_code"`
+	PackageDisplay      *string        `json:"package_display"`
+	UpdatedCredentials  models.JSONMap `json:"updated_credentials"`
+	UpdatedPluginConfig models.JSONMap `json:"updated_plugin_config"`
+}
+
+type SiteHealthResponse struct {
+	SiteID              uint           `json:"site_id"`
+	LoggedIn            bool           `json:"logged_in"`
+	Message             string         `json:"message"`
+	Balance             *float64       `json:"balance"`
+	BalanceUnit         *string        `json:"balance_unit"`
+	PackageDisplay      *string        `json:"package_display"`
+	AccountName         *string        `json:"account_name"`
+	InviteLink          *string        `json:"invite_link"`
+	InviteCode          *string        `json:"invite_code"`
+	UpdatedCredentials  models.JSONMap `json:"updated_credentials"`
+	UpdatedPluginConfig models.JSONMap `json:"updated_plugin_config"`
+}
+
+type CheckinRunResponse struct {
+	ID              uint       `json:"id"`
+	SiteID          *uint      `json:"site_id"`
+	SiteName        *string    `json:"site_name"`
+	TriggerType     string     `json:"trigger_type"`
+	Status          string     `json:"status"`
+	Message         string     `json:"message"`
+	ResponseExcerpt *string    `json:"response_excerpt"`
+	Balance         *float64   `json:"balance"`
+	BalanceUnit     *string    `json:"balance_unit"`
+	AttemptCount    int        `json:"attempt_count"`
+	StartedAt       time.Time  `json:"started_at"`
+	FinishedAt      *time.Time `json:"finished_at"`
+}
+
+type BatchCheckinRequest struct {
+	SiteIDs     []uint `json:"site_ids"`
+	OnlyEnabled bool   `json:"only_enabled"`
+}
+
+type OverviewAttentionSite struct {
+	ID          uint       `json:"id"`
+	Name        string     `json:"name"`
+	LastStatus  *string    `json:"last_status"`
+	LastMessage *string    `json:"last_message"`
+	LastRunAt   *time.Time `json:"last_run_at"`
+}
+
+type OverviewResponse struct {
+	SiteCount        int                     `json:"site_count"`
+	EnabledSiteCount int                     `json:"enabled_site_count"`
+	TodaySuccess     int                     `json:"today_success"`
+	TodayFailed      int                     `json:"today_failed"`
+	NextRunAt        *time.Time              `json:"next_run_at"`
+	LatestSync       *time.Time              `json:"latest_sync"`
+	RecentRuns       []CheckinRunResponse    `json:"recent_runs"`
+	AttentionSites   []OverviewAttentionSite `json:"attention_sites"`
+}
+
+type SettingsResponse struct {
+	Timezone                           string `json:"timezone"`
+	ScheduleEnabled                    bool   `json:"schedule_enabled"`
+	DailyRunTime                       string `json:"daily_run_time"`
+	CheckinConcurrency                 int    `json:"checkin_concurrency"`
+	CheckinGlobalConcurrency           int    `json:"checkin_global_concurrency"`
+	CheckinIntervalSeconds             int    `json:"checkin_interval_seconds"`
+	RetryCount                         int    `json:"retry_count"`
+	RequestTimeout                     int    `json:"request_timeout"`
+	OnlyEnabledSites                   bool   `json:"only_enabled_sites"`
+	DesktopKeepRunning                 bool   `json:"desktop_keep_running"`
+	DatabaseBackupEnabled              bool   `json:"database_backup_enabled"`
+	DatabaseBackupDir                  string `json:"database_backup_dir"`
+	DatabaseBackupIntervalMinutes      int    `json:"database_backup_interval_minutes"`
+	DatabaseBackupRetention            int    `json:"database_backup_retention"`
+	DesktopFrontendDefaultPort         int    `json:"desktop_frontend_default_port"`
+	DesktopFrontendPort                int    `json:"desktop_frontend_port"`
+	DesktopFrontendURL                 string `json:"desktop_frontend_url"`
+	DesktopFrontendDefaultPortOccupant string `json:"desktop_frontend_default_port_occupant"`
+	DesktopBackendDefaultPort          int    `json:"desktop_backend_default_port"`
+	DesktopBackendPort                 int    `json:"desktop_backend_port"`
+	DesktopBackendURL                  string `json:"desktop_backend_url"`
+	DesktopBackendDefaultPortOccupant  string `json:"desktop_backend_default_port_occupant"`
+	DesktopGatewayURL                  string `json:"desktop_gateway_url"`
+	RuntimeConfigDir                   string `json:"runtime_config_dir"`
+	RuntimeDefaultConfigDir            string `json:"runtime_default_config_dir"`
+	RuntimeDatabasePath                string `json:"runtime_database_path"`
+	RuntimePendingConfigDir            string `json:"runtime_pending_config_dir"`
+}
+
+type SettingsUpdate = SettingsResponse
+
+type RuntimeConfigDirRequest struct {
+	ConfigDir string `json:"config_dir"`
+}
+
+type RuntimeConfigDirResponse struct {
+	ConfigDir       string `json:"config_dir"`
+	DatabasePath    string `json:"database_path"`
+	RestartRequired bool   `json:"restart_required"`
+	Message         string `json:"message"`
+}
+
+type RuntimeDatabaseImportRequest struct {
+	DatabasePath string `json:"database_path"`
+}
+
+type RuntimeDatabaseImportResponse struct {
+	DatabasePath    string `json:"database_path"`
+	BackupPath      string `json:"backup_path"`
+	ReloginRequired bool   `json:"relogin_required"`
+	RestartRequired bool   `json:"restart_required"`
+	Message         string `json:"message"`
+}
+
+type RuntimeDatabaseBackupFile struct {
+	Name      string    `json:"name"`
+	Path      string    `json:"path"`
+	Size      int64     `json:"size"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type RuntimeDatabaseBackupsResponse struct {
+	BackupDir string                      `json:"backup_dir"`
+	Backups   []RuntimeDatabaseBackupFile `json:"backups"`
+}
+
+type RuntimeDatabaseBackupNowResponse struct {
+	Backup    RuntimeDatabaseBackupFile   `json:"backup"`
+	BackupDir string                      `json:"backup_dir"`
+	Backups   []RuntimeDatabaseBackupFile `json:"backups"`
+	Message   string                      `json:"message"`
+}
+
+type RuntimeStopStalePortsResponse struct {
+	Results []RuntimeStopPortResult `json:"results"`
+}
+
+type RuntimeStopPortResult struct {
+	Port    int    `json:"port"`
+	PID     int    `json:"pid,omitempty"`
+	Command string `json:"command,omitempty"`
+	Stopped bool   `json:"stopped"`
+	Skipped bool   `json:"skipped"`
+	Message string `json:"message"`
+}
+
+type ConnectivityTestRequest struct {
+	BaseURL string `json:"base_url"`
+	APIKey  string `json:"api_key"`
+	Model   string `json:"model"`
+}
+
+type ConnectivityTestResponse struct {
+	OK         bool     `json:"ok"`
+	StatusCode *int     `json:"status_code"`
+	LatencyMS  *float64 `json:"latency_ms"`
+	Message    string   `json:"message"`
+	Models     []string `json:"models"`
+}
+
+type ChatTestRequest struct {
+	BaseURL string `json:"base_url"`
+	APIKey  string `json:"api_key"`
+	Model   string `json:"model"`
+	Prompt  string `json:"prompt"`
+}
+
+type ChatTestResponse struct {
+	OK         bool     `json:"ok"`
+	StatusCode *int     `json:"status_code"`
+	LatencyMS  *float64 `json:"latency_ms"`
+	Message    string   `json:"message"`
+	Output     string   `json:"output"`
+}
+
+type McpTestRequest struct {
+	BaseURL         string   `json:"base_url"`
+	APIKey          string   `json:"api_key"`
+	Model           string   `json:"model"`
+	Prompt          string   `json:"prompt"`
+	ServerLabel     string   `json:"server_label"`
+	ServerURL       string   `json:"server_url"`
+	AllowedTools    []string `json:"allowed_tools"`
+	RequireApproval string   `json:"require_approval"`
+}
+
+type McpTestResponse struct {
+	OK         bool     `json:"ok"`
+	StatusCode *int     `json:"status_code"`
+	LatencyMS  *float64 `json:"latency_ms"`
+	Message    string   `json:"message"`
+	Output     string   `json:"output"`
+	RawExcerpt string   `json:"raw_excerpt"`
+	ToolEvents []string `json:"tool_events"`
+}
+
+type GatewaySettingsResponse struct {
+	RouteStrategy               string `json:"route_strategy"`
+	FailureThreshold            int    `json:"failure_threshold"`
+	CooldownSeconds             int    `json:"cooldown_seconds"`
+	RequestTimeout              int    `json:"request_timeout"`
+	MaxAttempts                 int    `json:"max_attempts"`
+	RouteConcurrencyLimit       int    `json:"route_concurrency_limit"`
+	ConcurrencyOverflowStrategy string `json:"concurrency_overflow_strategy"`
+	GatewayAPIKey               string `json:"gateway_api_key"`
+}
+
+type GatewaySettingsUpdate = GatewaySettingsResponse
+
+type GatewayRouteStateResponse struct {
+	ID                uint       `json:"id"`
+	SiteID            uint       `json:"site_id"`
+	SiteName          string     `json:"site_name"`
+	BaseURL           string     `json:"base_url"`
+	RequestBaseURL    string     `json:"request_base_url"`
+	GroupName         string     `json:"group_name"`
+	LastBalance       *float64   `json:"last_balance"`
+	BalanceDisplay    *string    `json:"balance_display"`
+	PackageDisplay    *string    `json:"package_display"`
+	CheckinStatus     *string    `json:"checkin_status"`
+	KeyName           string     `json:"key_name"`
+	KeyFingerprint    string     `json:"key_fingerprint"`
+	KeySource         string     `json:"key_source"`
+	RouteType         string     `json:"route_type"`
+	RoutePriority     int        `json:"route_priority"`
+	Weight            int        `json:"weight"`
+	IsEnabled         bool       `json:"is_enabled"`
+	CircuitState      string     `json:"circuit_state"`
+	ActiveConcurrency int        `json:"active_concurrency"`
+	RequestCount      int        `json:"request_count"`
+	SuccessCount      int        `json:"success_count"`
+	FailureCount      int        `json:"failure_count"`
+	AvgLatencyMS      *float64   `json:"avg_latency_ms"`
+	LastLatencyMS     *float64   `json:"last_latency_ms"`
+	SuccessRate       float64    `json:"success_rate"`
+	LastStatusCode    *int       `json:"last_status_code"`
+	LastError         *string    `json:"last_error"`
+	LastUsedAt        *time.Time `json:"last_used_at"`
+	LastSuccessAt     *time.Time `json:"last_success_at"`
+	LastFailureAt     *time.Time `json:"last_failure_at"`
+	CircuitOpenUntil  *time.Time `json:"circuit_open_until"`
+}

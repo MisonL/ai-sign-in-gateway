@@ -1,0 +1,287 @@
+<script setup lang="ts">
+import {
+  ClusterOutlined,
+  DashboardOutlined,
+  MessageOutlined,
+  SettingOutlined,
+  WifiOutlined,
+} from '@ant-design/icons-vue'
+import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { getGatewayOverview, getMe, logout } from '../api'
+import GroupManagerButton from './GroupManagerButton.vue'
+import type { AdminUser, GatewayOverview } from '../types'
+
+const route = useRoute()
+const router = useRouter()
+const admin = ref<AdminUser | null>(null)
+const collapsed = ref(false)
+const gatewayOverview = ref<GatewayOverview | null>(null)
+let kpiTimer: number | null = null
+
+const enabledFeatureKeys = new Set([
+  'overview',
+  'sites',
+  'gateway',
+  'connectivity',
+  'chat-test',
+  'settings',
+])
+
+const navigation = [
+  { key: 'overview', label: '总览', to: '/overview', icon: DashboardOutlined, description: '关键指标、执行状态与异常站点。' },
+  { key: 'sites', label: '站点中心', to: '/sites', icon: ClusterOutlined, description: '站点授权、批量签到与连通性。' },
+  { key: 'gateway', label: '网关中心', to: '/gateway', icon: ClusterOutlined, description: '统一出口路由池、熔断状态与请求监控。' },
+  { key: 'connectivity', label: '模型连通性', to: '/connectivity', icon: WifiOutlined, description: '基础接口连通性与模型列表探测。' },
+  { key: 'chat-test', label: '验证与对话', to: '/chat-test', icon: MessageOutlined, description: '对话请求与 MCP 调用验证。' },
+  { key: 'settings', label: '设置', to: '/settings', icon: SettingOutlined, description: '调度计划、超时与执行策略。' },
+]
+
+const visibleNavigation = computed(() => navigation.filter((item) => enabledFeatureKeys.has(item.key)))
+
+const headerKpis = computed(() => {
+  const ov = gatewayOverview.value
+  if (!ov) {
+    return []
+  }
+  return [
+    {
+      key: 'balance',
+      label: '总额度',
+      value: ov.total_balance_display || '暂无',
+      tone: 'info' as const,
+    },
+    {
+      key: 'requests',
+      label: '24h 请求',
+      value: String(ov.request_count_24h ?? 0),
+      tone: 'primary' as const,
+    },
+    {
+      key: 'success',
+      label: '成功率',
+      value: `${ov.success_rate_24h ?? 0}%`,
+      tone: 'success' as const,
+    },
+    {
+      key: 'concurrency',
+      label: '并发',
+      value: String(ov.active_concurrency ?? 0),
+      tone: 'neutral' as const,
+    },
+  ]
+})
+
+async function loadAdmin() {
+  try {
+    admin.value = await getMe()
+  } catch {
+    logout()
+    router.push('/login')
+  }
+}
+
+async function loadGatewayKpi() {
+  try {
+    gatewayOverview.value = await getGatewayOverview()
+  } catch {
+    // 静默失败，避免在登录前/无权限时刷新报错
+  }
+}
+
+function navigate(to: string) {
+  router.push(to)
+}
+
+function signOut() {
+  logout()
+  router.push('/login')
+}
+
+onMounted(async () => {
+  await loadAdmin()
+  await loadGatewayKpi()
+  kpiTimer = window.setInterval(loadGatewayKpi, 30_000)
+})
+
+onBeforeUnmount(() => {
+  if (kpiTimer !== null) {
+    window.clearInterval(kpiTimer)
+    kpiTimer = null
+  }
+})
+</script>
+
+<template>
+  <a-layout class="app-shell">
+    <a-layout-sider
+      v-model:collapsed="collapsed"
+      class="app-sider"
+      :width="248"
+      :collapsed-width="88"
+      breakpoint="lg"
+      theme="light"
+    >
+      <div class="brand-panel">
+        <div class="brand-mark">签</div>
+        <div v-if="!collapsed">
+          <strong>爱签网关</strong>
+          <p>ai-sign-in-gateway · 站点授权、自动签到与网关后台</p>
+        </div>
+      </div>
+
+      <a-menu :selected-keys="[route.path]" mode="inline" class="app-menu">
+        <a-menu-item
+          v-for="item in visibleNavigation"
+          :key="item.to"
+          @click="navigate(item.to)"
+        >
+          <template #icon>
+            <component :is="item.icon" />
+          </template>
+          <span>{{ item.label }}</span>
+        </a-menu-item>
+      </a-menu>
+
+      <div v-if="!collapsed" class="sider-footer">
+        <a-tag color="blue">单管理员</a-tag>
+        <p>面向 API 中转站的统一登录、授权、签到、网关与测试工作台。</p>
+      </div>
+    </a-layout-sider>
+
+    <a-layout class="app-main">
+      <a-layout-header class="app-header">
+        <div class="app-header__kpis" v-if="headerKpis.length">
+          <div
+            v-for="kpi in headerKpis"
+            :key="kpi.key"
+            class="header-kpi"
+            :class="`header-kpi--${kpi.tone}`"
+          >
+            <span class="header-kpi__label">{{ kpi.label }}</span>
+            <span class="header-kpi__value">{{ kpi.value }}</span>
+          </div>
+        </div>
+        <a-space>
+          <GroupManagerButton />
+          <a-tag color="processing">{{ admin?.username ?? 'admin' }}</a-tag>
+          <a-button @click="signOut">退出登录</a-button>
+        </a-space>
+      </a-layout-header>
+
+      <a-layout-content class="app-content">
+        <slot />
+      </a-layout-content>
+    </a-layout>
+  </a-layout>
+</template>
+
+<style scoped>
+.app-header {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  align-items: center;
+  gap: 12px 20px;
+}
+
+.app-header__kpis {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  flex-wrap: nowrap;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.header-kpi {
+  display: grid;
+  gap: 2px;
+  padding: 6px 14px 6px 14px;
+  border-radius: var(--radius-control);
+  border: 1px solid transparent;
+  min-width: 96px;
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
+}
+
+.header-kpi:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(15, 32, 68, 0.08);
+  filter: saturate(1.1);
+}
+
+.header-kpi__label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.85;
+}
+
+.header-kpi__value {
+  font-size: 14px;
+  font-weight: 700;
+  font-feature-settings: 'tnum';
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+  letter-spacing: 0.01em;
+}
+
+.header-kpi--primary {
+  background: linear-gradient(135deg, #e9efff 0%, #d6e1ff 100%);
+  border-color: rgba(79, 124, 255, 0.32);
+  color: #2c4cb8;
+}
+
+.header-kpi--info {
+  background: linear-gradient(135deg, #dff0ff 0%, #cfe2ff 100%);
+  border-color: rgba(56, 142, 220, 0.32);
+  color: #1f5da8;
+}
+
+.header-kpi--success {
+  background: linear-gradient(135deg, #e1f5e7 0%, #c9ecd4 100%);
+  border-color: rgba(40, 154, 70, 0.32);
+  color: #1f7a37;
+}
+
+.header-kpi--neutral {
+  background: linear-gradient(135deg, #f1f1f5 0%, #e0e3eb 100%);
+  border-color: rgba(100, 116, 139, 0.32);
+  color: #475467;
+}
+
+.header-kpi__label {
+  color: inherit;
+}
+
+.header-kpi__value {
+  color: inherit;
+}
+
+@media (max-width: 1180px) {
+  .header-kpi {
+    min-width: 80px;
+    padding: 5px 11px;
+  }
+  .header-kpi__value {
+    font-size: 13px;
+  }
+}
+
+@media (max-width: 860px) {
+  .app-header__kpis {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    scrollbar-width: none;
+  }
+
+  .app-header__kpis::-webkit-scrollbar {
+    display: none;
+  }
+}
+</style>
