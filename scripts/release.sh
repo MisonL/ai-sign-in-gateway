@@ -12,7 +12,8 @@ set -euo pipefail
 #   ./scripts/release.sh v1.3.0 --retag-current -y
 #
 # 前置条件:
-#   - 已安装 git、gh、go、npm，并且 gh auth login 已登录
+#   - 已安装 git、go、npm
+#   - 发布 GitHub Release 时，优先使用 gh；没有 gh 时可设置 GH_TOKEN/GITHUB_TOKEN
 #   - 本地存在 GitHub remote，默认 origin，可用 GIT_REMOTE 覆盖
 #   - release 分支会被更新为纯产物分支，不保留源码内容
 # ============================================================
@@ -24,6 +25,8 @@ BUILD_COMMAND="${BUILD_COMMAND:-$ROOT_DIR/scripts/build-single-release.sh}"
 GIT_REMOTE="${GIT_REMOTE:-origin}"
 RELEASE_BRANCH="${RELEASE_BRANCH:-release}"
 GH_REPO="${GH_REPO:-}"
+GITHUB_API_URL="${GITHUB_API_URL:-https://api.github.com}"
+GITHUB_UPLOAD_URL="${GITHUB_UPLOAD_URL:-https://uploads.github.com}"
 REMOTE_URL=""
 VERSION=""
 SKIP_BUILD=0
@@ -31,6 +34,8 @@ SKIP_CONFIRM=0
 FORCE_RETAG_CURRENT=0
 TAG_PUSH_FORCE=0
 RELEASE_BRANCH_EXISTS=0
+RELEASE_PUBLISHER=""
+RELEASE_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
 
 ARTIFACTS=()
 UPLOAD_ARTIFACTS=()
@@ -151,12 +156,22 @@ resolve_github_repo() {
   exit 1
 }
 
-ensure_gh_ready() {
-  require_command gh
-  if ! gh auth status >/dev/null 2>&1; then
-    echo "错误: gh 尚未登录，请先执行 gh auth login"
-    exit 1
+detect_release_publisher() {
+  if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+    RELEASE_PUBLISHER="gh"
+    return
   fi
+
+  if [[ -n "$RELEASE_TOKEN" ]]; then
+    require_command curl
+    require_command jq
+    RELEASE_PUBLISHER="api"
+    return
+  fi
+
+  RELEASE_PUBLISHER="workflow"
+  echo ">> 未检测到可用 gh 或 GH_TOKEN/GITHUB_TOKEN；本地将跳过 GitHub Release API。"
+  echo ">> release 分支推送后，仓库工作流会使用 GitHub Actions 创建/更新 Release。"
 }
 
 ensure_version() {
@@ -332,6 +347,11 @@ EOF
 }
 
 publish_github_release() {
+  if [[ "$RELEASE_PUBLISHER" == "workflow" ]]; then
+    echo ">> 跳过本地 GitHub Release API，等待远端工作流发布: $VERSION"
+    return
+  fi
+
   if gh release view "$VERSION" --repo "$GH_REPO" >/dev/null 2>&1; then
     echo ">> 更新 GitHub Release: $VERSION"
     gh release edit "$VERSION" \
@@ -351,6 +371,79 @@ publish_github_release() {
       --notes-file "$NOTES_PATH" \
       --verify-tag
   fi
+}
+
+github_api() {
+  local method="$1"
+  local path="$2"
+  local data_path="${3:-}"
+
+  if [[ -n "$data_path" ]]; then
+    curl -fsS \
+      -X "$method" \
+      -H "Authorization: Bearer $RELEASE_TOKEN" \
+      -H "Accept: application/vnd.github+json" \
+      -H "X-GitHub-Api-Version: 2022-11-28" \
+      -H "Content-Type: application/json" \
+      --data-binary "@$data_path" \
+      "$GITHUB_API_URL/repos/$GH_REPO$path"
+  else
+    curl -fsS \
+      -X "$method" \
+      -H "Authorization: Bearer $RELEASE_TOKEN" \
+      -H "Accept: application/vnd.github+json" \
+      -H "X-GitHub-Api-Version: 2022-11-28" \
+      "$GITHUB_API_URL/repos/$GH_REPO$path"
+  fi
+}
+
+publish_github_release_api() {
+  local release_json
+  local release_id
+  local payload_path
+  local asset
+  local asset_name
+  local asset_id
+
+  payload_path="$(mktemp "${TMPDIR:-/tmp}/${APP_NAME}-release-payload-XXXXXX.json")"
+  jq -n \
+    --arg tag_name "$VERSION" \
+    --arg name "$VERSION" \
+    --rawfile body "$NOTES_PATH" \
+    '{tag_name:$tag_name, name:$name, body:$body, draft:false, prerelease:false}' \
+    >"$payload_path"
+
+  if release_json="$(github_api GET "/releases/tags/$VERSION" 2>/dev/null)"; then
+    release_id="$(jq -r '.id' <<<"$release_json")"
+    echo ">> 更新 GitHub Release: $VERSION"
+    github_api PATCH "/releases/$release_id" "$payload_path" >/dev/null
+  else
+    echo ">> 创建 GitHub Release: $VERSION"
+    release_json="$(github_api POST "/releases" "$payload_path")"
+    release_id="$(jq -r '.id' <<<"$release_json")"
+  fi
+
+  for asset in "${UPLOAD_ARTIFACTS[@]}"; do
+    asset_name="$(basename "$asset")"
+    asset_id="$(
+      github_api GET "/releases/$release_id/assets" \
+        | jq -r --arg name "$asset_name" '.[] | select(.name == $name) | .id' \
+        | head -n 1
+    )"
+    if [[ -n "$asset_id" ]]; then
+      github_api DELETE "/releases/assets/$asset_id" >/dev/null
+    fi
+    echo ">> 上传 Release 资产: $asset_name"
+    curl -fsS \
+      -X POST \
+      -H "Authorization: Bearer $RELEASE_TOKEN" \
+      -H "Accept: application/vnd.github+json" \
+      -H "X-GitHub-Api-Version: 2022-11-28" \
+      -H "Content-Type: application/octet-stream" \
+      --data-binary "@$asset" \
+      "$GITHUB_UPLOAD_URL/repos/$GH_REPO/releases/$release_id/assets?name=$asset_name" \
+      >/dev/null
+  done
 }
 
 cleanup() {
@@ -436,22 +529,30 @@ parse_args "$@"
 require_command git
 resolve_git_remote
 resolve_github_repo
-ensure_gh_ready
+detect_release_publisher
 ensure_version
 confirm_release
 trap cleanup EXIT
 
-prepare_tag
 build_artifacts
 collect_artifacts
 generate_checksums
 generate_release_notes
-publish_github_release
+prepare_tag
 publish_release_branch
+if [[ "$RELEASE_PUBLISHER" == "api" ]]; then
+  publish_github_release_api
+else
+  publish_github_release
+fi
 
 echo
 echo "=========================================="
 echo "  发布完成: $VERSION"
-echo "  GitHub Release: https://github.com/$GH_REPO/releases/tag/$VERSION"
+if [[ "$RELEASE_PUBLISHER" == "workflow" ]]; then
+  echo "  GitHub Release: 由远端工作流发布 https://github.com/$GH_REPO/releases/tag/$VERSION"
+else
+  echo "  GitHub Release: https://github.com/$GH_REPO/releases/tag/$VERSION"
+fi
 echo "  Release Branch: $RELEASE_BRANCH"
 echo "=========================================="
