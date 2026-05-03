@@ -1,8 +1,12 @@
 <script setup lang="ts">
-import { PlusOutlined, CopyOutlined, ReloadOutlined, SettingOutlined, SyncOutlined, InfoCircleOutlined, HistoryOutlined } from '@ant-design/icons-vue'
+import { PlusOutlined, CopyOutlined, ReloadOutlined, SettingOutlined, SyncOutlined, InfoCircleOutlined, QuestionCircleOutlined, HistoryOutlined, ToolOutlined, MoreOutlined } from '@ant-design/icons-vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, type ComponentPublicInstance } from 'vue'
 import {
   createSite,
+  diagnoseGatewayRoute,
+  disableAllGatewayRoutes,
+  enableOnlyGatewayRoute,
+  getGatewayActiveRequests,
   getGatewayLogs,
   getGatewayOverview,
   getGatewayRouteLogs,
@@ -13,6 +17,7 @@ import {
   getSiteGroups,
   probeGatewayRouteBalance,
   refreshSiteSummaries,
+  reorderGatewayRoutePriorities,
   resetGatewayRouteCircuit,
   syncGatewayRoutes,
   toggleGatewayRoute,
@@ -25,8 +30,19 @@ import { useDebouncedTask } from '../composables/useDebouncedTask'
 import { useTableScrollHeights } from '../composables/useTableScrollHeights'
 import { balanceTone, formatBalance, formatGroupNames, normalizeGroupNames, parseGroupNames } from '../format'
 import { useToast } from '../toast'
-import type { GatewayLog, GatewayOverview, GatewayRoute, GatewayRouteProbeResult, GatewaySettingsData, GatewayStrategyStat, GatewayTrendBucket, SiteGroup, SiteSummary } from '../types'
+import type { GatewayActiveRequest, GatewayLog, GatewayOverview, GatewayRoute, GatewayRouteDiagnosis, GatewayRouteProbeResult, GatewaySettingsData, GatewayStrategyStat, GatewayTrendBucket, SiteGroup, SiteSummary } from '../types'
 
+const props = withDefaults(
+  defineProps<{
+    section?: 'routes' | 'monitor'
+  }>(),
+  {
+    section: 'routes',
+  },
+)
+
+const isRouteManagement = computed(() => props.section === 'routes')
+const isGatewayMonitor = computed(() => props.section === 'monitor')
 const toast = useToast()
 const loading = ref(false)
 const autoRefreshing = ref(false)
@@ -37,6 +53,10 @@ const logsDrawerOpen = ref(false)
 const routeLogsDrawerOpen = ref(false)
 const addUpstreamOpen = ref(false)
 const addUpstreamLoading = ref(false)
+const priorityDialogOpen = ref(false)
+const priorityDialogLoading = ref(false)
+const priorityRoute = ref<GatewayRoute | null>(null)
+const priorityInsertIndex = ref<number | undefined>(undefined)
 type ApiFormatOption = 'openai' | 'anthropic' | 'gemini' | 'general'
 const addUpstreamForm = reactive<{
   name: string
@@ -108,16 +128,22 @@ async function submitAddUpstream() {
 }
 const overview = ref<GatewayOverview | null>(null)
 const routes = ref<GatewayRoute[]>([])
+const priorityRoutes = ref<GatewayRoute[]>([])
 const logs = ref<GatewayLog[]>([])
+const activeRequests = ref<GatewayActiveRequest[]>([])
 const routeLogs = ref<GatewayLog[]>([])
+const routeDiagnosis = ref<GatewayRouteDiagnosis | null>(null)
 const siteGroups = ref<SiteGroup[]>([])
 const routeLogsLoading = ref(false)
+const routeDiagnosisLoading = ref(false)
 const routeLogsRoute = ref<GatewayRoute | null>(null)
+const routeDiagnosisOpen = ref(false)
 const includeDisabled = ref(true)
 let autoRefreshTimer: number | null = null
 let lastAutoRefreshAt = 0
 const gatewayTablePageSize = 20
-const gatewayAutoRefreshMs = 10_000
+const gatewayRouteAutoRefreshMs = 10_000
+const gatewayMonitorAutoRefreshMs = 2_000
 const selectedGroups = ref<string[]>([])
 const addUpstreamGroupNames = ref<string[]>([])
 const selectedRouteTypes = ref<Array<GatewayRoute['route_type']>>([])
@@ -163,7 +189,9 @@ const settingsForm = reactive<GatewaySettingsData>({
   cooldown_seconds: 180,
   request_timeout: 60,
   max_attempts: 0,
+  failure_retry_mode: 'retryable',
   route_concurrency_limit: 5,
+  concurrency_transfer_strategy: 'limit_only',
   concurrency_overflow_strategy: 'latency_first',
   smart_latency_bias: 1.0,
   smart_concurrency_bias: 1.5,
@@ -187,16 +215,21 @@ const routeColumns = [
   { title: '路由', key: 'route', width: 240, sorter: (a: GatewayRoute, b: GatewayRoute) => loadRouteLabel(a).localeCompare(loadRouteLabel(b), 'zh-CN') },
   { title: '类型', key: 'type', width: 130, sorter: (a: GatewayRoute, b: GatewayRoute) => a.route_type.localeCompare(b.route_type, 'zh-CN') },
   { title: '余额', key: 'balance', width: 160, sorter: (a: GatewayRoute, b: GatewayRoute) => (a.last_balance ?? -Infinity) - (b.last_balance ?? -Infinity) },
-  { title: '套餐', key: 'package', width: 180, sorter: (a: GatewayRoute, b: GatewayRoute) => String(a.package_display ?? '').localeCompare(String(b.package_display ?? ''), 'zh-CN') },
   { title: '分组', key: 'group', width: 110, sorter: (a: GatewayRoute, b: GatewayRoute) => String(a.group_name ?? '').localeCompare(String(b.group_name ?? ''), 'zh-CN') },
   { title: '优先级', key: 'priority', width: 90, sorter: (a: GatewayRoute, b: GatewayRoute) => a.route_priority - b.route_priority },
   { title: '权重', key: 'weight', width: 80, sorter: (a: GatewayRoute, b: GatewayRoute) => a.weight - b.weight },
-  { title: '当前并发', key: 'concurrency', width: 110, sorter: (a: GatewayRoute, b: GatewayRoute) => a.active_concurrency - b.active_concurrency },
+  { title: '并发', key: 'concurrency', width: 130, sorter: (a: GatewayRoute, b: GatewayRoute) => a.active_concurrency - b.active_concurrency },
   { title: '熔断状态', key: 'circuit', width: 120, sorter: (a: GatewayRoute, b: GatewayRoute) => String(a.circuit_state).localeCompare(String(b.circuit_state), 'zh-CN') },
   { title: '成功率', key: 'success_rate', width: 110, sorter: (a: GatewayRoute, b: GatewayRoute) => a.success_rate - b.success_rate },
   { title: '延迟', key: 'latency', width: 138, sorter: (a: GatewayRoute, b: GatewayRoute) => (a.last_latency_ms ?? a.avg_latency_ms ?? Infinity) - (b.last_latency_ms ?? b.avg_latency_ms ?? Infinity) },
   { title: '最后异常', key: 'error', width: 220, sorter: (a: GatewayRoute, b: GatewayRoute) => new Date(routeLastUpdateTime(a) ?? 0).getTime() - new Date(routeLastUpdateTime(b) ?? 0).getTime() },
-  { title: '操作', key: 'actions', width: 360, fixed: 'right' as const },
+  { title: '操作', key: 'actions', width: 136, fixed: 'right' as const },
+]
+
+const priorityDialogColumns = [
+  { title: '路由名称', key: 'route', width: 280 },
+  { title: '优先级', key: 'priority', width: 90 },
+  { title: '分组', key: 'group', width: 170 },
 ]
 
 const routeTypeOptions: Array<{ label: string; value: GatewayRoute['route_type'] }> = [
@@ -254,8 +287,18 @@ const gatewayRouteStrategyOptions: Array<{ label: string; value: GatewaySettings
 ]
 
 const gatewayOverflowStrategyOptions: Array<{ label: string; value: GatewaySettingsData['concurrency_overflow_strategy']; description: string }> = [
-  { label: '低延迟优先', value: 'latency_first', description: '所有可用路由都达到并发上限时，仍优先尝试延迟较低的路由。' },
-  { label: '按顺序优先', value: 'sequential', description: '所有可用路由都达到并发上限时，按当前策略排序继续尝试后备路由。' },
+  { label: '低延迟优先', value: 'latency_first', description: '只有所有可用路由都达到并发上限后才生效，溢出请求优先尝试延迟较低的路由。' },
+  { label: '按顺序优先', value: 'sequential', description: '只有所有可用路由都达到并发上限后才生效，溢出请求按当前策略顺序继续尝试。' },
+]
+
+const gatewayConcurrencyTransferOptions: Array<{ label: string; value: GatewaySettingsData['concurrency_transfer_strategy']; description: string }> = [
+  { label: '并发达上限转移', value: 'limit_only', description: '保持当前策略排序；只有某条路由达到单路由并发上限后，新请求才转移到其他未满路由。' },
+  { label: '并发均衡转移', value: 'balance', description: '在未满上限的候选路由中，优先使用当前并发更低的路由，让请求更主动地摊开。' },
+]
+
+const gatewayFailureRetryModeOptions: Array<{ label: string; value: GatewaySettingsData['failure_retry_mode']; description: string }> = [
+  { label: '可重试错误', value: 'retryable', description: '网络错误、429、5xx 和首包前流式失败会切换路由；400/401/403 等参数或鉴权错误会在网关层停止。' },
+  { label: '所有上游错误', value: 'all', description: '任意非 2xx 上游响应都会继续切换其他路由，适合希望最大化请求成功率的场景。' },
 ]
 
 const metricCards = computed<Array<{ title: string; value: string | number; tone: MetricTone }>>(() => {
@@ -292,9 +335,24 @@ const selectedOverflowStrategyDescription = computed(() =>
   gatewayOverflowStrategyOptions.find((item) => item.value === settingsForm.concurrency_overflow_strategy)?.description ?? '',
 )
 
+const selectedConcurrencyTransferDescription = computed(() =>
+  gatewayConcurrencyTransferOptions.find((item) => item.value === settingsForm.concurrency_transfer_strategy)?.description ?? '',
+)
+
+const selectedFailureRetryModeDescription = computed(() =>
+  gatewayFailureRetryModeOptions.find((item) => item.value === settingsForm.failure_retry_mode)?.description ?? '',
+)
+
+const routeConcurrencyLimitLabel = computed(() => {
+  const limit = Number(settingsForm.route_concurrency_limit)
+  return Number.isFinite(limit) && limit > 0 ? String(Math.trunc(limit)) : '不限'
+})
+
 const gatewayStrategyDescriptionItems = computed(() => [
   { label: '路由策略', value: selectedRouteStrategyDescription.value },
+  { label: '并发转移', value: selectedConcurrencyTransferDescription.value },
   { label: '并发溢出', value: selectedOverflowStrategyDescription.value },
+  { label: '错误切换', value: selectedFailureRetryModeDescription.value },
   { label: '自动模型类型', value: '请求体里的 model 包含 claude / gpt / gemini 时，网关会自动选择对应类型路由；仍可用 type 参数手动指定。' },
 ])
 
@@ -447,6 +505,10 @@ function loadRouteLabel(route: GatewayRoute) {
   return `${siteName}${route.key_name ? ` · ${route.key_name}` : ''}`
 }
 
+function routePriorityLabel(route: GatewayRoute | null) {
+  return route ? String(route.route_priority) : '暂无'
+}
+
 function routeSnapshotLabel(route: GatewayRoute) {
   return route.site_name_snapshot || route.site_base_url_snapshot || ''
 }
@@ -480,6 +542,11 @@ function routeTypeLabel(routeType: GatewayRoute['route_type']) {
   return routeTypeOptions.find((item) => item.value === routeType)?.label ?? routeType
 }
 
+function activeRequestRouteTypeLabel(routeType: GatewayActiveRequest['route_type']) {
+  const normalized = String(routeType ?? '').trim()
+  return routeTypeOptions.find((item) => item.value === normalized)?.label ?? (normalized || '未知')
+}
+
 function isRouteTypeFilterActive(routeType: GatewayRoute['route_type']) {
   return selectedRouteTypes.value.includes(routeType)
 }
@@ -506,12 +573,12 @@ function routeCircuitState(route: GatewayRoute): 'closed' | 'open' | 'half_open'
   return 'closed'
 }
 
-function hasPackage(route: GatewayRoute) {
-  return Boolean(String(route.package_display ?? '').trim())
-}
-
 function hasBalance(route: GatewayRoute) {
   return route.last_balance !== null && route.last_balance !== undefined && !Number.isNaN(route.last_balance)
+}
+
+function hasPackage(route: GatewayRoute) {
+  return Boolean(String(route.package_display ?? '').trim())
 }
 
 function hasIssue(route: GatewayRoute) {
@@ -550,6 +617,10 @@ function routeRowKey(record: GatewayRoute) {
   return record.id
 }
 
+function priorityRouteRowClassName(record: GatewayRoute) {
+  return record.id === priorityRoute.value?.id ? 'priority-route-row priority-route-row--current' : 'priority-route-row'
+}
+
 function logRowKey(record: GatewayLog) {
   return record.id
 }
@@ -583,6 +654,98 @@ function logRouteMeta(log: GatewayLog) {
   ].filter(Boolean)
   return values.join(' · ')
 }
+
+function activeRequestRouteLabel(item: GatewayActiveRequest) {
+  const label = String(item.route_label ?? '').trim()
+  if (label) {
+    return label
+  }
+  const parts = [
+    item.route_id ? `#${item.route_id}` : '',
+    item.site_name || (item.site_id ? `站点 #${item.site_id}` : ''),
+    item.key_name,
+  ].filter(Boolean)
+  return parts.length ? parts.join(' · ') : '未知路由'
+}
+
+function activeRequestMeta(item: GatewayActiveRequest) {
+  return [
+    item.route_id ? `Route #${item.route_id}` : 'Route 未知',
+    item.site_id ? `站点 #${item.site_id}` : '',
+    item.key_fingerprint ? `Key ${shortFingerprint(item.key_fingerprint)}` : '',
+    item.request_base_url,
+  ].filter(Boolean)
+}
+
+function formatElapsed(ms: number | null | undefined) {
+  if (ms === null || ms === undefined || Number.isNaN(ms)) {
+    return '0 ms'
+  }
+  if (ms < 1000) {
+    return `${ms} ms`
+  }
+  if (ms < 60_000) {
+    return `${Math.round(ms / 100) / 10} s`
+  }
+  const minutes = Math.floor(ms / 60_000)
+  const seconds = Math.floor((ms % 60_000) / 1000)
+  return `${minutes}m ${seconds}s`
+}
+
+const activeRouteFeed = computed(() =>
+  activeRequests.value.map((item) => ({
+    ...item,
+    kind: 'active',
+    label: activeRequestRouteLabel(item),
+    meta: activeRequestMeta(item),
+    elapsedLabel: formatElapsed(item.elapsed_ms),
+    routeTypeLabel: activeRequestRouteTypeLabel(item.route_type),
+    groupLabel: formatGroupNames(item.group_name) || '未分组',
+    targetLabel: `${item.method} ${item.target_path || '/'}`,
+    strategyLabel: strategyLabel(item.route_strategy as GatewayStrategyStat['route_strategy']),
+    primaryBadge: `并发 ${item.active_concurrency}`,
+    primaryBadgeColor: 'processing',
+    secondaryBadge: formatElapsed(item.elapsed_ms),
+    attemptLabel: `尝试 ${item.attempt_index}`,
+    timeLabel: `开始 ${formatTime(item.started_at)}`,
+  })),
+)
+
+const recentRouteFeed = computed(() =>
+  logs.value.slice(0, 8).map((item) => ({
+    id: `log-${item.id}`,
+    kind: 'completed',
+    label: logRouteLabel(item),
+    meta: [
+      item.route_id ? `Route #${item.route_id}` : 'Route 未知',
+      item.site_id ? `站点 #${item.site_id}` : '',
+      item.key_fingerprint ? `Key ${shortFingerprint(item.key_fingerprint)}` : '',
+    ].filter(Boolean),
+    elapsedLabel: item.latency_ms !== null ? `${item.latency_ms} ms` : '暂无延迟',
+    routeTypeLabel: '',
+    groupLabel: formatGroupNames(item.group_name) || '未分组',
+    targetLabel: `${item.method} ${item.target_path || '/'}`,
+    strategyLabel: strategyLabel(item.route_strategy as GatewayStrategyStat['route_strategy']),
+    primaryBadge: item.success ? '成功' : '失败',
+    primaryBadgeColor: item.success ? 'success' : 'error',
+    secondaryBadge: item.latency_ms !== null ? `${item.latency_ms} ms` : '暂无延迟',
+    attemptLabel: `尝试 ${item.attempt_index}`,
+    timeLabel: `完成 ${formatTime(item.created_at)}`,
+    is_stream: item.is_stream,
+  })),
+)
+
+const routeActivityFeed = computed(() => [...activeRouteFeed.value, ...recentRouteFeed.value].slice(0, 12))
+
+const routeActivitySubtitle = computed(() => {
+  if (activeRouteFeed.value.length) {
+    return `${activeRouteFeed.value.length} 个进行中，最近 ${recentRouteFeed.value.length} 条完成`
+  }
+  if (recentRouteFeed.value.length) {
+    return '当前没有进行中请求，展示最近完成请求'
+  }
+  return '当前没有进行中的网关请求'
+})
 
 function balanceClass(balance: number | null | undefined) {
   const tone = balanceTone(balance)
@@ -794,6 +957,10 @@ function applySiteSummary(summary: SiteSummary) {
           ...route,
           last_balance: summary.last_balance,
           balance_display: summary.balance_display,
+          package_remaining: summary.package_remaining,
+          package_total: summary.package_total,
+          package_used: summary.package_used,
+          package_unit: summary.package_unit,
           package_display: summary.package_display,
           checkin_status: summary.checkin_status,
         }
@@ -836,6 +1003,70 @@ function isRouteBalanceProbing(routeId: number) {
   return balanceProbingRouteIds.value.includes(routeId)
 }
 
+function applyReorderedRoutes(routeData: GatewayRoute[]) {
+  priorityRoutes.value = routeData
+  routes.value = routeData.filter((route) => includeDisabled.value || route.is_enabled)
+}
+
+async function openPriorityDialog(route: GatewayRoute) {
+  priorityRoute.value = route
+  priorityInsertIndex.value = undefined
+  priorityDialogOpen.value = true
+  priorityRoutes.value = routes.value
+  priorityDialogLoading.value = true
+  try {
+    priorityRoutes.value = await getGatewayRoutes({ includeDisabled: true })
+    priorityRoute.value = priorityRoutes.value.find((item) => item.id === route.id) ?? route
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '优先级列表加载失败')
+  } finally {
+    priorityDialogLoading.value = false
+  }
+}
+
+async function handlePriorityMove() {
+  if (!priorityRoute.value) {
+    return
+  }
+  const target = priorityInsertIndex.value
+  if (target === undefined || target === null || Number.isNaN(Number(target))) {
+    toast.error('请输入目标优先级。')
+    return
+  }
+  priorityDialogLoading.value = true
+  try {
+    const routeData = await reorderGatewayRoutePriorities({
+      route_id: priorityRoute.value.id,
+      mode: 'move',
+      index: Math.trunc(Number(target)),
+    })
+    applyReorderedRoutes(routeData)
+    priorityRoute.value = priorityRoutes.value.find((route) => route.id === priorityRoute.value?.id) ?? priorityRoute.value
+    toast.success('优先级已更新。')
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '优先级更新失败')
+  } finally {
+    priorityDialogLoading.value = false
+  }
+}
+
+async function handlePriorityPreset(mode: 'package' | 'balance') {
+  priorityDialogLoading.value = true
+  try {
+    const routeData = await reorderGatewayRoutePriorities({ mode })
+    applyReorderedRoutes(routeData)
+    priorityInsertIndex.value = undefined
+    if (priorityRoute.value) {
+      priorityRoute.value = priorityRoutes.value.find((route) => route.id === priorityRoute.value?.id) ?? priorityRoute.value
+    }
+    toast.success(mode === 'package' ? '已按套餐优先重排。' : '已按余额优先重排。')
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '优先级重排失败')
+  } finally {
+    priorityDialogLoading.value = false
+  }
+}
+
 async function refreshRouteSummaries() {
   const siteIds = [...new Set(routes.value.map((route) => route.site_id))]
   if (!siteIds.length) {
@@ -856,6 +1087,21 @@ async function handleRefresh() {
   await refreshRouteSummaries()
 }
 
+async function loadActiveRequests(silent = false) {
+  if (!isGatewayMonitor.value) {
+    activeRequests.value = []
+    return
+  }
+  try {
+    activeRequests.value = await getGatewayActiveRequests()
+  } catch (err) {
+    activeRequests.value = []
+    if (!silent) {
+      toast.error(err instanceof Error ? err.message : '网关实时请求加载失败')
+    }
+  }
+}
+
 async function loadData() {
   loading.value = true
   try {
@@ -869,8 +1115,10 @@ async function loadData() {
     overview.value = overviewData
     Object.assign(settingsForm, settingsData)
     routes.value = routeData
+    priorityRoutes.value = routeData
     logs.value = logData
     siteGroups.value = groupData
+    await loadActiveRequests()
   } catch (err) {
     toast.error(err instanceof Error ? err.message : '网关数据加载失败')
   } finally {
@@ -896,7 +1144,11 @@ async function refreshRealtimeData() {
     ])
     overview.value = overviewData
     routes.value = routeData
+    if (!priorityDialogOpen.value) {
+      priorityRoutes.value = routeData
+    }
     logs.value = logData
+    await loadActiveRequests(true)
   } catch {
     // 自动刷新静默失败，避免请求波动时持续打扰。
   } finally {
@@ -906,7 +1158,7 @@ async function refreshRealtimeData() {
 
 function startAutoRefresh() {
   stopAutoRefresh()
-  autoRefreshTimer = window.setInterval(refreshRealtimeData, gatewayAutoRefreshMs)
+  autoRefreshTimer = window.setInterval(refreshRealtimeData, isGatewayMonitor.value ? gatewayMonitorAutoRefreshMs : gatewayRouteAutoRefreshMs)
 }
 
 function stopAutoRefresh() {
@@ -950,6 +1202,32 @@ async function handleToggle(route: GatewayRoute) {
     await loadData()
   } catch (err) {
     toast.error(err instanceof Error ? err.message : '切换失败')
+  }
+}
+
+async function handleDisableAllRoutes() {
+  if (!window.confirm('确认禁用全部路由？禁用后网关将没有可用路由，直到重新启用。')) {
+    return
+  }
+  try {
+    const result = await disableAllGatewayRoutes()
+    toast.success(`已禁用 ${result.disabled_count} 条路由。`)
+    await loadData()
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '禁用全部失败')
+  }
+}
+
+async function handleEnableOnlyRoute(route: GatewayRoute) {
+  if (!window.confirm(`确认仅启用「${loadRouteLabel(route)}」，并禁用其他全部路由？`)) {
+    return
+  }
+  try {
+    await enableOnlyGatewayRoute(route.id)
+    toast.success('已仅启用该路由，其他路由已禁用。')
+    await loadData()
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '禁用其他失败')
   }
 }
 
@@ -1046,6 +1324,19 @@ async function handleProbeRouteBalance(route: GatewayRoute) {
   }
 }
 
+async function openRouteDiagnosis(route: GatewayRoute) {
+  routeDiagnosisOpen.value = true
+  routeDiagnosis.value = null
+  routeDiagnosisLoading.value = true
+  try {
+    routeDiagnosis.value = await diagnoseGatewayRoute(route.id)
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '路由诊断失败')
+  } finally {
+    routeDiagnosisLoading.value = false
+  }
+}
+
 async function openRouteLogs(route: GatewayRoute) {
   routeLogsDrawerOpen.value = true
   routeLogsRoute.value = route
@@ -1115,9 +1406,9 @@ onBeforeUnmount(() => {
 
 <template>
   <ShellLayout>
-    <div class="page-stack page-stack--dashboard">
+    <div class="page-stack" :class="isRouteManagement ? 'page-stack--fit' : 'page-stack--dashboard'">
       <div class="page-toolbar page-toolbar--actions">
-        <div class="gateway-access">
+        <div v-if="isGatewayMonitor" class="gateway-access">
           <code>地址 {{ gatewayRequestUrl }}</code>
           <a-tooltip placement="bottom" :title="codexGatewayTooltip">
             <span class="gateway-access__hint">
@@ -1139,6 +1430,10 @@ onBeforeUnmount(() => {
             复制
           </a-button>
         </div>
+        <div v-else class="route-management-heading">
+          <strong>路由池</strong>
+          <span>{{ filteredRoutes.length }} / {{ routes.length }}</span>
+        </div>
         <a-space>
           <a-button :loading="loading" @click="handleRefresh">
             <template #icon>
@@ -1146,14 +1441,15 @@ onBeforeUnmount(() => {
             </template>
             刷新
           </a-button>
-          <a-button :loading="loading" @click="handleSync">
+          <a-button v-if="isRouteManagement" :loading="loading" @click="handleSync">
             <template #icon>
               <SyncOutlined />
             </template>
             同步路由
           </a-button>
-          <a-button :loading="probeLoading" @click="handleProbeAll">探测全部</a-button>
-          <a-button type="primary" @click="addUpstreamOpen = true">
+          <a-button v-if="isRouteManagement" :loading="probeLoading" @click="handleProbeAll">探测全部</a-button>
+          <a-button v-if="isRouteManagement" danger :disabled="!routes.length" @click="handleDisableAllRoutes">禁用全部</a-button>
+          <a-button v-if="isRouteManagement" type="primary" @click="addUpstreamOpen = true">
             <template #icon>
               <PlusOutlined />
             </template>
@@ -1165,11 +1461,11 @@ onBeforeUnmount(() => {
             </template>
             网关策略
           </a-button>
-          <a-button @click="logsDrawerOpen = true">最近请求</a-button>
+          <a-button v-if="isGatewayMonitor" @click="logsDrawerOpen = true">最近请求</a-button>
         </a-space>
       </div>
 
-      <div class="gateway-metrics">
+      <div v-if="isGatewayMonitor" class="gateway-metrics">
         <a-card
           v-for="item in metricCards"
           :key="item.title"
@@ -1184,527 +1480,712 @@ onBeforeUnmount(() => {
 
       <div class="gateway-fill">
         <div
-          v-if="strategyBreakdownCards.length || trendBars.length"
+          v-if="isGatewayMonitor && (strategyBreakdownCards.length || trendBars.length)"
           class="gateway-summary-row"
+          :class="{ 'gateway-summary-row--trend-only': !strategyBreakdownCards.length }"
         >
-        <section
-          v-if="strategyBreakdownCards.length"
-          class="gateway-strategy-section gateway-summary-row__strategy"
-        >
-          <div class="gateway-strategy-section__body">
-            <div class="gateway-strategy-grid">
-              <a-card
-                v-for="item in strategyBreakdownCards"
-                :key="item.key"
-                :bordered="false"
-                class="admin-card gateway-strategy-card"
-              >
-                <div class="gateway-strategy-card__title">{{ item.title }}</div>
-                <div class="gateway-strategy-card__metrics">
-                  <div>
-                    <div class="gateway-strategy-card__label">24h 请求数</div>
-                    <div class="gateway-strategy-card__value">{{ item.requestCount }}</div>
-                  </div>
-                  <div>
-                    <div class="gateway-strategy-card__label">成功率</div>
-                    <div class="gateway-strategy-card__value">{{ item.successRate }}</div>
-                  </div>
-                  <div>
-                    <div class="gateway-strategy-card__label">平均延迟</div>
-                    <div class="gateway-strategy-card__value">{{ item.avgLatency }}</div>
-                  </div>
-                  <div>
-                    <div class="gateway-strategy-card__label">流式请求</div>
-                    <div class="gateway-strategy-card__value">{{ item.streamRequestCount }}</div>
-                  </div>
-                  <div>
-                    <div class="gateway-strategy-card__label">流式成功率</div>
-                    <div class="gateway-strategy-card__value">{{ item.streamSuccessRate }}</div>
-                  </div>
-                  <div>
-                    <div class="gateway-strategy-card__label">流式平均 TTFB</div>
-                    <div class="gateway-strategy-card__value">{{ item.avgStreamTtfb }}</div>
-                  </div>
-                </div>
-              </a-card>
-            </div>
-          </div>
-        </section>
-
-        <a-card
-          v-if="trendBars.length"
-          :bordered="false"
-          class="admin-card gateway-trend-card gateway-summary-row__trend"
-        >
-          <div class="gateway-trend-header">
-            <div class="gateway-trend-header__title">近 1 分钟趋势</div>
-            <div v-if="trendSummary" class="gateway-trend-header__metrics">
-              <span>请求 <strong>{{ trendSummary.total }}</strong></span>
-              <span>成功 <strong>{{ trendSummary.success }}</strong></span>
-              <span>失败 <strong>{{ trendSummary.failed }}</strong></span>
-              <span>流式 <strong>{{ trendSummary.stream }}</strong></span>
-              <span>成功率 <strong>{{ trendSummary.successRate }}%</strong></span>
-              <span>平均延迟 <strong>{{ trendSummary.avgLatency !== null ? `${trendSummary.avgLatency} ms` : '暂无' }}</strong></span>
-            </div>
-          </div>
-          <div class="gateway-trend-bars">
-            <div
-              v-for="bar in trendBars"
-              :key="bar.key"
-              class="gateway-trend-bar"
-              :class="{ 'gateway-trend-bar--empty': !bar.hasData }"
-              :title="`${bar.label}\n请求 ${bar.total}\n成功 ${bar.success}\n失败 ${bar.failed}\n流式 ${bar.stream}\n平均延迟 ${bar.avgLatency !== null ? bar.avgLatency + ' ms' : '暂无'}`"
-            >
-              <div class="gateway-trend-bar__stack">
-                <span
-                  class="gateway-trend-bar__segment gateway-trend-bar__segment--failed"
-                  :style="{ height: `${bar.failedHeight}%` }"
-                />
-                <span
-                  class="gateway-trend-bar__segment gateway-trend-bar__segment--success"
-                  :style="{ height: `${bar.successHeight}%` }"
-                />
-              </div>
-              <div class="gateway-trend-bar__count" :class="{ 'gateway-trend-bar__count--zero': !bar.hasData }">
-                {{ bar.hasData ? bar.total : '·' }}
-              </div>
-              <div class="gateway-trend-bar__time">{{ bar.showLabel ? bar.label : '' }}</div>
-            </div>
-          </div>
-          <div class="gateway-trend-legend">
-            <span><i class="dot dot--success" />成功</span>
-            <span><i class="dot dot--failed" />失败</span>
-            <span><i class="dot dot--empty" />无请求</span>
-            <span class="gateway-trend-legend__hint">统计窗口 60 秒；按 3 秒合并为 20 根柱，无请求显示为灰色柱</span>
-          </div>
-        </a-card>
-      </div>
-
-      <a-row :gutter="[16, 16]" class="page-grid-fill">
-        <a-col :xs="24">
-          <a-card :bordered="false" class="admin-card admin-card--fill">
-            <template #title>
-              <div class="route-pool-title">
-                <span>路由池</span>
-                <a-space size="small" wrap>
-                  <a-button
-                    size="small"
-                    :type="selectedRouteTypes.length === 0 ? 'primary' : 'default'"
-                    @click="clearRouteTypeFilter"
-                  >
-                    全部
-                  </a-button>
-                  <a-button
-                    v-for="item in routeTypeFilterOptions"
-                    :key="item.value"
-                    size="small"
-                    :type="isRouteTypeFilterActive(item.value) ? 'primary' : 'default'"
-                    @click="toggleRouteTypeFilter(item.value)"
-                  >
-                    {{ item.label }}
-                  </a-button>
-                </a-space>
-              </div>
-            </template>
-            <template #extra>
-              <a-space wrap>
-                <a-input
-                  v-model:value="routeSearch"
-                  placeholder="搜索路由 / 域名 / 分组"
-                  allow-clear
-                  style="width: 220px"
-                />
-                <a-select
-                  v-model:value="selectedGroups"
-                  mode="multiple"
-                  allow-clear
-                  :options="groupOptions"
-                  placeholder="按分组筛选"
-                  style="width: 240px"
-                />
-                <a-select
-                  v-model:value="selectedCircuitStates"
-                  mode="multiple"
-                  allow-clear
-                  :options="circuitStateOptions"
-                  placeholder="按熔断状态"
-                  style="width: 180px"
-                />
-                <a-select
-                  v-model:value="selectedPackageStates"
-                  mode="multiple"
-                  allow-clear
-                  :options="packageStateOptions"
-                  placeholder="按套餐"
-                  style="width: 140px"
-                />
-                <a-select
-                  v-model:value="selectedBalanceStates"
-                  mode="multiple"
-                  allow-clear
-                  :options="balanceStateOptions"
-                  placeholder="按余额"
-                  style="width: 170px"
-                />
-                <a-select
-                  v-model:value="selectedIssueStates"
-                  mode="multiple"
-                  allow-clear
-                  :options="issueStateOptions"
-                  placeholder="按异常"
-                  style="width: 140px"
-                />
-                <a-switch
-                  v-model:checked="includeDisabled"
-                  checked-children="含停用"
-                  un-checked-children="仅启用"
-                  @change="loadData"
-                />
-                <a-button size="small" :disabled="!activeRouteFilterCount" @click="clearRouteFilters">
-                  清空筛选
-                </a-button>
-              </a-space>
-            </template>
-
-            <div class="card-shell">
-              <div :ref="bindPageTableContainer" class="table-fill table-fill--management">
-                <a-table
-                  :columns="routeColumns"
-                  :data-source="filteredRoutes"
-                  :pagination="{ pageSize: gatewayTablePageSize }"
-                  :row-key="routeRowKey"
-                  size="middle"
-                  :scroll="{ x: 2040, y: pageTableY }"
+          <section
+            v-if="strategyBreakdownCards.length"
+            class="gateway-strategy-section gateway-summary-row__strategy"
+          >
+            <div class="gateway-strategy-section__body">
+              <div class="gateway-strategy-grid">
+                <a-card
+                  v-for="item in strategyBreakdownCards"
+                  :key="item.key"
+                  :bordered="false"
+                  class="admin-card gateway-strategy-card"
                 >
-                  <template #bodyCell="{ column, record }">
-                    <template v-if="column.key === 'route'">
-                      <div class="table-cell-compact">
-                        <div class="table-cell-compact__head">
-                          <strong class="table-cell-compact__title">{{ loadRouteLabel(asRoute(record)) }}</strong>
-                          <a-tooltip placement="right">
-                            <template #title>
-                              <div class="tooltip-detail-list">
-                                <div v-for="item in routeDetailItems(asRoute(record))" :key="item.label">
-                                  <strong>{{ item.label }}</strong>
-                                  <span>{{ item.value }}</span>
-                                </div>
-                              </div>
-                            </template>
-                            <InfoCircleOutlined class="table-info-icon" />
-                          </a-tooltip>
-                        </div>
-                        <div v-if="routeIssueLabels(asRoute(record)).length" class="table-cell-compact__tags">
-                          <a-tag
-                            v-for="label in routeIssueLabels(asRoute(record))"
-                            :key="label"
-                            color="error"
-                            class="route-issue-tag"
-                          >
-                            {{ label }}
-                          </a-tag>
-                        </div>
-                      </div>
-                    </template>
-                    <template v-else-if="column.key === 'type'">
-                      <a-select
-                        :value="asRoute(record).route_type"
-                        :class="['route-type-select', `route-type-select--${asRoute(record).route_type}`]"
-                        size="small"
-                        :options="routeTypeOptions"
-                        style="width: 104px"
-                        @change="(value) => handleRouteTypeSelect(asRoute(record), value)"
-                      >
-                        <template #option="{ label, value }">
-                          <span :class="['route-type-option', `route-type-option--${value}`]">{{ label }}</span>
-                        </template>
-                      </a-select>
-                    </template>
-                    <template v-else-if="column.key === 'balance'">
-                      <span :class="balanceClass(asRoute(record).last_balance)">
-                        {{ asRoute(record).balance_display || '暂无' }}
-                      </span>
-                    </template>
-                    <template v-else-if="column.key === 'package'">
-                      {{ asRoute(record).package_display || '暂无' }}
-                    </template>
-                    <template v-else-if="column.key === 'group'">
-                      {{ formatGroupNames(asRoute(record).group_name) || '未分组' }}
-                    </template>
-                    <template v-else-if="column.key === 'priority'">
-                      {{ asRoute(record).route_priority }}
-                    </template>
-                    <template v-else-if="column.key === 'weight'">
-                      {{ asRoute(record).weight }}
-                    </template>
-                    <template v-else-if="column.key === 'concurrency'">
-                      <span :class="['gateway-concurrency', { 'gateway-concurrency--active': asRoute(record).active_concurrency > 0 }]">
-                        {{ asRoute(record).active_concurrency }}
-                      </span>
-                    </template>
-                    <template v-else-if="column.key === 'circuit'">
-                      <a-tooltip v-if="asRoute(record).circuit_open_until" :title="`冷却到 ${formatTime(asRoute(record).circuit_open_until)}`">
-                        <div class="participation-cell">
-                          <StatusPill :value="asRoute(record).is_enabled ? asRoute(record).circuit_state : 'paused'" />
-                        </div>
-                      </a-tooltip>
-                      <div v-else class="participation-cell">
-                        <StatusPill :value="asRoute(record).is_enabled ? asRoute(record).circuit_state : 'paused'" />
-                      </div>
-                    </template>
-                    <template v-else-if="column.key === 'success_rate'">
-                      {{ asRoute(record).success_rate }}%
-                    </template>
-                    <template v-else-if="column.key === 'latency'">
-                      <a-tooltip v-if="routeLatencyDetails(asRoute(record)).length" placement="topLeft">
-                        <template #title>
-                          <div class="tooltip-detail-list">
-                            <div v-for="item in routeLatencyDetails(asRoute(record))" :key="item">
-                              <span>{{ item }}</span>
-                            </div>
-                          </div>
-                        </template>
-                        <div class="participation-cell">
-                          <span :class="latencyClass(primaryLatency(asRoute(record)))">
-                            <span class="gateway-latency__dot"></span>
-                            <span class="gateway-latency__value">{{ formatLatency(primaryLatency(asRoute(record))) }}</span>
-                          </span>
-                        </div>
-                      </a-tooltip>
-                      <div v-else class="participation-cell">
-                        <span :class="latencyClass(primaryLatency(asRoute(record)))">
-                          <span class="gateway-latency__dot"></span>
-                          <span class="gateway-latency__value">{{ formatLatency(primaryLatency(asRoute(record))) }}</span>
-                        </span>
-                      </div>
-                    </template>
-                    <template v-else-if="column.key === 'error'">
-                      <a-tooltip v-if="routeErrorDetails(asRoute(record)).length" placement="topLeft">
-                        <template #title>
-                          <div class="tooltip-detail-list">
-                            <div v-for="item in routeErrorDetails(asRoute(record))" :key="item">
-                              <span>{{ item }}</span>
-                            </div>
-                          </div>
-                        </template>
-                        <span class="table-ellipsis">{{ compactText(asRoute(record).last_error, 42) || '-' }}</span>
-                      </a-tooltip>
-                      <span v-else>-</span>
-                    </template>
-                    <template v-else-if="column.key === 'actions'">
-                      <a-space size="small" class="gateway-actions-cell">
-                        <a-button size="small" :danger="asRoute(record).is_enabled" @click="handleToggle(asRoute(record))">
-                          {{ asRoute(record).is_enabled ? '禁用' : '启用' }}
-                        </a-button>
-                        <a-button
-                          size="small"
-                          type="primary"
-                          ghost
-                          :disabled="asRoute(record).circuit_state === 'closed'"
-                          @click="handleResetCircuit(asRoute(record))"
-                        >
-                          重置熔断
-                        </a-button>
-                        <a-button
-                          size="small"
-                          :loading="isRouteProbing(asRoute(record).id)"
-                          @click="handleProbeRoute(asRoute(record))"
-                        >
-                          探测
-                        </a-button>
-                        <a-button
-                          size="small"
-                          :loading="isRouteBalanceProbing(asRoute(record).id)"
-                          @click="handleProbeRouteBalance(asRoute(record))"
-                        >
-                          余额
-                        </a-button>
-                        <a-button size="small" @click="openRouteLogs(asRoute(record))">
-                          <template #icon>
-                            <HistoryOutlined />
-                          </template>
-                          历史
-                        </a-button>
-                      </a-space>
-                    </template>
-                  </template>
-                </a-table>
+                  <div class="gateway-strategy-card__title">{{ item.title }}</div>
+                  <div class="gateway-strategy-card__metrics">
+                    <div>
+                      <div class="gateway-strategy-card__label">24h 请求数</div>
+                      <div class="gateway-strategy-card__value">{{ item.requestCount }}</div>
+                    </div>
+                    <div>
+                      <div class="gateway-strategy-card__label">成功率</div>
+                      <div class="gateway-strategy-card__value">{{ item.successRate }}</div>
+                    </div>
+                    <div>
+                      <div class="gateway-strategy-card__label">平均延迟</div>
+                      <div class="gateway-strategy-card__value">{{ item.avgLatency }}</div>
+                    </div>
+                    <div>
+                      <div class="gateway-strategy-card__label">流式请求</div>
+                      <div class="gateway-strategy-card__value">{{ item.streamRequestCount }}</div>
+                    </div>
+                    <div>
+                      <div class="gateway-strategy-card__label">流式成功率</div>
+                      <div class="gateway-strategy-card__value">{{ item.streamSuccessRate }}</div>
+                    </div>
+                    <div>
+                      <div class="gateway-strategy-card__label">流式平均 TTFB</div>
+                      <div class="gateway-strategy-card__value">{{ item.avgStreamTtfb }}</div>
+                    </div>
+                  </div>
+                </a-card>
               </div>
+            </div>
+          </section>
+
+          <a-card
+            v-if="trendBars.length"
+            :bordered="false"
+            class="admin-card gateway-trend-card gateway-summary-row__trend"
+          >
+            <div class="gateway-trend-header">
+              <div class="gateway-trend-header__title">近 1 分钟趋势</div>
+              <div v-if="trendSummary" class="gateway-trend-header__metrics">
+                <span>请求 <strong>{{ trendSummary.total }}</strong></span>
+                <span>成功 <strong>{{ trendSummary.success }}</strong></span>
+                <span>失败 <strong>{{ trendSummary.failed }}</strong></span>
+                <span>流式 <strong>{{ trendSummary.stream }}</strong></span>
+                <span>成功率 <strong>{{ trendSummary.successRate }}%</strong></span>
+                <span>平均延迟 <strong>{{ trendSummary.avgLatency !== null ? `${trendSummary.avgLatency} ms` : '暂无' }}</strong></span>
+              </div>
+            </div>
+            <div class="gateway-trend-bars">
+              <div
+                v-for="bar in trendBars"
+                :key="bar.key"
+                class="gateway-trend-bar"
+                :class="{ 'gateway-trend-bar--empty': !bar.hasData }"
+                :title="`${bar.label}\n请求 ${bar.total}\n成功 ${bar.success}\n失败 ${bar.failed}\n流式 ${bar.stream}\n平均延迟 ${bar.avgLatency !== null ? bar.avgLatency + ' ms' : '暂无'}`"
+              >
+                <div class="gateway-trend-bar__stack">
+                  <span
+                    class="gateway-trend-bar__segment gateway-trend-bar__segment--failed"
+                    :style="{ height: `${bar.failedHeight}%` }"
+                  />
+                  <span
+                    class="gateway-trend-bar__segment gateway-trend-bar__segment--success"
+                    :style="{ height: `${bar.successHeight}%` }"
+                  />
+                </div>
+                <div class="gateway-trend-bar__count" :class="{ 'gateway-trend-bar__count--zero': !bar.hasData }">
+                  {{ bar.hasData ? bar.total : '·' }}
+                </div>
+                <div class="gateway-trend-bar__time">{{ bar.showLabel ? bar.label : '' }}</div>
+              </div>
+            </div>
+            <div class="gateway-trend-legend">
+              <span><i class="dot dot--success" />成功</span>
+              <span><i class="dot dot--failed" />失败</span>
+              <span><i class="dot dot--empty" />无请求</span>
+              <span class="gateway-trend-legend__hint">统计窗口 60 秒；按 3 秒合并为 20 根柱，无请求显示为灰色柱</span>
             </div>
           </a-card>
-        </a-col>
-      </a-row>
+        </div>
+
+      <section
+        v-if="isGatewayMonitor"
+        class="gateway-active-feed-panel"
+      >
+        <div class="gateway-active-feed-panel__header">
+          <div>
+            <div class="gateway-active-feed-panel__title">路由调用信息流</div>
+            <div class="gateway-active-feed-panel__subtitle">
+              {{ routeActivitySubtitle }}
+            </div>
+          </div>
+          <span class="gateway-active-feed-panel__pulse" :class="{ 'gateway-active-feed-panel__pulse--active': activeRouteFeed.length > 0 }">
+            {{ activeRouteFeed.length > 0 ? 'Live' : 'Idle' }}
+          </span>
+        </div>
+        <div v-if="routeActivityFeed.length" class="gateway-active-feed">
+          <div
+            v-for="item in routeActivityFeed"
+            :key="item.id"
+            class="gateway-active-feed__item"
+            :class="{ 'gateway-active-feed__item--completed': item.kind === 'completed' }"
+          >
+            <div class="gateway-active-feed__rail">
+              <span class="gateway-active-feed__dot" />
+            </div>
+            <div class="gateway-active-feed__main">
+              <div class="gateway-active-feed__top">
+                <strong class="gateway-active-feed__route">{{ item.label }}</strong>
+                <a-space size="small" wrap class="gateway-active-feed__badges">
+                  <a-tag :color="item.primaryBadgeColor">{{ item.primaryBadge }}</a-tag>
+                  <a-tag>{{ item.secondaryBadge }}</a-tag>
+                  <a-tag v-if="item.is_stream" color="blue">流式</a-tag>
+                </a-space>
+              </div>
+              <div class="gateway-active-feed__request">
+                <span>{{ item.targetLabel }}</span>
+                <span v-if="item.routeTypeLabel">{{ item.routeTypeLabel }}</span>
+                <span>{{ item.groupLabel }}</span>
+                <span>{{ item.strategyLabel }}</span>
+                <span>{{ item.attemptLabel }}</span>
+              </div>
+              <div class="gateway-active-feed__meta">
+                <span v-for="meta in item.meta" :key="meta">{{ meta }}</span>
+                <span>{{ item.timeLabel }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <a-empty v-else description="等待网关请求进入路由池。" />
+      </section>
+
+      <a-card v-if="isRouteManagement" :bordered="false" class="admin-card admin-card--fill route-pool-card route-pool-card--standalone">
+        <template #title>
+          <div class="route-pool-title">
+            <span>路由池</span>
+            <a-space size="small" wrap>
+              <a-button
+                size="small"
+                :type="selectedRouteTypes.length === 0 ? 'primary' : 'default'"
+                @click="clearRouteTypeFilter"
+              >
+                全部
+              </a-button>
+              <a-button
+                v-for="item in routeTypeFilterOptions"
+                :key="item.value"
+                size="small"
+                :type="isRouteTypeFilterActive(item.value) ? 'primary' : 'default'"
+                @click="toggleRouteTypeFilter(item.value)"
+              >
+                {{ item.label }}
+              </a-button>
+            </a-space>
+          </div>
+        </template>
+        <div class="card-shell">
+          <div class="route-pool-filters">
+            <a-input
+              v-model:value="routeSearch"
+              class="route-pool-filter route-pool-filter--search"
+              placeholder="搜索路由 / 域名 / 分组"
+              allow-clear
+            />
+            <a-select
+              v-model:value="selectedGroups"
+              class="route-pool-filter route-pool-filter--group"
+              mode="multiple"
+              allow-clear
+              :options="groupOptions"
+              placeholder="按分组筛选"
+            />
+            <a-select
+              v-model:value="selectedCircuitStates"
+              class="route-pool-filter"
+              mode="multiple"
+              allow-clear
+              :options="circuitStateOptions"
+              placeholder="按熔断状态"
+            />
+            <a-select
+              v-model:value="selectedPackageStates"
+              class="route-pool-filter route-pool-filter--compact"
+              mode="multiple"
+              allow-clear
+              :options="packageStateOptions"
+              placeholder="按套餐"
+            />
+            <a-select
+              v-model:value="selectedBalanceStates"
+              class="route-pool-filter"
+              mode="multiple"
+              allow-clear
+              :options="balanceStateOptions"
+              placeholder="按余额"
+            />
+            <a-select
+              v-model:value="selectedIssueStates"
+              class="route-pool-filter route-pool-filter--compact"
+              mode="multiple"
+              allow-clear
+              :options="issueStateOptions"
+              placeholder="按异常"
+            />
+            <a-switch
+              v-model:checked="includeDisabled"
+              class="route-pool-filter-switch"
+              checked-children="含停用"
+              un-checked-children="仅启用"
+              @change="loadData"
+            />
+            <a-button class="route-pool-clear" size="small" :disabled="!activeRouteFilterCount" @click="clearRouteFilters">
+              清空筛选
+            </a-button>
+          </div>
+          <div :ref="bindPageTableContainer" class="table-fill table-fill--management">
+            <a-table
+              :columns="routeColumns"
+              :data-source="filteredRoutes"
+              :pagination="{ pageSize: gatewayTablePageSize }"
+              :row-key="routeRowKey"
+              size="middle"
+              :scroll="{ x: 1940, y: pageTableY }"
+            >
+              <template #headerCell="{ column }">
+                <template v-if="column.key === 'weight'">
+                  <span class="table-header-help">
+                    <span>权重</span>
+                    <a-tooltip
+                      placement="top"
+                      title="用于加权轮询和智能评分。权重越大，在健康且满足并发/熔断条件时获得请求的概率越高；智能策略还会结合延迟、并发、失败记录和优先级共同计算。"
+                    >
+                      <QuestionCircleOutlined class="table-info-icon" />
+                    </a-tooltip>
+                  </span>
+                </template>
+              </template>
+              <template #bodyCell="{ column, record }">
+                <template v-if="column.key === 'route'">
+                  <div class="table-cell-compact">
+                    <div class="table-cell-compact__head">
+                      <a-tooltip placement="topLeft" :title="loadRouteLabel(asRoute(record))">
+                        <strong class="table-cell-compact__title">{{ loadRouteLabel(asRoute(record)) }}</strong>
+                      </a-tooltip>
+                      <a-tooltip placement="right">
+                        <template #title>
+                          <div class="tooltip-detail-list">
+                            <div v-for="item in routeDetailItems(asRoute(record))" :key="item.label">
+                              <strong>{{ item.label }}</strong>
+                              <span>{{ item.value }}</span>
+                            </div>
+                          </div>
+                        </template>
+                        <InfoCircleOutlined class="table-info-icon" />
+                      </a-tooltip>
+                    </div>
+                    <div v-if="routeIssueLabels(asRoute(record)).length" class="table-cell-compact__tags">
+                      <a-tag
+                        v-for="label in routeIssueLabels(asRoute(record))"
+                        :key="label"
+                        color="error"
+                        class="route-issue-tag"
+                      >
+                        {{ label }}
+                      </a-tag>
+                    </div>
+                  </div>
+                </template>
+                <template v-else-if="column.key === 'type'">
+                  <a-select
+                    :value="asRoute(record).route_type"
+                    :class="['route-type-select', `route-type-select--${asRoute(record).route_type}`]"
+                    size="small"
+                    :options="routeTypeOptions"
+                    style="width: 104px"
+                    @change="(value) => handleRouteTypeSelect(asRoute(record), value)"
+                  >
+                    <template #option="{ label, value }">
+                      <span :class="['route-type-option', `route-type-option--${value}`]">{{ label }}</span>
+                    </template>
+                  </a-select>
+                </template>
+                <template v-else-if="column.key === 'balance'">
+                  <span :class="balanceClass(asRoute(record).last_balance)">
+                    {{ asRoute(record).balance_display || '暂无' }}
+                  </span>
+                </template>
+                <template v-else-if="column.key === 'group'">
+                  {{ formatGroupNames(asRoute(record).group_name) || '未分组' }}
+                </template>
+                <template v-else-if="column.key === 'priority'">
+                  {{ asRoute(record).route_priority }}
+                </template>
+                <template v-else-if="column.key === 'weight'">
+                  {{ asRoute(record).weight }}
+                </template>
+                <template v-else-if="column.key === 'concurrency'">
+                  <a-tooltip :title="`当前并发 ${asRoute(record).active_concurrency} / 单路由并发总额 ${routeConcurrencyLimitLabel}`">
+                    <span :class="['gateway-concurrency', { 'gateway-concurrency--active': asRoute(record).active_concurrency > 0 }]">
+                      <span class="gateway-concurrency__current">{{ asRoute(record).active_concurrency }}</span>
+                      <span class="gateway-concurrency__separator">/</span>
+                      <span class="gateway-concurrency__limit">{{ routeConcurrencyLimitLabel }}</span>
+                    </span>
+                  </a-tooltip>
+                </template>
+                <template v-else-if="column.key === 'circuit'">
+                  <a-tooltip v-if="asRoute(record).circuit_open_until" :title="`冷却到 ${formatTime(asRoute(record).circuit_open_until)}`">
+                    <div class="participation-cell">
+                      <StatusPill :value="asRoute(record).is_enabled ? asRoute(record).circuit_state : 'paused'" />
+                    </div>
+                  </a-tooltip>
+                  <div v-else class="participation-cell">
+                    <StatusPill :value="asRoute(record).is_enabled ? asRoute(record).circuit_state : 'paused'" />
+                  </div>
+                </template>
+                <template v-else-if="column.key === 'success_rate'">
+                  {{ asRoute(record).success_rate }}%
+                </template>
+                <template v-else-if="column.key === 'latency'">
+                  <a-tooltip v-if="routeLatencyDetails(asRoute(record)).length" placement="topLeft">
+                    <template #title>
+                      <div class="tooltip-detail-list">
+                        <div v-for="item in routeLatencyDetails(asRoute(record))" :key="item">
+                          <span>{{ item }}</span>
+                        </div>
+                      </div>
+                    </template>
+                    <div class="participation-cell">
+                      <span :class="latencyClass(primaryLatency(asRoute(record)))">
+                        <span class="gateway-latency__dot"></span>
+                        <span class="gateway-latency__value">{{ formatLatency(primaryLatency(asRoute(record))) }}</span>
+                      </span>
+                    </div>
+                  </a-tooltip>
+                  <div v-else class="participation-cell">
+                    <span :class="latencyClass(primaryLatency(asRoute(record)))">
+                      <span class="gateway-latency__dot"></span>
+                      <span class="gateway-latency__value">{{ formatLatency(primaryLatency(asRoute(record))) }}</span>
+                    </span>
+                  </div>
+                </template>
+                <template v-else-if="column.key === 'error'">
+                  <a-tooltip v-if="routeErrorDetails(asRoute(record)).length" placement="topLeft">
+                    <template #title>
+                      <div class="tooltip-detail-list">
+                        <div v-for="item in routeErrorDetails(asRoute(record))" :key="item">
+                          <span>{{ item }}</span>
+                        </div>
+                      </div>
+                    </template>
+                    <span class="table-ellipsis">{{ compactText(asRoute(record).last_error, 42) || '-' }}</span>
+                  </a-tooltip>
+                  <span v-else>-</span>
+                </template>
+                <template v-else-if="column.key === 'actions'">
+                  <a-space size="small" class="gateway-actions-cell">
+                    <a-button size="small" :danger="asRoute(record).is_enabled" @click.stop="handleToggle(asRoute(record))">
+                      {{ asRoute(record).is_enabled ? '禁用' : '启用' }}
+                    </a-button>
+                    <a-dropdown :trigger="['click']">
+                      <a-tooltip title="更多操作">
+                        <a-button
+                          size="small"
+                          class="gateway-actions-menu-button"
+                          :loading="isRouteProbing(asRoute(record).id) || isRouteBalanceProbing(asRoute(record).id)"
+                          @click.stop
+                        >
+                          <template #icon><MoreOutlined /></template>
+                        </a-button>
+                      </a-tooltip>
+                      <template #overlay>
+                        <a-menu @click.stop>
+                          <a-menu-item
+                            key="reset-circuit"
+                            :disabled="asRoute(record).circuit_state === 'closed'"
+                            @click="handleResetCircuit(asRoute(record))"
+                          >
+                            <ReloadOutlined />
+                            <span>重置熔断</span>
+                          </a-menu-item>
+                          <a-menu-item
+                            key="probe"
+                            :disabled="isRouteProbing(asRoute(record).id)"
+                            @click="handleProbeRoute(asRoute(record))"
+                          >
+                            <SyncOutlined />
+                            <span>探测</span>
+                          </a-menu-item>
+                          <a-menu-item
+                            key="balance"
+                            :disabled="isRouteBalanceProbing(asRoute(record).id)"
+                            @click="handleProbeRouteBalance(asRoute(record))"
+                          >
+                            <InfoCircleOutlined />
+                            <span>余额</span>
+                          </a-menu-item>
+                          <a-menu-divider />
+                          <a-menu-item key="enable-only" @click="handleEnableOnlyRoute(asRoute(record))">
+                            <SettingOutlined />
+                            <span>禁用其他</span>
+                          </a-menu-item>
+                          <a-menu-item key="priority" @click="openPriorityDialog(asRoute(record))">
+                            <SettingOutlined />
+                            <span>优先权</span>
+                          </a-menu-item>
+                          <a-menu-item key="diagnosis" @click="openRouteDiagnosis(asRoute(record))">
+                            <ToolOutlined />
+                            <span>诊断</span>
+                          </a-menu-item>
+                          <a-menu-item key="history" @click="openRouteLogs(asRoute(record))">
+                            <HistoryOutlined />
+                            <span>历史</span>
+                          </a-menu-item>
+                        </a-menu>
+                      </template>
+                    </a-dropdown>
+                  </a-space>
+                </template>
+              </template>
+            </a-table>
+          </div>
+        </div>
+      </a-card>
       </div>
+
+      <a-modal
+        v-model:open="priorityDialogOpen"
+        title="设置优先权"
+        width="920px"
+        :footer="null"
+      >
+        <a-spin :spinning="priorityDialogLoading">
+          <div class="priority-dialog">
+            <a-table
+              :columns="priorityDialogColumns"
+              :data-source="priorityRoutes"
+              :pagination="{ pageSize: 8 }"
+              :row-key="routeRowKey"
+              :row-class-name="priorityRouteRowClassName"
+              size="small"
+              :scroll="{ x: 760, y: 360 }"
+            >
+              <template #bodyCell="{ column, record }">
+                <template v-if="column.key === 'route'">
+                  <div class="priority-route-name">
+                    <a-tooltip placement="topLeft" :title="loadRouteLabel(asRoute(record))">
+                      <strong>{{ loadRouteLabel(asRoute(record)) }}</strong>
+                    </a-tooltip>
+                    <a-tag v-if="asRoute(record).id === priorityRoute?.id" color="processing">当前</a-tag>
+                  </div>
+                </template>
+                <template v-else-if="column.key === 'priority'">
+                  <span class="priority-number">{{ asRoute(record).route_priority }}</span>
+                </template>
+                <template v-else-if="column.key === 'group'">
+                  {{ formatGroupNames(asRoute(record).group_name) || '未分组' }}
+                </template>
+              </template>
+            </a-table>
+
+            <div class="priority-editor">
+              <div class="priority-editor__summary">
+                <span>当前路由</span>
+                <strong>{{ priorityRoute ? loadRouteLabel(priorityRoute) : '未选择' }}</strong>
+                <span>当前优先级 {{ routePriorityLabel(priorityRoute) }}</span>
+              </div>
+              <div class="priority-editor__actions">
+                <a-input-number
+                  v-model:value="priorityInsertIndex"
+                  class="priority-editor__input"
+                  :min="0"
+                  :max="Math.max(priorityRoutes.length - 1, 0)"
+                  :precision="0"
+                  placeholder="目标优先级"
+                />
+                <a-button type="primary" :disabled="!priorityRoute" @click="handlePriorityMove">
+                  移动到优先级
+                </a-button>
+                <a-button @click="handlePriorityPreset('package')">优先套餐</a-button>
+                <a-button @click="handlePriorityPreset('balance')">优先余额</a-button>
+              </div>
+            </div>
+          </div>
+        </a-spin>
+      </a-modal>
 
       <a-modal
         v-model:open="settingsOpen"
         title="网关策略"
-        width="720px"
+        width="980px"
         :confirm-loading="settingsLoading"
         @ok="saveSettings"
       >
         <a-form layout="vertical">
-          <a-row :gutter="16">
-            <a-col :xs="24" :md="12">
-              <a-form-item label="路由策略">
+          <div class="gateway-policy-settings-layout">
+            <div class="gateway-policy-settings-layout__main">
+              <a-row :gutter="16">
+                <a-col :xs="24" :md="12">
+                  <a-form-item label="路由策略">
+                    <a-select
+                      v-model:value="settingsForm.route_strategy"
+                      :options="gatewayRouteStrategyOptions.map(({ label, value }) => ({ label, value }))"
+                    />
+                    <small class="field-help">{{ selectedRouteStrategyDescription }}</small>
+                  </a-form-item>
+                </a-col>
+                <a-col :xs="24" :md="12">
+                  <a-form-item label="最大尝试次数">
+                    <a-input-number
+                      v-model:value="settingsForm.max_attempts"
+                      style="width: 100%"
+                      :min="0"
+                      :max="50"
+                    />
+                    <small class="field-help">填 0 表示当前池里所有健康路由都可参与失败切换。</small>
+                  </a-form-item>
+                </a-col>
+              </a-row>
+
+              <a-row :gutter="16">
+                <a-col :xs="24" :md="12">
+                  <a-form-item label="熔断阈值">
+                    <a-input-number
+                      v-model:value="settingsForm.failure_threshold"
+                      style="width: 100%"
+                      :min="1"
+                      :max="20"
+                    />
+                  </a-form-item>
+                </a-col>
+                <a-col :xs="24" :md="12">
+                  <a-form-item label="熔断冷却时间（秒）">
+                    <a-input-number
+                      v-model:value="settingsForm.cooldown_seconds"
+                      style="width: 100%"
+                      :min="10"
+                      :max="3600"
+                    />
+                  </a-form-item>
+                </a-col>
+              </a-row>
+
+              <a-form-item label="网关请求超时（秒）">
+                <a-input-number
+                  v-model:value="settingsForm.request_timeout"
+                  style="width: 100%"
+                  :min="5"
+                  :max="180"
+                />
+              </a-form-item>
+
+              <a-form-item label="上游错误切换">
                 <a-select
-                  v-model:value="settingsForm.route_strategy"
-                  :options="gatewayRouteStrategyOptions.map(({ label, value }) => ({ label, value }))"
+                  v-model:value="settingsForm.failure_retry_mode"
+                  :options="gatewayFailureRetryModeOptions.map(({ label, value }) => ({ label, value }))"
                 />
-                <small class="field-help">{{ selectedRouteStrategyDescription }}</small>
+                <small class="field-help">{{ selectedFailureRetryModeDescription }}</small>
               </a-form-item>
-            </a-col>
-            <a-col :xs="24" :md="12">
-              <a-form-item label="最大尝试次数">
-                <a-input-number
-                  v-model:value="settingsForm.max_attempts"
-                  style="width: 100%"
-                  :min="0"
-                  :max="50"
-                />
-                <small class="field-help">填 0 表示当前池里所有健康路由都可参与失败切换。</small>
-              </a-form-item>
-            </a-col>
-          </a-row>
 
-          <a-row :gutter="16">
-            <a-col :xs="24" :md="12">
-              <a-form-item label="熔断阈值">
-                <a-input-number
-                  v-model:value="settingsForm.failure_threshold"
-                  style="width: 100%"
-                  :min="1"
-                  :max="20"
-                />
-              </a-form-item>
-            </a-col>
-            <a-col :xs="24" :md="12">
-              <a-form-item label="熔断冷却时间（秒）">
-                <a-input-number
-                  v-model:value="settingsForm.cooldown_seconds"
-                  style="width: 100%"
-                  :min="10"
-                  :max="3600"
-                />
-              </a-form-item>
-            </a-col>
-          </a-row>
+              <a-row :gutter="16">
+                <a-col :xs="24" :md="12">
+                  <a-form-item label="单路由并发上限">
+                    <a-input-number
+                      v-model:value="settingsForm.route_concurrency_limit"
+                      style="width: 100%"
+                      :min="0"
+                      :max="1000"
+                    />
+                    <small class="field-help">例如填 5，某条路由达到 5 个当前并发后，新请求会优先转到其他路由；填 0 表示不限制。</small>
+                  </a-form-item>
+                </a-col>
+                <a-col :xs="24" :md="12">
+                  <a-form-item label="并发转移策略">
+                    <a-select
+                      v-model:value="settingsForm.concurrency_transfer_strategy"
+                      :options="gatewayConcurrencyTransferOptions.map(({ label, value }) => ({ label, value }))"
+                    />
+                    <small class="field-help">{{ selectedConcurrencyTransferDescription }}</small>
+                  </a-form-item>
+                </a-col>
+              </a-row>
 
-          <a-form-item label="网关请求超时（秒）">
-            <a-input-number
-              v-model:value="settingsForm.request_timeout"
-              style="width: 100%"
-              :min="5"
-              :max="180"
-            />
-          </a-form-item>
-
-          <a-row :gutter="16">
-            <a-col :xs="24" :md="12">
-              <a-form-item label="单路由并发上限">
-                <a-input-number
-                  v-model:value="settingsForm.route_concurrency_limit"
-                  style="width: 100%"
-                  :min="0"
-                  :max="1000"
-                />
-                <small class="field-help">例如填 5，某条路由达到 5 个当前并发后，新请求会优先转到其他路由；填 0 表示不限制。</small>
-              </a-form-item>
-            </a-col>
-            <a-col :xs="24" :md="12">
-              <a-form-item label="并发溢出优先级">
-                <a-select
-                  v-model:value="settingsForm.concurrency_overflow_strategy"
-                  :options="gatewayOverflowStrategyOptions.map(({ label, value }) => ({ label, value }))"
-                />
-                <small class="field-help">{{ selectedOverflowStrategyDescription }}</small>
-              </a-form-item>
-            </a-col>
-          </a-row>
-
-          <div v-if="settingsForm.route_strategy === 'smart'" class="smart-bias-panel">
-            <div class="smart-bias-panel__title">Smart 评分权重</div>
-            <a-row :gutter="16">
-              <a-col :xs="24" :md="12">
-                <a-form-item label="延迟敏感度">
-                  <a-input-number
-                    v-model:value="settingsForm.smart_latency_bias"
-                    style="width: 100%"
-                    :min="0"
-                    :max="5"
-                    :step="0.1"
+              <a-row :gutter="16">
+                <a-col :xs="24" :md="12">
+                  <a-form-item label="并发溢出优先级">
+                    <a-select
+                      v-model:value="settingsForm.concurrency_overflow_strategy"
+                      :options="gatewayOverflowStrategyOptions.map(({ label, value }) => ({ label, value }))"
+                    />
+                    <small class="field-help">{{ selectedOverflowStrategyDescription }}</small>
+                  </a-form-item>
+                </a-col>
+                <a-col :xs="24" :md="12">
+                  <a-alert
+                    type="info"
+                    show-icon
+                    message="策略关系"
+                    description="并发转移策略决定未超过上限时是否主动均衡；并发溢出优先级只在所有可用路由都达到并发上限后参与排序。"
                   />
-                  <small class="field-help">越大越偏向选择 EWMA 延迟更低的路由（默认 1.0）。</small>
-                </a-form-item>
-              </a-col>
-              <a-col :xs="24" :md="12">
-                <a-form-item label="并发敏感度">
-                  <a-input-number
-                    v-model:value="settingsForm.smart_concurrency_bias"
-                    style="width: 100%"
-                    :min="0"
-                    :max="5"
-                    :step="0.1"
-                  />
-                  <small class="field-help">越大越偏向当前空闲的路由（默认 1.5）。</small>
-                </a-form-item>
-              </a-col>
-            </a-row>
-            <a-row :gutter="16">
-              <a-col :xs="24" :md="12">
-                <a-form-item label="失败惩罚强度">
-                  <a-input-number
-                    v-model:value="settingsForm.smart_failure_bias"
-                    style="width: 100%"
-                    :min="0"
-                    :max="5"
-                    :step="0.1"
-                  />
-                  <small class="field-help">控制连续失败 / 最近失败 / 失败率三类信号的权重（默认 1.0）。</small>
-                </a-form-item>
-              </a-col>
-              <a-col :xs="24" :md="12">
-                <a-form-item label="优先级 / 权重偏好">
-                  <a-input-number
-                    v-model:value="settingsForm.smart_priority_bias"
-                    style="width: 100%"
-                    :min="0"
-                    :max="5"
-                    :step="0.1"
-                  />
-                  <small class="field-help">越大越遵循路由的 priority / weight 设置（默认 0.5）。</small>
-                </a-form-item>
-              </a-col>
-            </a-row>
-          </div>
+                </a-col>
+              </a-row>
 
-          <a-form-item label="GATEWAY_API_KEY">
-            <a-input-password
-              v-model:value="settingsForm.gateway_api_key"
-              placeholder="用于 cc-switch / OpenAI 客户端请求网关的 Bearer Key"
-              allow-clear
-            />
-            <small class="field-help">保存后客户端需使用 Authorization: Bearer 这个 Key；留空时会回退到后端环境变量。</small>
-          </a-form-item>
-
-          <div class="gateway-policy-help">
-            <div class="gateway-policy-help__title">策略说明</div>
-            <div class="gateway-policy-help__grid">
-              <div
-                v-for="item in gatewayRouteStrategyOptions"
-                :key="item.value"
-                class="gateway-policy-help__item"
-                :class="{ 'gateway-policy-help__item--active': item.value === settingsForm.route_strategy }"
-              >
-                <strong>{{ item.label }}</strong>
-                <span>{{ item.description }}</span>
+              <div v-if="settingsForm.route_strategy === 'smart'" class="smart-bias-panel">
+                <div class="smart-bias-panel__title">Smart 评分权重</div>
+                <a-row :gutter="16">
+                  <a-col :xs="24" :md="12">
+                    <a-form-item label="延迟敏感度">
+                      <a-input-number
+                        v-model:value="settingsForm.smart_latency_bias"
+                        style="width: 100%"
+                        :min="0"
+                        :max="5"
+                        :step="0.1"
+                      />
+                      <small class="field-help">越大越偏向选择 EWMA 延迟更低的路由（默认 1.0）。</small>
+                    </a-form-item>
+                  </a-col>
+                  <a-col :xs="24" :md="12">
+                    <a-form-item label="并发敏感度">
+                      <a-input-number
+                        v-model:value="settingsForm.smart_concurrency_bias"
+                        style="width: 100%"
+                        :min="0"
+                        :max="5"
+                        :step="0.1"
+                      />
+                      <small class="field-help">越大越偏向当前空闲的路由（默认 1.5）。</small>
+                    </a-form-item>
+                  </a-col>
+                </a-row>
+                <a-row :gutter="16">
+                  <a-col :xs="24" :md="12">
+                    <a-form-item label="失败惩罚强度">
+                      <a-input-number
+                        v-model:value="settingsForm.smart_failure_bias"
+                        style="width: 100%"
+                        :min="0"
+                        :max="5"
+                        :step="0.1"
+                      />
+                      <small class="field-help">控制连续失败 / 最近失败 / 失败率三类信号的权重（默认 1.0）。</small>
+                    </a-form-item>
+                  </a-col>
+                  <a-col :xs="24" :md="12">
+                    <a-form-item label="优先级 / 权重偏好">
+                      <a-input-number
+                        v-model:value="settingsForm.smart_priority_bias"
+                        style="width: 100%"
+                        :min="0"
+                        :max="5"
+                        :step="0.1"
+                      />
+                      <small class="field-help">越大越遵循路由的 priority / weight 设置（默认 0.5）。</small>
+                    </a-form-item>
+                  </a-col>
+                </a-row>
               </div>
+
+              <a-form-item label="GATEWAY_API_KEY">
+                <a-input-password
+                  v-model:value="settingsForm.gateway_api_key"
+                  placeholder="用于 cc-switch / OpenAI 客户端请求网关的 Bearer Key"
+                  allow-clear
+                />
+                <small class="field-help">保存后客户端需使用 Authorization: Bearer 这个 Key；留空时公开网关会被禁用。</small>
+              </a-form-item>
             </div>
-            <div class="gateway-policy-help__notes">
-              <div v-for="item in gatewayStrategyDescriptionItems" :key="item.label">
-                <strong>{{ item.label }}</strong>
-                <span>{{ item.value }}</span>
+
+            <aside class="gateway-policy-settings-layout__side">
+              <div class="gateway-policy-help">
+                <div class="gateway-policy-help__title">策略说明</div>
+                <div class="gateway-policy-help__grid">
+                  <div
+                    v-for="item in gatewayRouteStrategyOptions"
+                    :key="item.value"
+                    class="gateway-policy-help__item"
+                    :class="{ 'gateway-policy-help__item--active': item.value === settingsForm.route_strategy }"
+                  >
+                    <strong>{{ item.label }}</strong>
+                    <span>{{ item.description }}</span>
+                  </div>
+                </div>
+                <div class="gateway-policy-help__notes">
+                  <div v-for="item in gatewayStrategyDescriptionItems" :key="item.label">
+                    <strong>{{ item.label }}</strong>
+                    <span>{{ item.value }}</span>
+                  </div>
+                </div>
               </div>
-            </div>
+            </aside>
           </div>
         </a-form>
       </a-modal>
@@ -1917,6 +2398,41 @@ onBeforeUnmount(() => {
           </a-table>
         </div>
       </a-drawer>
+
+      <a-drawer
+        v-model:open="routeDiagnosisOpen"
+        :title="`路由诊断 · ${routeDiagnosis?.route_label || ''}`"
+        width="520px"
+        placement="right"
+      >
+        <a-spin :spinning="routeDiagnosisLoading">
+          <div v-if="routeDiagnosis" class="route-diagnosis">
+            <a-alert
+              :type="routeDiagnosis.healthy ? 'success' : 'error'"
+              show-icon
+              :message="routeDiagnosis.healthy ? '路由关键检查通过' : '路由存在阻断项'"
+              :description="`当前并发 ${routeDiagnosis.active_count}，检查时间 ${formatTime(routeDiagnosis.checked_at)}`"
+            />
+            <div class="route-diagnosis__list">
+              <div
+                v-for="item in routeDiagnosis.diagnostics"
+                :key="item.label"
+                class="route-diagnosis__item"
+                :class="`route-diagnosis__item--${item.severity}`"
+              >
+                <div class="route-diagnosis__head">
+                  <strong>{{ item.label }}</strong>
+                  <a-tag :color="item.severity === 'ok' ? 'success' : item.severity === 'warning' ? 'warning' : 'error'">
+                    {{ item.severity === 'ok' ? '正常' : item.severity === 'warning' ? '注意' : '异常' }}
+                  </a-tag>
+                </div>
+                <div class="route-diagnosis__message">{{ item.message }}</div>
+                <div class="route-diagnosis__detail">{{ item.detail }}</div>
+              </div>
+            </div>
+          </div>
+        </a-spin>
+      </a-drawer>
     </div>
   </ShellLayout>
 </template>
@@ -1970,6 +2486,62 @@ onBeforeUnmount(() => {
   color: #5b6f8f;
 }
 
+.table-header-help {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.route-diagnosis {
+  display: grid;
+  gap: 14px;
+}
+
+.route-diagnosis__list {
+  display: grid;
+  gap: 10px;
+}
+
+.route-diagnosis__item {
+  border: 1px solid #e5e7eb;
+  border-left-width: 3px;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #ffffff;
+}
+
+.route-diagnosis__item--ok {
+  border-left-color: #22c55e;
+}
+
+.route-diagnosis__item--warning {
+  border-left-color: #f59e0b;
+}
+
+.route-diagnosis__item--error {
+  border-left-color: #ef4444;
+}
+
+.route-diagnosis__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.route-diagnosis__message {
+  margin-top: 6px;
+  color: #24334d;
+  font-size: 13px;
+}
+
+.route-diagnosis__detail {
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .tooltip-detail-list {
   display: grid;
   gap: 6px;
@@ -1996,6 +2568,11 @@ onBeforeUnmount(() => {
 
 .gateway-actions-cell {
   flex-wrap: nowrap;
+}
+
+.gateway-actions-menu-button {
+  width: 28px;
+  padding-inline: 0;
 }
 
 .smart-bias-panel {
@@ -2040,10 +2617,14 @@ onBeforeUnmount(() => {
   margin-top: 0 !important;
 }
 
+.gateway-fill > .route-pool-card--standalone {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .gateway-summary-row__strategy {
-  flex: 0 1 360px;
-  min-width: 260px;
-  max-width: 360px;
+  flex: 1 1 620px;
+  min-width: 520px;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -2051,14 +2632,19 @@ onBeforeUnmount(() => {
 }
 
 .gateway-summary-row__trend {
-  flex: 1 1 0%;
-  min-width: 0;
+  flex: 0 1 460px;
+  min-width: 360px;
   height: 160px;
   margin-bottom: 0 !important;
   display: flex;
   flex-direction: column;
   min-height: 0;
   box-sizing: border-box;
+}
+
+.gateway-summary-row--trend-only .gateway-summary-row__trend {
+  flex-basis: 100%;
+  min-width: 0;
 }
 
 .gateway-summary-row__trend :deep(.ant-card-body) {
@@ -2267,6 +2853,190 @@ onBeforeUnmount(() => {
   color: #94a3b8;
 }
 
+.gateway-active-feed-panel {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  margin-bottom: 16px;
+  min-height: 0;
+  padding: 0 2px;
+}
+
+.gateway-active-feed-panel__header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.gateway-active-feed-panel__title {
+  color: #24334d;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.gateway-active-feed-panel__subtitle {
+  margin-top: 3px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.gateway-active-feed-panel__pulse {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid #d8dee8;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #64748b;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.gateway-active-feed-panel__pulse::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.gateway-active-feed-panel__pulse--active {
+  border-color: rgba(14, 165, 233, 0.36);
+  background: rgba(14, 165, 233, 0.09);
+  color: #0369a1;
+}
+
+.gateway-active-feed {
+  display: grid;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 4px 2px 0;
+}
+
+.gateway-active-feed__item {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+  padding: 0 0 14px;
+}
+
+.gateway-active-feed__item--completed {
+  color: #64748b;
+}
+
+.gateway-active-feed__rail {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  min-height: 100%;
+}
+
+.gateway-active-feed__rail::before {
+  content: '';
+  position: absolute;
+  top: 18px;
+  bottom: -14px;
+  width: 2px;
+  border-radius: 999px;
+  background: #dbeafe;
+}
+
+.gateway-active-feed__item:last-child .gateway-active-feed__rail::before {
+  display: none;
+}
+
+.gateway-active-feed__dot {
+  width: 10px;
+  height: 10px;
+  margin-top: 5px;
+  border-radius: 999px;
+  background: #0ea5e9;
+  box-shadow: 0 0 0 4px rgba(14, 165, 233, 0.12);
+}
+
+.gateway-active-feed__item--completed .gateway-active-feed__dot {
+  background: #94a3b8;
+  box-shadow: 0 0 0 4px rgba(148, 163, 184, 0.12);
+}
+
+.gateway-active-feed__main {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.gateway-active-feed__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.gateway-active-feed__route {
+  min-width: 0;
+  overflow: hidden;
+  color: #1f2a44;
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gateway-active-feed__badges {
+  flex: 0 0 auto;
+}
+
+.gateway-active-feed__request,
+.gateway-active-feed__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.gateway-active-feed__request span,
+.gateway-active-feed__meta span {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gateway-active-feed__request span {
+  color: #334155;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.gateway-active-feed__meta span {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.gateway-policy-settings-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 18px;
+  align-items: start;
+}
+
+.gateway-policy-settings-layout__main,
+.gateway-policy-settings-layout__side {
+  min-width: 0;
+}
+
 .gateway-policy-help {
   border: 1px solid #d9e2ef;
   border-radius: 8px;
@@ -2283,7 +3053,7 @@ onBeforeUnmount(() => {
 
 .gateway-policy-help__grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 8px;
 }
 
@@ -2316,7 +3086,7 @@ onBeforeUnmount(() => {
 
 .gateway-policy-help__notes {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 8px;
   margin-top: 8px;
 }
@@ -2381,15 +3151,102 @@ onBeforeUnmount(() => {
   flex: 0 0 auto;
 }
 
+.route-management-heading {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.route-management-heading strong {
+  color: #24334d;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.route-management-heading span {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-control);
+  background: #fff;
+  color: #5f6f86;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 .route-pool-title {
   display: flex;
   align-items: center;
   gap: 12px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  min-width: 0;
 }
 
 .route-pool-title > span {
+  flex: 0 0 auto;
   font-weight: 700;
+}
+
+.route-pool-title :deep(.ant-space) {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.route-pool-title :deep(.ant-space-item) {
+  flex: 0 0 auto;
+}
+
+.route-pool-card :deep(.ant-card-body) {
+  padding: 0;
+}
+
+.route-pool-card .card-shell {
+  gap: 0;
+}
+
+.route-pool-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 0;
+  min-width: 0;
+  padding: var(--table-filter-gutter);
+  border-bottom: 1px solid var(--border-muted);
+  background: var(--bg-panel);
+}
+
+.route-pool-filter {
+  flex: 1 1 160px;
+  min-width: 140px;
+  max-width: 260px;
+}
+
+.route-pool-filter--search,
+.route-pool-filter--group {
+  flex-basis: 220px;
+  max-width: 320px;
+}
+
+.route-pool-filter--compact {
+  flex-basis: 128px;
+  max-width: 180px;
+}
+
+.route-pool-filter :deep(.ant-select-selector),
+.route-pool-filter :deep(.ant-input) {
+  min-width: 0;
+}
+
+.route-pool-filter-switch,
+.route-pool-clear {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .route-type-select :deep(.ant-select-selector) {
@@ -2444,11 +3301,71 @@ onBeforeUnmount(() => {
   background: #0891b2;
 }
 
+.priority-dialog {
+  display: grid;
+  gap: 14px;
+}
+
+.priority-route-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.priority-route-name strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.priority-number {
+  font-family: 'IBM Plex Mono', monospace;
+  font-weight: 700;
+}
+
+.priority-route-row--current > td {
+  background: #eef6ff !important;
+}
+
+.priority-editor {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-control);
+  background: var(--bg-panel);
+}
+
+.priority-editor__summary,
+.priority-editor__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+
+.priority-editor__summary {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.priority-editor__summary strong {
+  color: #24334d;
+  font-size: 13px;
+}
+
+.priority-editor__input {
+  width: 150px;
+}
+
 .gateway-concurrency {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 34px;
+  gap: 4px;
+  min-width: 62px;
   height: 26px;
   padding: 0 10px;
   border: 1px solid rgba(148, 163, 184, 0.32);
@@ -2465,6 +3382,16 @@ onBeforeUnmount(() => {
   border-color: rgba(14, 165, 233, 0.5);
   background: rgba(14, 165, 233, 0.14);
   color: #0369a1;
+}
+
+.gateway-concurrency__separator,
+.gateway-concurrency__limit {
+  color: #94a3b8;
+}
+
+.gateway-concurrency--active .gateway-concurrency__separator,
+.gateway-concurrency--active .gateway-concurrency__limit {
+  color: #0c4a6e;
 }
 
 .gateway-latency {
@@ -2507,9 +3434,30 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 720px) {
+  .route-pool-title {
+    flex-wrap: wrap;
+  }
+
+  .route-pool-filter {
+    flex-basis: 100%;
+    max-width: none;
+  }
+
   .gateway-policy-help__grid,
   .gateway-policy-help__notes {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 960px) {
+  .gateway-policy-settings-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .gateway-summary-row__strategy,
+  .gateway-summary-row__trend {
+    flex-basis: 100%;
+    min-width: 0;
   }
 }
 </style>

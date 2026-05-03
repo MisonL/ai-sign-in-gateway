@@ -64,7 +64,9 @@ type SystemSetting struct {
 	GatewayCooldownSeconds             int       `gorm:"default:180" json:"gateway_cooldown_seconds"`
 	GatewayRequestTimeout              int       `gorm:"default:60" json:"gateway_request_timeout"`
 	GatewayMaxAttempts                 int       `gorm:"default:0" json:"gateway_max_attempts"`
+	GatewayFailureRetryMode            string    `gorm:"size:30;default:retryable" json:"gateway_failure_retry_mode"`
 	GatewayRouteConcurrencyLimit       int       `gorm:"default:5" json:"gateway_route_concurrency_limit"`
+	GatewayConcurrencyTransferStrategy string    `gorm:"size:30;default:limit_only" json:"gateway_concurrency_transfer_strategy"`
 	GatewayConcurrencyOverflowStrategy string    `gorm:"size:30;default:latency_first" json:"gateway_concurrency_overflow_strategy"`
 	GatewaySmartLatencyBias            float64   `gorm:"default:1" json:"gateway_smart_latency_bias"`
 	GatewaySmartConcurrencyBias        float64   `gorm:"default:1.5" json:"gateway_smart_concurrency_bias"`
@@ -88,7 +90,8 @@ type GatewayRouteState struct {
 	RouteType           string     `gorm:"size:20;default:codex" json:"route_type"`
 	RouteTypeManual     bool       `gorm:"default:false" json:"route_type_manual"`
 	GroupName           string     `gorm:"size:100;default:''" json:"group_name"`
-	RoutePriority       int        `gorm:"default:100" json:"route_priority"`
+	RoutePriority       int        `gorm:"default:100;index" json:"route_priority"`
+	RoutePriorityManual bool       `gorm:"default:false" json:"route_priority_manual"`
 	Weight              int        `gorm:"default:1" json:"weight"`
 	IsEnabled           bool       `gorm:"default:true" json:"is_enabled"`
 	CircuitState        string     `gorm:"size:20;default:closed;index" json:"circuit_state"`

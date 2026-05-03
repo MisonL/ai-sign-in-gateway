@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -21,10 +22,15 @@ func (a *App) GatewayAdminRoutes(r chi.Router) {
 	r.Put("/settings", a.UpdateGatewaySettings)
 	r.Post("/sync", a.SyncGatewayRoutes)
 	r.Get("/routes", a.GatewayRoutes)
+	r.Get("/active-requests", a.GatewayActiveRequests)
 	r.Post("/routes/probe", a.ProbeGatewayRoutes)
+	r.Post("/routes/priorities/reorder", a.ReorderGatewayRoutePriorities)
+	r.Post("/routes/disable-all", a.DisableAllGatewayRoutes)
 	r.Post("/routes/{routeID}/toggle", a.ToggleGatewayRoute)
+	r.Post("/routes/{routeID}/enable-only", a.EnableOnlyGatewayRoute)
 	r.Post("/routes/{routeID}/reset-circuit", a.ResetGatewayCircuit)
 	r.Patch("/routes/{routeID}/type", a.UpdateGatewayRouteType)
+	r.Get("/routes/{routeID}/diagnose", a.DiagnoseGatewayRoute)
 	r.Post("/routes/{routeID}/probe", a.ProbeGatewayRoute)
 	r.Post("/routes/{routeID}/balance-probe", a.ProbeGatewayRouteBalance)
 	r.Get("/routes/{routeID}/logs", a.GatewayRouteLogs)
@@ -89,7 +95,9 @@ func (a *App) GatewayOverview(w http.ResponseWriter, r *http.Request) {
 		"cooldown_seconds":              settings.GatewayCooldownSeconds,
 		"request_timeout":               settings.GatewayRequestTimeout,
 		"max_attempts":                  settings.GatewayMaxAttempts,
+		"failure_retry_mode":            services.NormalizeGatewayFailureRetryMode(settings.GatewayFailureRetryMode),
 		"route_concurrency_limit":       settings.GatewayRouteConcurrencyLimit,
+		"concurrency_transfer_strategy": normalizeGatewayConcurrencyTransferStrategy(settings.GatewayConcurrencyTransferStrategy),
 		"concurrency_overflow_strategy": settings.GatewayConcurrencyOverflowStrategy,
 	})
 }
@@ -297,6 +305,12 @@ func (a *App) UpdateGatewaySettings(w http.ResponseWriter, r *http.Request) {
 	if value, ok := payload["concurrency_overflow_strategy"].(string); ok {
 		settings.GatewayConcurrencyOverflowStrategy = value
 	}
+	if value, ok := payload["concurrency_transfer_strategy"].(string); ok {
+		settings.GatewayConcurrencyTransferStrategy = normalizeGatewayConcurrencyTransferStrategy(value)
+	}
+	if value, ok := payload["failure_retry_mode"].(string); ok {
+		settings.GatewayFailureRetryMode = services.NormalizeGatewayFailureRetryMode(value)
+	}
 	if value, ok := payload["gateway_api_key"].(string); ok {
 		settings.GatewayAPIKey = value
 	}
@@ -348,7 +362,9 @@ func gatewaySettings(settings models.SystemSetting) map[string]any {
 		"cooldown_seconds":              settings.GatewayCooldownSeconds,
 		"request_timeout":               settings.GatewayRequestTimeout,
 		"max_attempts":                  settings.GatewayMaxAttempts,
+		"failure_retry_mode":            services.NormalizeGatewayFailureRetryMode(settings.GatewayFailureRetryMode),
 		"route_concurrency_limit":       settings.GatewayRouteConcurrencyLimit,
+		"concurrency_transfer_strategy": normalizeGatewayConcurrencyTransferStrategy(settings.GatewayConcurrencyTransferStrategy),
 		"concurrency_overflow_strategy": settings.GatewayConcurrencyOverflowStrategy,
 		"smart_latency_bias":            settings.GatewaySmartLatencyBias,
 		"smart_concurrency_bias":        settings.GatewaySmartConcurrencyBias,
@@ -379,6 +395,42 @@ func (a *App) GatewayRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, out)
 }
+
+func (a *App) GatewayActiveRequests(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, services.ListGatewayActiveRequests())
+}
+
+func (a *App) ReorderGatewayRoutePriorities(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		RouteID uint   `json:"route_id"`
+		Mode    string `json:"mode"`
+		Index   *int   `json:"index"`
+	}
+	if err := httpx.Decode(r, &payload); err != nil {
+		writeError(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	mode := services.GatewayRoutePriorityMode(strings.TrimSpace(payload.Mode))
+	opts := services.GatewayRoutePriorityReorderOptions{RouteID: payload.RouteID, Mode: mode}
+	if payload.Index != nil {
+		opts.Index = *payload.Index
+	}
+	if mode == services.GatewayRoutePriorityMove && payload.Index == nil {
+		writeError(w, http.StatusBadRequest, "移动优先级需要提供目标优先级")
+		return
+	}
+	routes, err := services.ReorderGatewayRoutePriorities(a.DB, opts)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	out := make([]map[string]any, 0, len(routes))
+	for _, route := range routes {
+		out = append(out, gatewayRouteResponse(route))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 func (a *App) GatewayLogs(w http.ResponseWriter, r *http.Request) {
 	limit := 80
 	if raw := r.URL.Query().Get("limit"); raw != "" {
@@ -541,8 +593,45 @@ func (a *App) ToggleGatewayRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state.IsEnabled = !state.IsEnabled
-	_ = a.DB.Save(&state).Error
+	if err := a.DB.Save(&state).Error; err != nil {
+		writeError(w, http.StatusInternalServerError, "保存路由状态失败")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": state.ID, "is_enabled": state.IsEnabled, "circuit_state": state.CircuitState})
+}
+
+func (a *App) DisableAllGatewayRoutes(w http.ResponseWriter, r *http.Request) {
+	if _, err := services.SyncGatewayRoutes(a.DB); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	result := a.DB.Model(&models.GatewayRouteState{}).Where("is_enabled = ?", true).Update("is_enabled", false)
+	if result.Error != nil {
+		writeError(w, http.StatusInternalServerError, "禁用全部路由失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "disabled_count": result.RowsAffected})
+}
+
+func (a *App) EnableOnlyGatewayRoute(w http.ResponseWriter, r *http.Request) {
+	var state models.GatewayRouteState
+	if err := a.DB.First(&state, chi.URLParam(r, "routeID")).Error; err != nil {
+		writeError(w, http.StatusNotFound, "网关路由不存在")
+		return
+	}
+	if err := a.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&models.GatewayRouteState{}).Where("id <> ?", state.ID).Update("is_enabled", false).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&models.GatewayRouteState{}).Where("id = ?", state.ID).Update("is_enabled", true).Error; err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "设置唯一启用路由失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "enabled_route_id": state.ID})
 }
 func (a *App) ResetGatewayCircuit(w http.ResponseWriter, r *http.Request) {
 	var state models.GatewayRouteState
@@ -578,6 +667,103 @@ func (a *App) UpdateGatewayRouteType(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, gatewayRouteResponse(services.GatewayRoute{State: state, Site: state.Site, RequestBaseURL: services.GatewayRouteRequestBase(state, state.Site)}))
 }
+
+func (a *App) DiagnoseGatewayRoute(w http.ResponseWriter, r *http.Request) {
+	routeID, err := strconv.ParseUint(chi.URLParam(r, "routeID"), 10, 64)
+	if err != nil || routeID == 0 {
+		writeError(w, http.StatusBadRequest, "路由 ID 无效")
+		return
+	}
+	var state models.GatewayRouteState
+	if err := a.DB.Preload("Site").First(&state, uint(routeID)).Error; err != nil {
+		writeError(w, http.StatusNotFound, "网关路由不存在")
+		return
+	}
+	route := services.GatewayRoute{
+		State:          state,
+		Site:           state.Site,
+		APIKey:         services.GatewayRouteAPIKeyForState(state),
+		RequestBaseURL: services.GatewayRouteRequestBase(state, state.Site),
+	}
+	settings, _ := a.systemSettings()
+	items := gatewayRouteDiagnosisItems(route, settings)
+	healthy := true
+	for _, item := range items {
+		if severity, ok := item["severity"].(string); ok && severity == "error" {
+			healthy = false
+			break
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":           state.ID,
+		"healthy":      healthy,
+		"route_label":  services.GatewayRouteSiteLabel(route),
+		"route":        gatewayRouteResponse(route),
+		"diagnostics":  items,
+		"checked_at":   time.Now().UTC(),
+		"active_count": services.RouteActiveCount(state.ID),
+	})
+}
+
+func gatewayRouteDiagnosisItems(route services.GatewayRoute, settings models.SystemSetting) []map[string]any {
+	state := route.State
+	activeCount := services.RouteActiveCount(state.ID)
+	limit := settings.GatewayRouteConcurrencyLimit
+	items := []map[string]any{
+		gatewayRouteDiagnosisItem("站点状态", route.Site.IsEnabled, boolLabel(route.Site.IsEnabled, "站点已启用", "站点已停用"), "站点停用后不会参与网关调度。"),
+		gatewayRouteDiagnosisItem("路由状态", state.IsEnabled, boolLabel(state.IsEnabled, "路由已启用", "路由已停用"), "路由停用后不会参与网关调度。"),
+		gatewayRouteDiagnosisItem("API Key", strings.TrimSpace(route.APIKey) != "", boolLabel(strings.TrimSpace(route.APIKey) != "", "已匹配可用 Key", "未匹配到可用 Key"), "未匹配到 Key 时请先更新站点 API Key，再同步路由池。"),
+		gatewayRouteDiagnosisItem("请求入口", strings.TrimSpace(route.RequestBaseURL) != "", firstNonEmpty(route.RequestBaseURL, "未配置请求入口"), "请求入口来自站点基础 URL 或请求 API URL 配置。"),
+		gatewayRouteDiagnosisItem("熔断状态", state.CircuitState == "" || state.CircuitState == "closed", firstNonEmpty(state.CircuitState, "closed"), "open/half_open 状态会影响路由被选择。"),
+	}
+	concurrencyOK := limit <= 0 || activeCount < limit
+	concurrencyMessage := strconv.Itoa(activeCount)
+	if limit > 0 {
+		concurrencyMessage = strconv.Itoa(activeCount) + "/" + strconv.Itoa(limit)
+	}
+	items = append(items, gatewayRouteDiagnosisItem("当前并发", concurrencyOK, concurrencyMessage, "达到并发上限时该路由会被降权或进入溢出策略。"))
+	if state.LastError != nil && strings.TrimSpace(*state.LastError) != "" {
+		items = append(items, map[string]any{
+			"label":    "最近异常",
+			"ok":       false,
+			"severity": "warning",
+			"message":  strings.TrimSpace(*state.LastError),
+			"detail":   "最近异常不一定代表当前不可用，可点击探测确认。",
+		})
+	}
+	if route.Site.ID == 0 {
+		items = append(items, map[string]any{
+			"label":    "站点记录",
+			"ok":       false,
+			"severity": "error",
+			"message":  "站点记录缺失",
+			"detail":   "请同步路由池清理孤立路由。",
+		})
+	}
+	return items
+}
+
+func gatewayRouteDiagnosisItem(label string, ok bool, message, detail string) map[string]any {
+	severity := "ok"
+	if !ok {
+		severity = "error"
+	}
+	return map[string]any{
+		"label":    label,
+		"ok":       ok,
+		"severity": severity,
+		"message":  message,
+		"detail":   detail,
+	}
+}
+
+func boolLabel(ok bool, yes, no string) string {
+	if ok {
+		return yes
+	}
+	return no
+}
+
 func (a *App) ProbeGatewayRoutes(w http.ResponseWriter, r *http.Request) {
 	var payload struct {
 		RouteIDs []uint `json:"route_ids"`
@@ -625,13 +811,16 @@ func (a *App) ProbeGatewayRouteBalance(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) GatewayProxy(w http.ResponseWriter, r *http.Request) {
 	settings, _ := a.systemSettings()
-	if strings.TrimSpace(settings.GatewayAPIKey) != "" {
-		header := r.Header.Get("Authorization")
-		expected := "Bearer " + strings.TrimSpace(settings.GatewayAPIKey)
-		if header != expected {
-			writeError(w, http.StatusUnauthorized, "网关 API Key 无效")
-			return
-		}
+	gatewayAPIKey := strings.TrimSpace(settings.GatewayAPIKey)
+	if gatewayAPIKey == "" {
+		writeError(w, http.StatusServiceUnavailable, "网关 API Key 未配置，公开网关已禁用")
+		return
+	}
+	header := r.Header.Get("Authorization")
+	expected := "Bearer " + gatewayAPIKey
+	if header != expected {
+		writeError(w, http.StatusUnauthorized, "网关 API Key 无效")
+		return
 	}
 	targetPath := gatewayProxyTargetPath(r.URL.Path)
 	policy := services.GatewayPolicy{
@@ -640,7 +829,9 @@ func (a *App) GatewayProxy(w http.ResponseWriter, r *http.Request) {
 		CooldownSeconds:             settings.GatewayCooldownSeconds,
 		RequestTimeout:              settings.GatewayRequestTimeout,
 		MaxAttempts:                 settings.GatewayMaxAttempts,
+		FailureRetryMode:            settings.GatewayFailureRetryMode,
 		RouteConcurrencyLimit:       settings.GatewayRouteConcurrencyLimit,
+		ConcurrencyTransferStrategy: normalizeGatewayConcurrencyTransferStrategy(settings.GatewayConcurrencyTransferStrategy),
 		ConcurrencyOverflowStrategy: settings.GatewayConcurrencyOverflowStrategy,
 		SmartLatencyBias:            settings.GatewaySmartLatencyBias,
 		SmartConcurrencyBias:        settings.GatewaySmartConcurrencyBias,
@@ -652,32 +843,19 @@ func (a *App) GatewayProxy(w http.ResponseWriter, r *http.Request) {
 		Group:          r.URL.Query().Get("group"),
 		RouteType:      normalizeGatewayRouteType(firstNonEmpty(r.URL.Query().Get("type"), r.URL.Query().Get("route_type"))),
 	}
-	result, err := services.ProxyGatewayRequestWithOptions(r.Context(), a.DB, r, targetPath, opts, policy)
+	_, err := services.ProxyGatewayRequestWithOptions(r.Context(), a.DB, r, targetPath, opts, policy)
 	if err != nil {
 		// service did not write anything yet (no candidate)
 		status := http.StatusBadGateway
-		if strings.Contains(err.Error(), "没有可用") {
+		var allRoutesFailed services.GatewayAllRoutesFailedError
+		var nonRetryableUpstream services.GatewayNonRetryableUpstreamError
+		if errors.As(err, &allRoutesFailed) || strings.Contains(err.Error(), "没有可用") {
 			status = http.StatusServiceUnavailable
+		} else if errors.As(err, &nonRetryableUpstream) {
+			status = http.StatusBadGateway
 		}
 		writeError(w, status, err.Error())
 		return
-	}
-	if !result.Success && len(result.Body) > 0 && result.Header != nil {
-		// retryable failures exhausted: write last upstream body
-		if w.Header().Get("Content-Type") == "" {
-			for k, vs := range result.Header {
-				if strings.EqualFold(k, "Content-Length") || strings.EqualFold(k, "Transfer-Encoding") {
-					continue
-				}
-				for _, v := range vs {
-					w.Header().Add(k, v)
-				}
-			}
-			if result.StatusCode > 0 {
-				w.WriteHeader(result.StatusCode)
-			}
-			_, _ = w.Write(result.Body)
-		}
 	}
 }
 
@@ -694,13 +872,22 @@ func gatewayProxyTargetPath(path string) string {
 	}
 }
 
+func normalizeGatewayConcurrencyTransferStrategy(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "limit_only", "balance":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return "limit_only"
+	}
+}
+
 func gatewayRouteResponse(route services.GatewayRoute) map[string]any {
 	state := route.State
 	successRate := 0.0
 	if state.RequestCount > 0 {
 		successRate = round2(float64(state.SuccessCount) / float64(state.RequestCount) * 100)
 	}
-	return map[string]any{
+	out := map[string]any{
 		"id":                     state.ID,
 		"site_id":                state.SiteID,
 		"site_name":              services.GatewayRouteSiteLabel(route),
@@ -723,6 +910,7 @@ func gatewayRouteResponse(route services.GatewayRoute) map[string]any {
 		"route_type":             state.RouteType,
 		"route_type_manual":      state.RouteTypeManual,
 		"route_priority":         state.RoutePriority,
+		"route_priority_manual":  state.RoutePriorityManual,
 		"weight":                 state.Weight,
 		"is_enabled":             state.IsEnabled,
 		"circuit_state":          state.CircuitState,
@@ -742,6 +930,10 @@ func gatewayRouteResponse(route services.GatewayRoute) map[string]any {
 		"last_failure_at":        state.LastFailureAt,
 		"circuit_open_until":     state.CircuitOpenUntil,
 	}
+	for key, value := range packageQuotaMap(route.Site) {
+		out[key] = value
+	}
+	return out
 }
 
 func gatewayProbeResponse(result services.GatewayProbeResult) map[string]any {

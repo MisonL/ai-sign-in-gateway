@@ -50,6 +50,8 @@ func addMissingColumns(db *gorm.DB) error {
 		{table: "system_settings", column: "gateway_smart_concurrency_bias", statement: "ALTER TABLE system_settings ADD COLUMN gateway_smart_concurrency_bias FLOAT NOT NULL DEFAULT 1.5"},
 		{table: "system_settings", column: "gateway_smart_failure_bias", statement: "ALTER TABLE system_settings ADD COLUMN gateway_smart_failure_bias FLOAT NOT NULL DEFAULT 1"},
 		{table: "system_settings", column: "gateway_smart_priority_bias", statement: "ALTER TABLE system_settings ADD COLUMN gateway_smart_priority_bias FLOAT NOT NULL DEFAULT 0.5"},
+		{table: "system_settings", column: "gateway_failure_retry_mode", statement: "ALTER TABLE system_settings ADD COLUMN gateway_failure_retry_mode TEXT NOT NULL DEFAULT 'retryable'"},
+		{table: "system_settings", column: "gateway_concurrency_transfer_strategy", statement: "ALTER TABLE system_settings ADD COLUMN gateway_concurrency_transfer_strategy TEXT NOT NULL DEFAULT 'limit_only'"},
 		{table: "system_settings", column: "site_group_catalog", statement: "ALTER TABLE system_settings ADD COLUMN site_group_catalog TEXT NOT NULL DEFAULT '[]'"},
 		{table: "gateway_route_states", column: "site_name_snapshot", statement: "ALTER TABLE gateway_route_states ADD COLUMN site_name_snapshot TEXT NOT NULL DEFAULT ''"},
 		{table: "gateway_route_states", column: "site_base_url_snapshot", statement: "ALTER TABLE gateway_route_states ADD COLUMN site_base_url_snapshot TEXT NOT NULL DEFAULT ''"},
@@ -57,6 +59,7 @@ func addMissingColumns(db *gorm.DB) error {
 		{table: "gateway_route_states", column: "last_request_base_url", statement: "ALTER TABLE gateway_route_states ADD COLUMN last_request_base_url TEXT NOT NULL DEFAULT ''"},
 		{table: "gateway_route_states", column: "route_type", statement: "ALTER TABLE gateway_route_states ADD COLUMN route_type TEXT NOT NULL DEFAULT 'codex'"},
 		{table: "gateway_route_states", column: "route_type_manual", statement: "ALTER TABLE gateway_route_states ADD COLUMN route_type_manual BOOLEAN NOT NULL DEFAULT 0"},
+		{table: "gateway_route_states", column: "route_priority_manual", statement: "ALTER TABLE gateway_route_states ADD COLUMN route_priority_manual BOOLEAN NOT NULL DEFAULT 0"},
 	}
 	for _, patch := range patches {
 		if db.Migrator().HasColumn(patch.table, patch.column) {
@@ -83,6 +86,7 @@ func isDuplicateColumnErr(err error) bool {
 func ensureIndexes(db *gorm.DB) error {
 	statements := []string{
 		"CREATE INDEX IF NOT EXISTS ix_gateway_route_states_route_type ON gateway_route_states (route_type)",
+		"CREATE INDEX IF NOT EXISTS ix_gateway_route_states_route_priority ON gateway_route_states (route_priority)",
 		"CREATE INDEX IF NOT EXISTS ix_gateway_route_states_circuit_state ON gateway_route_states (circuit_state)",
 		"CREATE INDEX IF NOT EXISTS ix_gateway_request_logs_created_at ON gateway_request_logs (created_at)",
 		"CREATE INDEX IF NOT EXISTS ix_gateway_request_logs_success ON gateway_request_logs (success)",
