@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { DatabaseOutlined, DeleteOutlined, FolderOpenOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons-vue'
+import { DatabaseOutlined, DeleteOutlined, DownloadOutlined, FolderOpenOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons-vue'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   backupRuntimeDatabaseNow,
   deleteRuntimeDatabaseBackup,
+  downloadRuntimeConfigArchive,
+  downloadRuntimeDatabaseBackup,
   getMe,
   getRuntimeDatabaseBackups,
   getSettings,
@@ -51,14 +53,17 @@ const form = reactive<SettingsData>({
   runtime_default_config_dir: '',
   runtime_database_path: '',
   runtime_pending_config_dir: '',
+  security_warnings: [],
 })
 
 const loading = ref(false)
 const accountLoading = ref(false)
 const runtimeStopLoading = ref(false)
 const configDirLoading = ref(false)
+const configArchiveDownloading = ref(false)
 const databaseImportLoading = ref(false)
 const databaseBackupLoading = ref(false)
+const databaseBackupDownloadName = ref('')
 const runtimeStopResults = ref<RuntimeStopPortResult[]>([])
 const databaseBackups = ref<RuntimeDatabaseBackupFile[]>([])
 const databaseBackupDir = ref('')
@@ -244,6 +249,43 @@ async function removeDatabaseBackup(name: string) {
   }
 }
 
+function saveBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
+async function downloadDatabaseBackup(name: string) {
+  databaseBackupDownloadName.value = name
+  try {
+    const result = await downloadRuntimeDatabaseBackup(name)
+    saveBlob(result.blob, result.filename)
+    toast.success('数据库备份下载已开始。')
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '下载数据库备份失败')
+  } finally {
+    databaseBackupDownloadName.value = ''
+  }
+}
+
+async function downloadConfigArchive() {
+  configArchiveDownloading.value = true
+  try {
+    const result = await downloadRuntimeConfigArchive()
+    saveBlob(result.blob, result.filename)
+    toast.success('配置文件打包下载已开始。')
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '打包下载配置文件失败')
+  } finally {
+    configArchiveDownloading.value = false
+  }
+}
+
 function formatBackupTime(value: string) {
   if (!value) return '-'
   const date = new Date(value)
@@ -390,6 +432,14 @@ onMounted(loadData)
                 <div class="card-form runtime-tab-form">
                   <div class="card-scroll card-scroll--padded">
                     <a-form layout="vertical">
+                      <a-alert
+                        v-if="form.security_warnings.length"
+                        type="warning"
+                        show-icon
+                        message="安全与运维提醒"
+                        :description="form.security_warnings.join('；')"
+                        class="settings-security-alert"
+                      />
                       <a-space direction="vertical" size="middle">
                         <a-switch
                           v-model:checked="form.desktop_keep_running"
@@ -497,19 +547,19 @@ onMounted(loadData)
                       </a-form-item>
 
                       <a-form-item label="加载数据库">
-                        <div class="runtime-database-loader">
-                          <input
-                            ref="runtimeDatabaseFileInput"
-                            class="runtime-database-file"
-                            type="file"
-                            accept=".db,.sqlite,.sqlite3,application/vnd.sqlite3,application/x-sqlite3"
-                            @change="loadRuntimeDatabase"
-                          />
-                          <a-button danger :loading="databaseImportLoading" @click="selectRuntimeDatabase">
-                            <template #icon><DatabaseOutlined /></template>
-                            选择并加载数据库
-                          </a-button>
-                        </div>
+                        <input
+                          ref="runtimeDatabaseFileInput"
+                          class="runtime-database-file"
+                          type="file"
+                          accept=".db,.sqlite,.sqlite3,application/vnd.sqlite3,application/x-sqlite3"
+                          hidden
+                          tabindex="-1"
+                          @change="loadRuntimeDatabase"
+                        />
+                        <a-button danger :loading="databaseImportLoading" @click="selectRuntimeDatabase">
+                          <template #icon><DatabaseOutlined /></template>
+                          选择并加载数据库
+                        </a-button>
                         <small class="field-help">
                           选择 SQLite 数据库文件后会复制到当前配置目录并备份现有数据库；完成后会退出登录，请重新登录后生效。
                         </small>
@@ -590,16 +640,26 @@ onMounted(loadData)
                             {{ formatFileSize(record.size) }}
                           </template>
                         </a-table-column>
-                        <a-table-column title="操作" key="actions" :width="100">
+                        <a-table-column title="操作" key="actions" :width="160">
                           <template #default="{ record }">
-                            <a-popconfirm
-                              title="确认删除这个备份？"
-                              ok-text="删除"
-                              cancel-text="取消"
-                              @confirm="removeDatabaseBackup(record.name)"
-                            >
-                              <a-button danger size="small">删除</a-button>
-                            </a-popconfirm>
+                            <a-space size="small">
+                              <a-button
+                                size="small"
+                                :loading="databaseBackupDownloadName === record.name"
+                                @click="downloadDatabaseBackup(record.name)"
+                              >
+                                <template #icon><DownloadOutlined /></template>
+                                下载
+                              </a-button>
+                              <a-popconfirm
+                                title="确认删除这个备份？"
+                                ok-text="删除"
+                                cancel-text="取消"
+                                @confirm="removeDatabaseBackup(record.name)"
+                              >
+                                <a-button danger size="small">删除</a-button>
+                              </a-popconfirm>
+                            </a-space>
                           </template>
                         </a-table-column>
                       </a-table>
@@ -642,6 +702,19 @@ onMounted(loadData)
                           </div>
                           <small class="field-help">
                             仅保存目录指针，重启后从该目录加载数据库；不会复制、导入或覆盖当前目录数据。
+                          </small>
+                        </a-form-item>
+
+                        <a-form-item label="配置文件打包下载">
+                          <div class="runtime-config-loader">
+                            <a-input :value="form.runtime_config_dir || '-'" readonly />
+                            <a-button :loading="configArchiveDownloading" @click="downloadConfigArchive">
+                              <template #icon><DownloadOutlined /></template>
+                              打包下载
+                            </a-button>
+                          </div>
+                          <small class="field-help">
+                            下载当前配置目录下的数据库、日志和配置文件 ZIP 包；用于迁移或离线备份。
                           </small>
                         </a-form-item>
                       </div>
@@ -824,6 +897,10 @@ onMounted(loadData)
   color: #94a3b8;
 }
 
+.settings-security-alert {
+  margin-bottom: 14px;
+}
+
 .runtime-config-panel {
   margin-top: 14px;
 }
@@ -847,14 +924,14 @@ onMounted(loadData)
   white-space: nowrap;
 }
 
-.runtime-database-loader {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-
 .runtime-database-file {
-  display: none;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .runtime-backup-settings {

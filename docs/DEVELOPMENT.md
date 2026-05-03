@@ -257,6 +257,7 @@ curl -I http://127.0.0.1:3721
 - 编译 `./cmd/ai-sign-in-gateway` 到 `.run/bin/`
 - 后端默认监听 `8972`（被占用自动跳号）
 - Vite 固定 `3721`（被占用直接报错；`unplugin-vue-components` HMR 与端口绑定）
+- Vite 开发代理默认把 `/api` 转发到 `http://127.0.0.1:8972`；如需连接其他后端，显式设置 `VITE_PROXY_TARGET=http://host:port`。不要让 8000 等无关服务占用默认代理目标，否则页面会把后端接口误判为 404。
 - 日志：`.run/backend.log` / `.run/frontend.log`
 - PID / 实际端口：`.run/{backend,frontend}.{pid,port}`
 
@@ -421,6 +422,14 @@ cd frontend && npx vue-tsc -b
 | `AI_SIGN_IN_GATEWAY_OPEN_BROWSER` | `true` | CLI 启动后自动 `xdg-open`，容器需 `false` |
 | `SCHEDULER_TIMEZONE` | `Asia/Shanghai` | 定时签到时区 |
 | `CORS_ORIGINS` | `http://localhost:3721,http://127.0.0.1:3721` | CSV，前端域名白名单 |
+
+单文件二进制支持快速启动参数，便于本地临时换端口：
+
+```bash
+./ai-sign-in-gateway --port 9000
+./ai-sign-in-gateway --host 0.0.0.0 --port 9000 --no-browser
+./ai-sign-in-gateway --frontend-port 3722 --backend-port 8973
+```
 
 ### 安全
 

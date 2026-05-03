@@ -8,7 +8,7 @@ OUTPUT_DIR="${OUTPUT_DIR:-$ROOT_DIR/.release}"
 OUTPUT_PATH="${OUTPUT_PATH:-$OUTPUT_DIR/$APP_NAME}"
 TARGET_GOOS="${TARGET_GOOS:-$(go env GOOS)}"
 TARGET_GOARCH="${TARGET_GOARCH:-$(go env GOARCH)}"
-LDFLAGS="${LDFLAGS:--s -w}"
+GO_LDFLAGS="${GO_LDFLAGS:--s -w}"
 EMBED_DIR="$ROOT_DIR/cmd/ai-sign-in-gateway/embedded_dist"
 DESKTOP_SHELL="${DESKTOP_SHELL:-true}"
 BUILD_TAGS="${BUILD_TAGS:-embedded_assets}"
@@ -95,7 +95,7 @@ echo "构建自包含${BUILD_LABEL}二进制..."
     esac
   fi
   env "${build_env[@]}" \
-    go build -tags "$BUILD_TAGS" -trimpath -ldflags "$LDFLAGS" -o "$OUTPUT_PATH" ./cmd/ai-sign-in-gateway
+    go build -tags "$BUILD_TAGS" -trimpath -ldflags "$GO_LDFLAGS" -o "$OUTPUT_PATH" ./cmd/ai-sign-in-gateway
 )
 
 echo "自包含${BUILD_LABEL}二进制已生成:"

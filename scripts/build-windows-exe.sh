@@ -68,9 +68,9 @@ prepare_windows_icon() {
 }
 
 if [[ "$WINDOWS_GUI" == "true" ]]; then
-  LDFLAGS="${LDFLAGS:--s -w -H=windowsgui}"
+  GO_LDFLAGS="${GO_LDFLAGS:--s -w -H=windowsgui}"
 else
-  LDFLAGS="${LDFLAGS:--s -w}"
+  GO_LDFLAGS="${GO_LDFLAGS:--s -w}"
 fi
 
 trap cleanup EXIT
@@ -78,7 +78,7 @@ prepare_windows_icon
 
 TARGET_GOOS=windows \
 TARGET_GOARCH="$TARGET_ARCH" \
-LDFLAGS="$LDFLAGS" \
+GO_LDFLAGS="$GO_LDFLAGS" \
 OUTPUT_PATH="$OUTPUT_PATH" \
 "$ROOT_DIR/scripts/build-desktop-single.sh"
 

@@ -235,7 +235,7 @@ http://127.0.0.1:8972
 
 ```yaml
 volumes:
-  - /opt/1panel/www/sites/ai-sign-in-gateway/.ai-sign-in-gateway:/app/data
+  - /srv/ai-sign-in-gateway/data:/app/data
 ```
 
 对应环境变量保持：
@@ -401,7 +401,14 @@ AppImage 构建依赖 AppImageKit 官方 `appimagetool`。如果 PATH 中没有�
 APPIMAGETOOL=/path/to/appimagetool-x86_64.AppImage ./scripts/build-appimage.sh
 ```
 
-直接运行桌面产物时默认启动两个本地端口：桌面窗口入口 `127.0.0.1:3721`，后端/API/网关 `127.0.0.1:8972`。可通过 `AI_SIGN_IN_GATEWAY_FRONTEND_PORT` 和 `AI_SIGN_IN_GATEWAY_BACKEND_PORT` 覆盖；如果只想作为本地服务运行，可设置 `AI_SIGN_IN_GATEWAY_DESKTOP=false`。
+直接运行桌面产物时默认启动两个本地端口：桌面窗口入口 `127.0.0.1:3721`，后端/API/网关 `127.0.0.1:8972`。可用启动参数快速覆盖：
+
+```bash
+./ai-sign-in-gateway --frontend-port 3722 --backend-port 8973
+./ai-sign-in-gateway --no-desktop --port 9000
+```
+
+也可通过 `AI_SIGN_IN_GATEWAY_FRONTEND_PORT` 和 `AI_SIGN_IN_GATEWAY_BACKEND_PORT` 覆盖；如果只想作为本地服务运行，可设置 `AI_SIGN_IN_GATEWAY_DESKTOP=false`。
 
 Linux AppImage 使用系统 GTK/WebKitGTK 运行桌面窗口。构建机需要 `pkg-config`、`gtk+-3.0`、`webkit2gtk-4.0/4.1` 开发文件；运行机需要对应运行库。Windows exe 使用系统 WebView2 运行时。
 
@@ -433,7 +440,7 @@ RELEASE_BRANCH=release ./scripts/release.sh v1.0.0
 
 `release` 分支是纯产物分支。脚本会在临时目录中重写该分支，分支根目录只保留最新发布文件、`SHA256SUMS`、`RELEASE_NOTES.md`、`RELEASE.txt` 和说明文件，不保留源码内容。历史版本以 GitHub Release 为准。
 
-服务版生产运行示例。监听地址、端口、是否打开浏览器已经写入服务版产物，不需要再手动设置 `AI_SIGN_IN_GATEWAY_HOST`、`AI_SIGN_IN_GATEWAY_PORT`、`AI_SIGN_IN_GATEWAY_OPEN_BROWSER` 或 `AI_SIGN_IN_GATEWAY_DESKTOP`：
+服务版生产运行示例。监听地址、端口、是否打开浏览器已经写入服务版产物，不需要再手动设置 `AI_SIGN_IN_GATEWAY_HOST`、`AI_SIGN_IN_GATEWAY_PORT`、`AI_SIGN_IN_GATEWAY_OPEN_BROWSER` 或 `AI_SIGN_IN_GATEWAY_DESKTOP`；临时换端口时可直接加 `--port 9000`：
 
 ```bash
 DATABASE_URL=sqlite:////var/lib/ai-sign-in-gateway/data.db \
@@ -475,6 +482,8 @@ your-domain.example {
 ```
 
 ## 环境变量
+
+单文件二进制也支持快速启动参数：`--port/-p`、`--backend-port`、`--frontend-port`、`--host`、`--config-dir`、`--browser/--no-browser`、`--desktop/--no-desktop`。参数只覆盖本次运行，不写入配置文件。
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
