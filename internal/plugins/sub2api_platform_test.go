@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"ai-sign-in-gateway/internal/models"
@@ -239,5 +240,133 @@ func TestSub2APIInviteAPIOverridesStatusInvitePayload(t *testing.T) {
 	}
 	if status.InviteLink == nil || *status.InviteLink != server.URL+"/register?aff=SUB2-INVITE" {
 		t.Fatalf("InviteLink = %v", status.InviteLink)
+	}
+}
+
+func TestSub2APIStatusReadsSubscriptionProgress(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/auth/me":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"email":    "user@example.com",
+					"balance":  8.5,
+					"currency": "USD",
+				},
+			})
+		case "/api/v1/subscriptions/progress":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]any{
+					{
+						"subscription": map[string]any{
+							"group": map[string]any{"name": "Pro"},
+						},
+						"progress": map[string]any{
+							"monthly": map[string]any{
+								"limit_usd":     100,
+								"used_usd":      25,
+								"remaining_usd": 75,
+							},
+							"daily": map[string]any{
+								"limit_usd":     5,
+								"used_usd":      1,
+								"remaining_usd": 4,
+							},
+						},
+					},
+				},
+			})
+		case "/api/v1/keys":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"items": []map[string]any{}}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	plugin := NewSub2API()
+	status, err := plugin.FetchAccountStatus(context.Background(), models.Site{
+		BaseURL:   server.URL,
+		PluginKey: "sub2api-platform",
+		Credentials: models.JSONMap{
+			"access_token": "valid-access-token",
+		},
+		PluginConfig: models.JSONMap{
+			"api_keys_url": "/api/v1/keys",
+		},
+	}, 5)
+	if err != nil {
+		t.Fatalf("FetchAccountStatus returned error: %v", err)
+	}
+	if status.PackageRemaining == nil || *status.PackageRemaining != 75 {
+		t.Fatalf("PackageRemaining = %v", status.PackageRemaining)
+	}
+	if status.PackageTotal == nil || *status.PackageTotal != 100 {
+		t.Fatalf("PackageTotal = %v", status.PackageTotal)
+	}
+	if status.PackageUsed == nil || *status.PackageUsed != 25 {
+		t.Fatalf("PackageUsed = %v", status.PackageUsed)
+	}
+	if status.PackageUnit == nil || *status.PackageUnit != "USD" {
+		t.Fatalf("PackageUnit = %v", status.PackageUnit)
+	}
+	if status.PackageDisplay == nil || !strings.Contains(*status.PackageDisplay, "Pro 月度套餐") {
+		t.Fatalf("PackageDisplay = %v", status.PackageDisplay)
+	}
+}
+
+func TestSub2APIStatusFallsBackToSubscriptionSummary(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/auth/me":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"email":   "user@example.com",
+					"balance": 8.5,
+				},
+			})
+		case "/api/v1/subscriptions/progress":
+			http.NotFound(w, r)
+		case "/api/v1/subscriptions/summary":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"subscriptions": []map[string]any{
+						{
+							"group_name":        "Team",
+							"monthly_used_usd":  12.5,
+							"monthly_limit_usd": 50,
+						},
+					},
+				},
+			})
+		case "/api/v1/keys":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"items": []map[string]any{}}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	plugin := NewSub2API()
+	status, err := plugin.FetchAccountStatus(context.Background(), models.Site{
+		BaseURL:   server.URL,
+		PluginKey: "sub2api-platform",
+		Credentials: models.JSONMap{
+			"access_token": "valid-access-token",
+		},
+		PluginConfig: models.JSONMap{
+			"api_keys_url": "/api/v1/keys",
+		},
+	}, 5)
+	if err != nil {
+		t.Fatalf("FetchAccountStatus returned error: %v", err)
+	}
+	if status.PackageRemaining == nil || *status.PackageRemaining != 37.5 {
+		t.Fatalf("PackageRemaining = %v", status.PackageRemaining)
+	}
+	if status.PackageDisplay == nil || !strings.Contains(*status.PackageDisplay, "Team 月度套餐") {
+		t.Fatalf("PackageDisplay = %v", status.PackageDisplay)
 	}
 }

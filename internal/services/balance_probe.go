@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -65,7 +66,7 @@ func probeBalanceForSite(ctx context.Context, db *gorm.DB, site models.Site, rou
 
 	var last BalanceProbeResult
 	for _, baseURL := range candidates {
-		result := requestUsageBalance(ctx, baseURL, key, timeoutSeconds)
+		result := requestUsageBalance(ctx, site, baseURL, key, timeoutSeconds)
 		result.SiteID = site.ID
 		result.RouteID = routeID
 		last = result
@@ -79,6 +80,8 @@ func probeBalanceForSite(ctx context.Context, db *gorm.DB, site models.Site, rou
 				site.PluginConfig = models.JSONMap{}
 			}
 			site.PluginConfig["balance_unit"] = result.Unit
+			site.PluginConfig["package_remaining"] = result.Remaining
+			site.PluginConfig["package_unit"] = result.Unit
 			updates["plugin_config"] = site.PluginConfig
 		}
 		_ = db.Model(&site).Updates(updates).Error
@@ -93,15 +96,40 @@ func probeBalanceForSite(ctx context.Context, db *gorm.DB, site models.Site, rou
 	return last, nil
 }
 
-func requestUsageBalance(ctx context.Context, baseURL, apiKey string, timeoutSeconds int) BalanceProbeResult {
+func requestUsageBalance(ctx context.Context, site models.Site, baseURL, apiKey string, timeoutSeconds int) BalanceProbeResult {
 	checkedAt := time.Now().UTC()
-	target, err := usageURL(baseURL)
-	if err != nil {
-		return BalanceProbeResult{OK: false, BaseURL: baseURL, Message: err.Error(), CheckedAt: checkedAt}
+	candidates := usageURLCandidates(site, baseURL)
+	var last BalanceProbeResult
+	for _, candidate := range candidates {
+		result := requestUsageBalanceEndpoint(ctx, baseURL, candidate, apiKey, timeoutSeconds, checkedAt)
+		if candidate.Scale != 0 && result.Remaining != nil {
+			value := *result.Remaining / candidate.Scale
+			result.Remaining = &value
+		}
+		if candidate.Unit != "" {
+			result.Unit = candidate.Unit
+		}
+		last = result
+		if result.OK {
+			return result
+		}
 	}
+	if last.CheckedAt.IsZero() {
+		return BalanceProbeResult{OK: false, BaseURL: baseURL, Message: "未找到可用余额接口", CheckedAt: checkedAt}
+	}
+	return last
+}
+
+type usageEndpointCandidate struct {
+	URL   string
+	Unit  string
+	Scale float64
+}
+
+func requestUsageBalanceEndpoint(ctx context.Context, baseURL string, candidate usageEndpointCandidate, apiKey string, timeoutSeconds int, checkedAt time.Time) BalanceProbeResult {
 	reqCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, target, nil)
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, candidate.URL, nil)
 	if err != nil {
 		return BalanceProbeResult{OK: false, BaseURL: baseURL, Message: err.Error(), CheckedAt: checkedAt}
 	}
@@ -118,7 +146,7 @@ func requestUsageBalance(ctx context.Context, baseURL, apiKey string, timeoutSec
 	statusCode := resp.StatusCode
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if statusCode < 200 || statusCode >= 300 {
-		return BalanceProbeResult{OK: false, StatusCode: &statusCode, BaseURL: baseURL, LatencyMS: &latency, Message: fmt.Sprintf("余额接口返回 %d: %s", statusCode, shorten(string(body), 200)), CheckedAt: checkedAt}
+		return BalanceProbeResult{OK: false, StatusCode: &statusCode, BaseURL: baseURL, LatencyMS: &latency, Message: fmt.Sprintf("余额接口 %s 返回 %d: %s", candidate.URL, statusCode, shorten(string(body), 200)), CheckedAt: checkedAt}
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
@@ -128,11 +156,63 @@ func requestUsageBalance(ctx context.Context, baseURL, apiKey string, timeoutSec
 	if !ok {
 		return BalanceProbeResult{OK: false, StatusCode: &statusCode, BaseURL: baseURL, LatencyMS: &latency, Message: "余额接口未返回 remaining / quota.remaining / balance", CheckedAt: checkedAt}
 	}
-	unit := strings.TrimSpace(stringPath(payload, "unit", stringPath(payload, "quota.unit", "USD")))
+	unit := strings.TrimSpace(stringPath(payload, "unit", stringPath(payload, "quota.unit", stringPath(payload, "data.unit", ""))))
+	if unit == "" {
+		unit = candidate.Unit
+	}
 	if unit == "" {
 		unit = "USD"
 	}
 	return BalanceProbeResult{OK: true, StatusCode: &statusCode, LatencyMS: &latency, Remaining: &remaining, Unit: unit, BaseURL: baseURL, Message: "余额读取成功", CheckedAt: checkedAt}
+}
+
+func usageURLCandidates(site models.Site, baseURL string) []usageEndpointCandidate {
+	base := strings.ToLower(NormalizeBaseURL(baseURL))
+	if strings.Contains(base, "api.deepseek.com") {
+		return []usageEndpointCandidate{{URL: "https://api.deepseek.com/user/balance", Unit: "CNY"}}
+	}
+	if strings.Contains(base, "api.stepfun.ai") || strings.Contains(base, "api.stepfun.com") {
+		return []usageEndpointCandidate{{URL: "https://api.stepfun.com/v1/accounts", Unit: "CNY"}}
+	}
+	if strings.Contains(base, "api.siliconflow.cn") {
+		return []usageEndpointCandidate{{URL: "https://api.siliconflow.cn/v1/user/info", Unit: "CNY"}}
+	}
+	if strings.Contains(base, "api.siliconflow.com") {
+		return []usageEndpointCandidate{{URL: "https://api.siliconflow.com/v1/user/info", Unit: "USD"}}
+	}
+	if strings.Contains(base, "openrouter.ai") {
+		return []usageEndpointCandidate{{URL: "https://openrouter.ai/api/v1/credits", Unit: "USD"}}
+	}
+	if strings.Contains(base, "api.novita.ai") {
+		return []usageEndpointCandidate{{URL: "https://api.novita.ai/v3/user/balance", Unit: "USD", Scale: 10000}}
+	}
+	out := []usageEndpointCandidate{}
+	if shouldProbeNewAPIUsage(site, baseURL) {
+		if target, err := newAPIUsageURL(baseURL); err == nil && target != "" {
+			out = append(out, usageEndpointCandidate{URL: target, Unit: "$"})
+		}
+	}
+	if target, err := usageURL(baseURL); err == nil && target != "" {
+		out = append(out, usageEndpointCandidate{URL: target, Unit: "USD"})
+	}
+	return out
+}
+
+func shouldProbeNewAPIUsage(site models.Site, baseURL string) bool {
+	if strings.EqualFold(strings.TrimSpace(site.PluginKey), "yellowpeach-newapi") {
+		return true
+	}
+	if value := strings.TrimSpace(stringMapValue(site.PluginConfig, "usage_balance_url", "")); value != "" && strings.Contains(value, "api/usage/token") {
+		return true
+	}
+	text := strings.ToLower(strings.Join([]string{
+		site.Name,
+		site.BaseURL,
+		baseURL,
+		stringMapValue(site.PluginConfig, "api_platform", ""),
+		stringMapValue(site.PluginConfig, "platform", ""),
+	}, " "))
+	return strings.Contains(text, "newapi") || strings.Contains(text, "new-api") || strings.Contains(text, "yellowpeach")
 }
 
 func usageURL(baseURL string) (string, error) {
@@ -143,8 +223,74 @@ func usageURL(baseURL string) (string, error) {
 	return JoinURL(base, "/v1/usage")
 }
 
+func newAPIUsageURL(baseURL string) (string, error) {
+	parsed, err := url.Parse(NormalizeBaseURL(baseURL))
+	if err != nil {
+		return "", err
+	}
+	parsed.Path = strings.TrimRight(strings.TrimSuffix(parsed.Path, "/v1"), "/") + "/api/usage/token/"
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String(), nil
+}
+
 func usageRemaining(payload map[string]any) (float64, bool) {
-	for _, path := range []string{"remaining", "quota.remaining", "balance"} {
+	for _, path := range []string{
+		"remaining",
+		"quota.remaining",
+		"balance",
+		"total_balance",
+		"availableBalance",
+		"data.total_available",
+		"data.remaining",
+		"data.balance",
+		"data.totalBalance",
+		"data.chargeBalance",
+		"data.quota",
+		"data.remain_quota",
+		"data.quota_remain",
+		"data.quota_remaining",
+		"data.available_quota",
+	} {
+		if value, ok := numericPath(payload, path); ok {
+			return value, true
+		}
+	}
+	if remaining, ok := deepSeekBalanceRemaining(payload); ok {
+		return remaining, true
+	}
+	total, hasTotal := firstNumericPath(payload, "total", "total_quota", "total_credits", "quota.total", "data.total", "data.total_quota", "data.quota_total", "data.amount_total", "data.total_granted", "data.total_credits")
+	used, hasUsed := firstNumericPath(payload, "used", "used_quota", "total_usage", "quota.used", "data.used", "data.used_quota", "data.quota_used", "data.amount_used", "data.total_used", "data.total_usage")
+	if hasTotal && hasUsed {
+		return total - used, true
+	}
+	return 0, false
+}
+
+func deepSeekBalanceRemaining(payload map[string]any) (float64, bool) {
+	items, ok := payload["balance_infos"].([]any)
+	if !ok {
+		return 0, false
+	}
+	total := 0.0
+	found := false
+	for _, item := range items {
+		obj, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		value, ok := firstNumericPath(obj, "total_balance", "granted_balance", "topped_up_balance")
+		if !ok {
+			continue
+		}
+		total += value
+		found = true
+	}
+	return total, found
+}
+
+func firstNumericPath(payload map[string]any, paths ...string) (float64, bool) {
+	for _, path := range paths {
 		if value, ok := numericPath(payload, path); ok {
 			return value, true
 		}

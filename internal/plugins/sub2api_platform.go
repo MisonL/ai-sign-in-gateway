@@ -17,9 +17,7 @@ import (
 	"ai-sign-in-gateway/internal/services"
 )
 
-// Sub2API 实现 sub2api 平台的最常见登录 / 状态 / 签到 / API key 同步流程。
-// 暂未覆盖：subscription 详情、订阅汇总等附加功能（Python 版有 ~650 行；
-// 这里专注核心可工作子集，保证后续可在浏览器/HTTP 子集之上叠加）。
+// Sub2API 实现 sub2api 平台的登录 / 状态 / 签到 / API key 同步流程。
 type Sub2API struct {
 	client *http.Client
 }
@@ -130,7 +128,7 @@ func (p *Sub2API) FetchAccountStatus(ctx context.Context, site models.Site, time
 	balance := pathFloat(profile, "data.balance")
 	currency := pathString(profile, "data.currency", "$")
 	balanceUnit := strings.TrimSpace(currency)
-	packageDisplay := packageDisplayFromPayload(profile)
+	packageQuota := p.fetchPackageQuota(ctx, site, &auth, profile, timeoutSeconds)
 	if primaryKey != "" {
 		updatedCredentials["api_key"] = primaryKey
 	}
@@ -158,11 +156,51 @@ func (p *Sub2API) FetchAccountStatus(ctx context.Context, site models.Site, time
 		Message:            message,
 		Balance:            balance,
 		BalanceUnit:        ptrIfNonEmpty(balanceUnit),
-		PackageDisplay:     ptrIfNonEmpty(packageDisplay),
+		PackageRemaining:   packageQuota.Remaining,
+		PackageTotal:       packageQuota.Total,
+		PackageUsed:        packageQuota.Used,
+		PackageUnit:        ptrIfNonEmpty(packageQuota.Unit),
+		PackageDisplay:     ptrIfNonEmpty(packageQuota.Display),
 		AccountName:        ptrIfNonEmpty(email),
 		InviteLink:         inviteLink,
 		InviteCode:         inviteCode,
 		UpdatedCredentials: updatedCredentials,
+	}, nil
+}
+
+func (p *Sub2API) SyncAPIKeys(ctx context.Context, site models.Site, timeoutSeconds int) (APIKeySyncResult, error) {
+	if err := p.Validate(site); err != nil {
+		return APIKeySyncResult{}, err
+	}
+	auth, err := p.authContext(ctx, site, timeoutSeconds)
+	if err != nil {
+		return APIKeySyncResult{}, err
+	}
+	updates, primaryKey := p.syncAPIKeys(ctx, site, &auth, timeoutSeconds)
+	if updates == nil {
+		updates = models.JSONMap{}
+	}
+	if primaryKey != "" {
+		updates["api_key"] = primaryKey
+	}
+	if auth.AccessToken != "" {
+		updates["access_token"] = auth.AccessToken
+	}
+	if auth.RefreshToken != "" {
+		updates["refresh_token"] = auth.RefreshToken
+	}
+	count := apiKeyUpdateCount(updates)
+	message := "未读取到可用 API Key。"
+	if count > 0 {
+		message = fmt.Sprintf("已更新 %d 个 API Key。", count)
+		if primaryKey != "" {
+			message = fmt.Sprintf("%s 首选 Key %s。", message, maskKey(primaryKey))
+		}
+	}
+	return APIKeySyncResult{
+		UpdatedCredentials: updates,
+		PrimaryKey:         primaryKey,
+		Message:            message,
 	}, nil
 }
 
@@ -300,9 +338,182 @@ func (p *Sub2API) syncAPIKeys(ctx context.Context, site models.Site, auth *sub2a
 	return credentialsUpdate, primaryKey
 }
 
+func (p *Sub2API) fetchPackageQuota(ctx context.Context, site models.Site, auth *sub2apiAuth, profile map[string]any, timeoutSeconds int) packageQuotaSnapshot {
+	if payload, _, nextAuth, err := p.requestJSONWithAuth(ctx, site, http.MethodGet, "/api/v1/subscriptions/progress", *auth, nil, timeoutSeconds); err == nil {
+		*auth = nextAuth
+		if quota := sub2apiQuotaFromProgressPayload(payload); quota.hasQuota() {
+			return quota
+		}
+	}
+	if payload, _, nextAuth, err := p.requestJSONWithAuth(ctx, site, http.MethodGet, "/api/v1/subscriptions/summary", *auth, nil, timeoutSeconds); err == nil {
+		*auth = nextAuth
+		if quota := sub2apiQuotaFromSummaryPayload(payload); quota.hasQuota() {
+			return quota
+		}
+	}
+	if payload, _, nextAuth, err := p.requestJSONWithAuth(ctx, site, http.MethodGet, strings.TrimSpace(stringValue(site.PluginConfig, "api_keys_url", "/api/v1/keys?page=1&page_size=100&sort_by=created_at&sort_order=desc")), *auth, nil, timeoutSeconds); err == nil {
+		*auth = nextAuth
+		if quota := sub2apiQuotaFromKeysPayload(payload); quota.hasQuota() {
+			return quota
+		}
+	}
+	return packageQuotaFromPayload(site, profile, "")
+}
+
 func (p *Sub2API) requestJSON(ctx context.Context, site models.Site, method, target string, auth sub2apiAuth, body any, timeoutSeconds int) (map[string]any, string, error) {
 	payload, raw, _, err := p.requestJSONWithAuth(ctx, site, method, target, auth, body, timeoutSeconds)
 	return payload, raw, err
+}
+
+func sub2apiQuotaFromProgressPayload(payload map[string]any) packageQuotaSnapshot {
+	items := extractItems(payload)
+	var best packageQuotaSnapshot
+	bestRank := -1
+	for _, item := range items {
+		progress, ok := item["progress"].(map[string]any)
+		if !ok {
+			continue
+		}
+		label := sub2apiSubscriptionLabel(item)
+		for _, window := range []struct {
+			key   string
+			label string
+			rank  int
+		}{
+			{key: "monthly", label: "月度套餐", rank: 3},
+			{key: "weekly", label: "周度套餐", rank: 2},
+			{key: "daily", label: "日度套餐", rank: 1},
+		} {
+			raw, ok := progress[window.key].(map[string]any)
+			if !ok {
+				continue
+			}
+			limit := numberPtr(firstExistingValue(raw, "limit_usd", "limit", "total"))
+			used := numberPtr(firstExistingValue(raw, "used_usd", "used"))
+			remaining := numberPtr(firstExistingValue(raw, "remaining_usd", "remaining"))
+			if remaining == nil && limit != nil && used != nil {
+				value := *limit - *used
+				remaining = &value
+			}
+			if limit == nil && used == nil && remaining == nil {
+				continue
+			}
+			fullLabel := strings.TrimSpace(label + " " + window.label)
+			quota := packageQuotaSnapshot{
+				Display:   formatPackageQuotaDisplay(fullLabel, remaining, limit, used, "USD"),
+				Remaining: remaining,
+				Total:     limit,
+				Used:      used,
+				Unit:      "USD",
+			}
+			if window.rank > bestRank {
+				best = quota
+				bestRank = window.rank
+			}
+		}
+	}
+	return best
+}
+
+func sub2apiQuotaFromSummaryPayload(payload map[string]any) packageQuotaSnapshot {
+	var items []map[string]any
+	if data, ok := payload["data"].(map[string]any); ok {
+		if values, ok := data["subscriptions"].([]any); ok {
+			items = mapDictArray(values)
+		}
+	}
+	if len(items) == 0 {
+		if values, ok := payload["subscriptions"].([]any); ok {
+			items = mapDictArray(values)
+		}
+	}
+	var best packageQuotaSnapshot
+	bestRank := -1
+	for _, item := range items {
+		label := strings.TrimSpace(fmt.Sprint(firstExistingValue(item, "group_name", "name")))
+		if label == "" || label == "<nil>" {
+			label = "sub2api"
+		}
+		for _, window := range []struct {
+			usedKey  string
+			limitKey string
+			label    string
+			rank     int
+		}{
+			{usedKey: "monthly_used_usd", limitKey: "monthly_limit_usd", label: "月度套餐", rank: 3},
+			{usedKey: "weekly_used_usd", limitKey: "weekly_limit_usd", label: "周度套餐", rank: 2},
+			{usedKey: "daily_used_usd", limitKey: "daily_limit_usd", label: "日度套餐", rank: 1},
+		} {
+			total := numberPtr(item[window.limitKey])
+			used := numberPtr(item[window.usedKey])
+			if total == nil || used == nil || *total <= 0 {
+				continue
+			}
+			remaining := *total - *used
+			quota := packageQuotaSnapshot{
+				Display:   formatPackageQuotaDisplay(label+" "+window.label, &remaining, total, used, "USD"),
+				Remaining: &remaining,
+				Total:     total,
+				Used:      used,
+				Unit:      "USD",
+			}
+			if window.rank > bestRank {
+				best = quota
+				bestRank = window.rank
+			}
+		}
+	}
+	return best
+}
+
+func sub2apiQuotaFromKeysPayload(payload map[string]any) packageQuotaSnapshot {
+	items := extractItems(payload)
+	var best packageQuotaSnapshot
+	for _, item := range items {
+		total := numberPtr(firstExistingValue(item, "quota", "rate_limit_7d", "rate_limit_1d", "rate_limit_5h"))
+		used := numberPtr(firstExistingValue(item, "quota_used", "usage_7d", "usage_1d", "usage_5h"))
+		if total == nil || *total <= 0 {
+			continue
+		}
+		if used == nil {
+			zero := 0.0
+			used = &zero
+		}
+		remaining := *total - *used
+		name := strings.TrimSpace(fmt.Sprint(firstExistingValue(item, "name", "id")))
+		if name == "" || name == "<nil>" {
+			name = "API Key"
+		}
+		quota := packageQuotaSnapshot{
+			Display:   formatPackageQuotaDisplay(name+" Key 额度", &remaining, total, used, "USD"),
+			Remaining: &remaining,
+			Total:     total,
+			Used:      used,
+			Unit:      "USD",
+		}
+		if !best.hasQuota() || best.Remaining == nil || remaining > *best.Remaining {
+			best = quota
+		}
+	}
+	return best
+}
+
+func sub2apiSubscriptionLabel(item map[string]any) string {
+	subscription, _ := item["subscription"].(map[string]any)
+	for _, source := range []map[string]any{subscription, item} {
+		if source == nil {
+			continue
+		}
+		if group, ok := source["group"].(map[string]any); ok {
+			if value := strings.TrimSpace(fmt.Sprint(firstExistingValue(group, "name", "group_name"))); value != "" && value != "<nil>" {
+				return value
+			}
+		}
+		if value := strings.TrimSpace(fmt.Sprint(firstExistingValue(source, "group_name", "name", "plan_name"))); value != "" && value != "<nil>" {
+			return value
+		}
+	}
+	return "sub2api"
 }
 
 func (p *Sub2API) requestJSONWithAuth(ctx context.Context, site models.Site, method, target string, auth sub2apiAuth, body any, timeoutSeconds int) (map[string]any, string, sub2apiAuth, error) {

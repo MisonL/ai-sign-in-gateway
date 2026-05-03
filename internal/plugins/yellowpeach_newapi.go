@@ -137,7 +137,7 @@ func (p *YellowPeach) FetchAccountStatus(ctx context.Context, site models.Site, 
 	message := pathString(payload, "message", "用户信息读取成功。")
 	balance := p.extractBalance(site, payload)
 	balanceUnit := p.extractBalanceUnit(payload)
-	packageDisplay := packageDisplayFromPayload(payload)
+	packageQuota := p.fetchPackageQuota(ctx, site, auth, payload, timeoutSeconds)
 	accountName := p.extractAccountName(site, payload)
 	updates := models.JSONMap{}
 	if auth.UserID != "" {
@@ -166,11 +166,45 @@ func (p *YellowPeach) FetchAccountStatus(ctx context.Context, site models.Site, 
 		Message:            message,
 		Balance:            balance,
 		BalanceUnit:        ptrIfNonEmpty(balanceUnit),
-		PackageDisplay:     ptrIfNonEmpty(packageDisplay),
+		PackageRemaining:   packageQuota.Remaining,
+		PackageTotal:       packageQuota.Total,
+		PackageUsed:        packageQuota.Used,
+		PackageUnit:        ptrIfNonEmpty(firstNonEmptyPlugin(packageQuota.Unit, balanceUnit)),
+		PackageDisplay:     ptrIfNonEmpty(packageQuota.Display),
 		AccountName:        ptrIfNonEmpty(accountName),
 		InviteLink:         inviteLink,
 		InviteCode:         inviteCode,
 		UpdatedCredentials: updates,
+	}, nil
+}
+
+func (p *YellowPeach) SyncAPIKeys(ctx context.Context, site models.Site, timeoutSeconds int) (APIKeySyncResult, error) {
+	if err := p.Validate(site); err != nil {
+		return APIKeySyncResult{}, err
+	}
+	auth, err := p.apiKeyAuthContext(ctx, site, timeoutSeconds)
+	if err != nil {
+		return APIKeySyncResult{}, err
+	}
+	updates, primaryKey := p.syncAPIKeys(ctx, site, auth, timeoutSeconds)
+	if updates == nil {
+		updates = models.JSONMap{}
+	}
+	if primaryKey != "" {
+		updates["api_key"] = primaryKey
+	}
+	count := apiKeyUpdateCount(updates)
+	message := "未读取到可用 API Key。"
+	if count > 0 {
+		message = fmt.Sprintf("已更新 %d 个 API Key。", count)
+		if primaryKey != "" {
+			message = fmt.Sprintf("%s 首选 Key %s。", message, maskKey(primaryKey))
+		}
+	}
+	return APIKeySyncResult{
+		UpdatedCredentials: updates,
+		PrimaryKey:         primaryKey,
+		Message:            message,
 	}, nil
 }
 
@@ -261,6 +295,22 @@ func hasYellowPeachLoginCredentials(site models.Site) bool {
 	}
 	password := strings.TrimSpace(stringValue(site.Credentials, "password", ""))
 	return username != "" && password != ""
+}
+
+func (p *YellowPeach) apiKeyAuthContext(ctx context.Context, site models.Site, timeoutSeconds int) (yellowpeachAuth, error) {
+	cookie := strings.TrimSpace(stringValue(site.Credentials, "cookie", ""))
+	access := strings.TrimSpace(stringValue(site.Credentials, "access_token", ""))
+	userID := strings.TrimSpace(stringValue(site.Credentials, "user_id", ""))
+	auth := yellowpeachAuth{UserID: userID}
+	if cookie != "" {
+		auth.SessionCookie = normalizeYPCookie(cookie)
+		return auth, nil
+	}
+	if access != "" {
+		auth.Authorization = normalizeYPAuthorization(access)
+		return auth, nil
+	}
+	return p.autoLogin(ctx, site, timeoutSeconds)
 }
 
 func (p *YellowPeach) autoLogin(ctx context.Context, site models.Site, timeoutSeconds int) (yellowpeachAuth, error) {
@@ -567,7 +617,7 @@ func (p *YellowPeach) syncAPIKeys(ctx context.Context, site models.Site, auth ye
 	apiKeys := []map[string]any{}
 	var primary map[string]any
 	for _, item := range items {
-		id := strings.TrimSpace(fmt.Sprint(firstExistingValue(item, "id", "token_id")))
+		id := tokenIDValue(firstExistingValue(item, "id", "token_id"))
 		key := strings.TrimSpace(fmt.Sprint(firstExistingValue(item, "key", "token", "api_key", "value")))
 		if !usableAPIKey(key) && id != "" {
 			key = keyByID[id]
@@ -608,6 +658,160 @@ func (p *YellowPeach) syncAPIKeys(ctx context.Context, site models.Site, auth ye
 	return credentialsUpdate, strings.TrimSpace(fmt.Sprint(primary["key"]))
 }
 
+func (p *YellowPeach) fetchPackageQuota(ctx context.Context, site models.Site, auth yellowpeachAuth, selfPayload map[string]any, timeoutSeconds int) packageQuotaSnapshot {
+	if payload, _, err := p.requestJSON(ctx, site, http.MethodGet, "/api/subscription/self", auth, nil, timeoutSeconds); err == nil {
+		if quota := newAPIQuotaFromSubscriptionPayload(site, payload); quota.hasQuota() {
+			return quota
+		}
+	}
+	if apiKey := strings.TrimSpace(stringValue(site.Credentials, "api_key", "")); apiKey != "" {
+		tokenAuth := yellowpeachAuth{Authorization: normalizeYPAuthorization(apiKey), UserID: auth.UserID}
+		if payload, _, err := p.requestJSON(ctx, site, http.MethodGet, "/api/usage/token/", tokenAuth, nil, timeoutSeconds); err == nil {
+			if quota := newAPIQuotaFromTokenUsagePayload(site, payload); quota.hasQuota() {
+				return quota
+			}
+		}
+	}
+	return packageQuotaFromPayload(site, selfPayload, "")
+}
+
+func newAPIQuotaFromSubscriptionPayload(site models.Site, payload map[string]any) packageQuotaSnapshot {
+	items := newAPISubscriptionItems(payload)
+	var best packageQuotaSnapshot
+	for _, item := range items {
+		subscription := item
+		if nested, ok := item["subscription"].(map[string]any); ok {
+			subscription = nested
+		}
+		status := strings.ToLower(strings.TrimSpace(fmt.Sprint(firstExistingValue(subscription, "status", "state"))))
+		if status != "" && status != "<nil>" && status != "active" {
+			continue
+		}
+		totalRaw := numberPtr(firstExistingValue(subscription, "amount_total", "total", "quota", "total_quota"))
+		usedRaw := numberPtr(firstExistingValue(subscription, "amount_used", "used", "used_quota"))
+		if totalRaw == nil && usedRaw == nil {
+			continue
+		}
+		if usedRaw == nil {
+			zero := 0.0
+			usedRaw = &zero
+		}
+		var remainingRaw *float64
+		if totalRaw != nil && *totalRaw > 0 {
+			value := *totalRaw - *usedRaw
+			remainingRaw = &value
+		}
+		if totalRaw != nil && *totalRaw == 0 {
+			remainingRaw = nil
+			usedRaw = nil
+		}
+		remaining := normalizeQuotaAmount(site, remainingRaw)
+		total := normalizeQuotaAmount(site, totalRaw)
+		used := normalizeQuotaAmount(site, usedRaw)
+		label := newAPISubscriptionLabel(item, subscription)
+		if totalRaw != nil && *totalRaw == 0 {
+			label = strings.TrimSpace(label + " 无限套餐")
+		}
+		quota := packageQuotaSnapshot{
+			Display:   formatPackageQuotaDisplay(label, remaining, total, used, "$"),
+			Remaining: remaining,
+			Total:     total,
+			Used:      used,
+			Unit:      "$",
+		}
+		if !best.hasQuota() || quotaRemainingValue(quota) > quotaRemainingValue(best) {
+			best = quota
+		}
+	}
+	return best
+}
+
+func newAPIQuotaFromTokenUsagePayload(site models.Site, payload map[string]any) packageQuotaSnapshot {
+	data := payload
+	if nested, ok := payload["data"].(map[string]any); ok {
+		data = nested
+	}
+	if unlimited, ok := data["unlimited_quota"].(bool); ok && unlimited {
+		name := strings.TrimSpace(fmt.Sprint(firstExistingValue(data, "name", "token_name")))
+		if name == "" || name == "<nil>" {
+			name = "Token"
+		}
+		return packageQuotaSnapshot{Display: name + " 无限额度", Unit: "$"}
+	}
+	totalRaw := numberPtr(firstExistingValue(data, "total_granted", "total", "remain_quota"))
+	usedRaw := numberPtr(firstExistingValue(data, "total_used", "used", "used_quota"))
+	remainingRaw := numberPtr(firstExistingValue(data, "total_available", "remaining", "remain_quota"))
+	if remainingRaw == nil && totalRaw != nil && usedRaw != nil {
+		value := *totalRaw - *usedRaw
+		remainingRaw = &value
+	}
+	if remainingRaw == nil && totalRaw == nil && usedRaw == nil {
+		return packageQuotaSnapshot{}
+	}
+	name := strings.TrimSpace(fmt.Sprint(firstExistingValue(data, "name", "token_name")))
+	if name == "" || name == "<nil>" {
+		name = "Token"
+	}
+	remaining := normalizeQuotaAmount(site, remainingRaw)
+	total := normalizeQuotaAmount(site, totalRaw)
+	used := normalizeQuotaAmount(site, usedRaw)
+	return packageQuotaSnapshot{
+		Display:   formatPackageQuotaDisplay(name+" Token 额度", remaining, total, used, "$"),
+		Remaining: remaining,
+		Total:     total,
+		Used:      used,
+		Unit:      "$",
+	}
+}
+
+func newAPISubscriptionItems(payload map[string]any) []map[string]any {
+	if payload == nil {
+		return nil
+	}
+	for _, container := range []any{payload["data"], payload} {
+		obj, ok := container.(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, key := range []string{"subscriptions", "all_subscriptions", "items", "list"} {
+			if values, ok := obj[key].([]any); ok {
+				return mapDictArray(values)
+			}
+		}
+	}
+	return nil
+}
+
+func newAPISubscriptionLabel(item, subscription map[string]any) string {
+	for _, source := range []map[string]any{item, subscription} {
+		if source == nil {
+			continue
+		}
+		if plan, ok := source["plan"].(map[string]any); ok {
+			if value := strings.TrimSpace(fmt.Sprint(firstExistingValue(plan, "title", "name"))); value != "" && value != "<nil>" {
+				return value
+			}
+		}
+		if value := strings.TrimSpace(fmt.Sprint(firstExistingValue(source, "plan_title", "plan_name", "name", "title"))); value != "" && value != "<nil>" {
+			return value
+		}
+	}
+	return "New API 套餐"
+}
+
+func quotaRemainingValue(quota packageQuotaSnapshot) float64 {
+	if quota.Remaining != nil {
+		return *quota.Remaining
+	}
+	if quota.Total != nil && quota.Used != nil {
+		return *quota.Total - *quota.Used
+	}
+	if quota.Total != nil {
+		return *quota.Total
+	}
+	return 0
+}
+
 func extractTokenItems(payload map[string]any) []map[string]any {
 	items := extractItems(payload)
 	if len(items) > 0 {
@@ -637,8 +841,8 @@ func tokenItemIDsNeedingKeys(items []map[string]any) []string {
 		if usableAPIKey(key) {
 			continue
 		}
-		id := strings.TrimSpace(fmt.Sprint(firstExistingValue(item, "id", "token_id")))
-		if id != "" && id != "<nil>" {
+		id := tokenIDValue(firstExistingValue(item, "id", "token_id"))
+		if id != "" {
 			ids = append(ids, id)
 		}
 	}
@@ -664,10 +868,16 @@ func (p *YellowPeach) fetchTokenKeys(ctx context.Context, site models.Site, auth
 		if out[id] != "" {
 			continue
 		}
-		for _, pattern := range []string{"/api/token/%s/key", "/api/token/key/%s"} {
-			payload, _, err := p.requestJSON(ctx, site, http.MethodGet, fmt.Sprintf(pattern, url.PathEscape(id)), auth, nil, timeoutSeconds)
+		for _, endpoint := range tokenDetailEndpoints(site, id) {
+			payload, _, err := p.requestJSON(ctx, site, endpoint.method, endpoint.target, auth, nil, timeoutSeconds)
 			if err != nil {
 				continue
+			}
+			keys := tokenKeysFromPayload(payload)
+			if out[id] == "" && len(keys) == 1 {
+				for _, key := range keys {
+					out[id] = key
+				}
 			}
 			for gotID, key := range tokenKeysFromPayload(payload) {
 				if gotID == "" || gotID == id {
@@ -683,12 +893,38 @@ func (p *YellowPeach) fetchTokenKeys(ctx context.Context, site models.Site, auth
 	return out
 }
 
+type tokenDetailEndpoint struct {
+	method string
+	target string
+}
+
+func tokenDetailEndpoints(site models.Site, id string) []tokenDetailEndpoint {
+	escapedID := url.PathEscape(id)
+	endpoints := []tokenDetailEndpoint{}
+	custom := strings.TrimSpace(stringValue(site.PluginConfig, "token_keys_url", ""))
+	if custom != "" && strings.Contains(custom, "{id}") {
+		target := strings.ReplaceAll(custom, "{id}", escapedID)
+		endpoints = append(endpoints,
+			tokenDetailEndpoint{method: http.MethodPost, target: target},
+			tokenDetailEndpoint{method: http.MethodGet, target: target},
+		)
+	}
+	endpoints = append(endpoints,
+		tokenDetailEndpoint{method: http.MethodPost, target: fmt.Sprintf("/api/token/%s/key", escapedID)},
+		tokenDetailEndpoint{method: http.MethodGet, target: fmt.Sprintf("/api/token/%s/key", escapedID)},
+		tokenDetailEndpoint{method: http.MethodGet, target: fmt.Sprintf("/api/token/%s", escapedID)},
+		tokenDetailEndpoint{method: http.MethodPost, target: fmt.Sprintf("/api/token/key/%s", escapedID)},
+		tokenDetailEndpoint{method: http.MethodGet, target: fmt.Sprintf("/api/token/key/%s", escapedID)},
+	)
+	return endpoints
+}
+
 func tokenKeysFromPayload(payload map[string]any) map[string]string {
 	out := map[string]string{}
 	for _, container := range []any{payload["data"], payload} {
 		switch typed := container.(type) {
 		case map[string]any:
-			id := strings.TrimSpace(fmt.Sprint(firstExistingValue(typed, "id", "token_id")))
+			id := tokenIDValue(firstExistingValue(typed, "id", "token_id"))
 			key := strings.TrimSpace(fmt.Sprint(firstExistingValue(typed, "key", "token", "api_key", "value")))
 			if usableAPIKey(key) {
 				out[id] = key
@@ -701,7 +937,7 @@ func tokenKeysFromPayload(payload map[string]any) map[string]string {
 			for _, listKey := range []string{"items", "tokens", "list", "records", "rows"} {
 				if values, ok := typed[listKey].([]any); ok {
 					for _, item := range mapDictArray(values) {
-						id := strings.TrimSpace(fmt.Sprint(firstExistingValue(item, "id", "token_id")))
+						id := tokenIDValue(firstExistingValue(item, "id", "token_id"))
 						key := strings.TrimSpace(fmt.Sprint(firstExistingValue(item, "key", "token", "api_key", "value")))
 						if usableAPIKey(key) {
 							out[id] = key
@@ -711,7 +947,7 @@ func tokenKeysFromPayload(payload map[string]any) map[string]string {
 			}
 		case []any:
 			for _, item := range mapDictArray(typed) {
-				id := strings.TrimSpace(fmt.Sprint(firstExistingValue(item, "id", "token_id")))
+				id := tokenIDValue(firstExistingValue(item, "id", "token_id"))
 				key := strings.TrimSpace(fmt.Sprint(firstExistingValue(item, "key", "token", "api_key", "value")))
 				if usableAPIKey(key) {
 					out[id] = key
@@ -720,6 +956,14 @@ func tokenKeysFromPayload(payload map[string]any) map[string]string {
 		}
 	}
 	return out
+}
+
+func tokenIDValue(value any) string {
+	id := strings.TrimSpace(fmt.Sprint(value))
+	if id == "" || id == "<nil>" {
+		return ""
+	}
+	return id
 }
 
 func tokenItemStatus(item map[string]any) string {
@@ -761,16 +1005,7 @@ func firstExistingValue(item map[string]any, keys ...string) any {
 }
 
 func (p *YellowPeach) quotaPerUnit(site models.Site) float64 {
-	raw := strings.TrimSpace(stringValue(site.PluginConfig, "quota_per_unit", ""))
-	if raw == "" {
-		return 500000.0
-	}
-	var value float64
-	_, err := fmt.Sscan(raw, &value)
-	if err != nil || value <= 0 {
-		return 500000.0
-	}
-	return value
+	return quotaPerUnitFromConfig(site)
 }
 
 func (p *YellowPeach) extractBalance(site models.Site, payload map[string]any) *float64 {

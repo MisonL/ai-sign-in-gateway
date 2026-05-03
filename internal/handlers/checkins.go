@@ -8,6 +8,7 @@ import (
 
 	"ai-sign-in-gateway/internal/httpx"
 	"ai-sign-in-gateway/internal/models"
+	"ai-sign-in-gateway/internal/plugins"
 	"ai-sign-in-gateway/internal/schemas"
 	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm"
@@ -35,14 +36,18 @@ func (a *App) CheckinSites(w http.ResponseWriter, r *http.Request) {
 	a.DB.Order("name asc").Find(&sites)
 	out := make([]map[string]any, 0, len(sites))
 	for _, site := range sites {
-		out = append(out, map[string]any{
+		item := map[string]any{
 			"id": site.ID, "name": site.Name, "plugin_key": site.PluginKey, "group_name": site.GroupName,
 			"base_url": site.BaseURL, "is_enabled": site.IsEnabled, "can_checkin": true,
 			"include_in_checkin": includeInCheckin(site), "checkin_label": "签到", "reason": "",
 			"last_status": site.LastStatus, "connection_status": site.LastStatus, "last_message": site.LastMessage,
 			"last_balance": site.LastBalance, "balance_display": balanceDisplay(site.LastBalance),
 			"package_display": packageDisplay(site), "checkin_status": site.LastStatus, "last_run_at": site.LastRunAt,
-		})
+		}
+		for key, value := range packageQuotaMap(site) {
+			item[key] = value
+		}
+		out = append(out, item)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -92,14 +97,18 @@ func (a *App) UpdateCheckinParticipation(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	out := map[string]any{
 		"id": site.ID, "name": site.Name, "plugin_key": site.PluginKey, "group_name": site.GroupName,
 		"base_url": site.BaseURL, "is_enabled": site.IsEnabled, "can_checkin": true,
 		"include_in_checkin": includeInCheckin(site), "checkin_label": "签到", "reason": "",
 		"last_status": site.LastStatus, "connection_status": site.LastStatus, "last_message": site.LastMessage,
 		"last_balance": site.LastBalance, "balance_display": balanceDisplay(site.LastBalance),
 		"package_display": packageDisplay(site), "checkin_status": site.LastStatus, "last_run_at": site.LastRunAt,
-	})
+	}
+	for key, value := range packageQuotaMap(site) {
+		out[key] = value
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (a *App) SiteCheckin(w http.ResponseWriter, r *http.Request) {
@@ -108,7 +117,25 @@ func (a *App) SiteCheckin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	run := a.executeSiteCheckin(r, site, "manual")
-	writeJSON(w, http.StatusOK, map[string]any{"run": run.ID, "status": run.Status, "message": run.Message, "balance": run.Balance})
+	var refreshed models.Site
+	if err := a.DB.First(&refreshed, site.ID).Error; err == nil {
+		site = refreshed
+	}
+	out := map[string]any{
+		"run":               run.ID,
+		"status":            run.Status,
+		"message":           run.Message,
+		"balance":           run.Balance,
+		"balance_unit":      strings.TrimSpace(jsonMapString(site.PluginConfig, "balance_unit")),
+		"balance_display":   balanceDisplay(run.Balance),
+		"package_display":   packageDisplay(site),
+		"checkin_status":    run.Status,
+		"connection_status": run.Status,
+	}
+	for key, value := range packageQuotaMap(site) {
+		out[key] = value
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (a *App) executeSiteCheckin(r *http.Request, site models.Site, triggerType string) models.CheckinRun {
@@ -131,8 +158,12 @@ func (a *App) executeSiteCheckin(r *http.Request, site models.Site, triggerType 
 	if result.Success {
 		status = "success"
 	}
-	finishRun(a.DB, &run, status, result.Message, result.Balance, result.ResponseExcerpt)
-	updateSiteAfterCheckin(a.DB, &site, status, result.Message, result.Balance, now)
+	balance := result.Balance
+	if status == "success" {
+		balance = a.syncBalanceAfterCheckin(r, plugin, &site, result, settings.RequestTimeout)
+	}
+	finishRun(a.DB, &run, status, result.Message, balance, result.ResponseExcerpt)
+	updateSiteAfterCheckin(a.DB, &site, status, result.Message, balance, now)
 	return run
 }
 
@@ -149,9 +180,70 @@ func finishRun(db *gorm.DB, run *models.CheckinRun, status, message string, bala
 func updateSiteAfterCheckin(db *gorm.DB, site *models.Site, status, message string, balance *float64, runAt time.Time) {
 	site.LastStatus = &status
 	site.LastMessage = &message
-	site.LastBalance = balance
 	site.LastRunAt = &runAt
-	_ = db.Save(site).Error
+	updates := map[string]any{
+		"last_status":  site.LastStatus,
+		"last_message": site.LastMessage,
+		"last_run_at":  site.LastRunAt,
+	}
+	if balance != nil {
+		site.LastBalance = balance
+		updates["last_balance"] = balance
+	}
+	if len(site.Credentials) > 0 {
+		updates["credentials"] = site.Credentials
+	}
+	if len(site.PluginConfig) > 0 {
+		updates["plugin_config"] = site.PluginConfig
+	}
+	_ = db.Model(site).Updates(updates).Error
+}
+
+func (a *App) syncBalanceAfterCheckin(r *http.Request, plugin plugins.SitePlugin, site *models.Site, result plugins.CheckinResult, timeout int) *float64 {
+	if site.PluginConfig == nil {
+		site.PluginConfig = models.JSONMap{}
+	}
+	if site.Credentials == nil {
+		site.Credentials = models.JSONMap{}
+	}
+	if result.BalanceUnit != nil && strings.TrimSpace(*result.BalanceUnit) != "" {
+		site.PluginConfig = mergeJSON(site.PluginConfig, models.JSONMap{"balance_unit": strings.TrimSpace(*result.BalanceUnit)})
+	}
+	balance := result.Balance
+	opCtx, cancel := siteOperationContext(r.Context(), timeout)
+	defer cancel()
+	status, err := plugin.FetchAccountStatus(opCtx, *site, timeout)
+	if err != nil {
+		if balance != nil {
+			return balance
+		}
+		return site.LastBalance
+	}
+	if status.Balance != nil {
+		balance = status.Balance
+	}
+	if status.BalanceUnit != nil && strings.TrimSpace(*status.BalanceUnit) != "" {
+		site.PluginConfig = mergeJSON(site.PluginConfig, models.JSONMap{"balance_unit": strings.TrimSpace(*status.BalanceUnit)})
+	}
+	if status.PackageDisplay != nil && strings.TrimSpace(*status.PackageDisplay) != "" {
+		site.PluginConfig = mergeJSON(site.PluginConfig, models.JSONMap{"package_display": strings.TrimSpace(*status.PackageDisplay)})
+	}
+	if status.InviteLink != nil && strings.TrimSpace(*status.InviteLink) != "" {
+		site.PluginConfig = mergeJSON(site.PluginConfig, models.JSONMap{"invite_link": strings.TrimSpace(*status.InviteLink)})
+	}
+	if status.InviteCode != nil && strings.TrimSpace(*status.InviteCode) != "" {
+		site.PluginConfig = mergeJSON(site.PluginConfig, models.JSONMap{"invite_code": strings.TrimSpace(*status.InviteCode)})
+	}
+	if len(status.UpdatedCredentials) > 0 {
+		mergeCredentialUpdates(site, status.UpdatedCredentials)
+	}
+	if len(status.UpdatedPluginConfig) > 0 {
+		site.PluginConfig = mergeJSON(site.PluginConfig, status.UpdatedPluginConfig)
+	}
+	if balance != nil {
+		return balance
+	}
+	return site.LastBalance
 }
 
 func includeInCheckin(site models.Site) bool {

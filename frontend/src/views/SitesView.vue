@@ -10,6 +10,7 @@ import {
   ShareAltOutlined,
   DollarCircleOutlined,
   DeleteOutlined,
+  MoreOutlined,
 } from '@ant-design/icons-vue'
 import { Modal } from 'ant-design-vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type ComponentPublicInstance } from 'vue'
@@ -24,6 +25,7 @@ import {
   getPlugins,
   getRuns,
   getSettings,
+  getSite,
   getSiteGroups,
   getSites,
   importCCSwitchConfig,
@@ -31,10 +33,13 @@ import {
   mergeDuplicateSites,
   probeSiteBalance,
   previewSiteTotp,
+  refreshOneSiteApiKeys,
+  refreshSiteApiKeys,
   refreshSiteInvites,
   refreshSiteSummaries,
   runSchedulerNow,
   runSiteCheckin,
+  syncGatewayRoutes,
   testSite,
   toggleSite,
   updateCheckinParticipation,
@@ -55,6 +60,7 @@ import type {
   PluginMeta,
   SettingsData,
   Site,
+  SiteApiKeyRefreshResult,
   SiteGroup,
   SiteInviteRefreshResult,
   SitePayload,
@@ -83,12 +89,14 @@ const inviteDialogOpen = ref(false)
 const inviteDialogLoading = ref(false)
 const inviteRefreshAllLoading = ref(false)
 const inviteLoadingSiteIds = ref<number[]>([])
+const apiKeyRefreshAllLoading = ref(false)
+const apiKeyRefreshingSiteIds = ref<number[]>([])
 const inviteDialogSiteId = ref<number | null>(null)
 const inviteDialogSiteName = ref('')
 const inviteDialogLink = ref('')
 const inviteDialogCode = ref('')
-const ccSwitchImportOpen = ref(false)
-const ccSwitchExportOpen = ref(false)
+const ccSwitchConfigOpen = ref(false)
+const ccSwitchConfigTab = ref<'import' | 'export'>('import')
 const ccSwitchImportLoading = ref(false)
 const ccSwitchExportLoading = ref(false)
 const ccSwitchSqlPreviewLoading = ref(false)
@@ -104,6 +112,7 @@ const ccSwitchResolveError = ref('')
 const duplicateCheckOpen = ref(false)
 const duplicateCheckLoading = ref(false)
 const duplicateMergeLoading = ref(false)
+const duplicateChecked = ref(false)
 const balanceProbeIds = ref<number[]>([])
 const duplicateGroups = ref<DuplicateSiteGroup[]>([])
 const duplicateSearch = ref('')
@@ -125,6 +134,7 @@ const checkinSettingsBusy = ref(false)
 const checkinRunSearch = ref('')
 const connectivitySweepProgress = ref<{ total: number; done: number; success: number; failed: number } | null>(null)
 const inviteRefreshProgress = ref<{ total: number; done: number; success: number; failed: number } | null>(null)
+const apiKeyRefreshProgress = ref<{ total: number; done: number; success: number; failed: number } | null>(null)
 const checkinBatchProgress = ref<{ total: number; done: number; success: number; failed: number } | null>(null)
 const checkinConfigForm = reactive<SettingsData>({
   timezone: 'Asia/Shanghai',
@@ -154,6 +164,7 @@ const checkinConfigForm = reactive<SettingsData>({
   runtime_default_config_dir: '',
   runtime_database_path: '',
   runtime_pending_config_dir: '',
+  security_warnings: [],
 })
 
 const apiKeyDialogForm = reactive({
@@ -162,12 +173,21 @@ const apiKeyDialogForm = reactive({
   endpoint_hint: '',
 })
 
+const manualApiKeyForm = reactive({
+  name: '',
+  key: '',
+  route_type: 'codex',
+})
+
 type SiteApiKeyEntry = {
   id: string
   name: string
   key: string
   status: string
   isPrimary: boolean
+  source: string
+  routeType: string
+  isManual: boolean
 }
 
 function bindPageTableContainer(element: Element | ComponentPublicInstance | null) {
@@ -465,6 +485,7 @@ const ccSwitchImportOkText = computed(() => (ccSwitchImportMode.value === 'sql' 
 const siteColumns = [
   { title: '站点', key: 'site', width: 320, sorter: (a: Site, b: Site) => a.name.localeCompare(b.name, 'zh-CN') },
   { title: '插件', key: 'plugin', width: 150, sorter: (a: Site, b: Site) => pluginNameFor(a.plugin_key).localeCompare(pluginNameFor(b.plugin_key), 'zh-CN') },
+  { title: 'API Key 数量', key: 'api_key_count', width: 170, sorter: (a: Site, b: Site) => siteApiKeyCount(a) - siteApiKeyCount(b) },
   { title: '余额', key: 'balance', width: 150, sorter: (a: Site, b: Site) => (a.last_balance ?? -Infinity) - (b.last_balance ?? -Infinity) },
   { title: '套餐', key: 'package', width: 160, sorter: (a: Site, b: Site) => String(a.package_display ?? '').localeCompare(String(b.package_display ?? ''), 'zh-CN') },
   { title: '签到状态', key: 'checkin_status', width: 120, sorter: (a: Site, b: Site) => String(visibleCheckinStatus(a) ?? '').localeCompare(String(visibleCheckinStatus(b) ?? ''), 'zh-CN') },
@@ -472,7 +493,7 @@ const siteColumns = [
   { title: '连通状态', key: 'status', width: 120, sorter: (a: Site, b: Site) => String(a.connection_status ?? '').localeCompare(String(b.connection_status ?? ''), 'zh-CN') },
   { title: '启用', key: 'enabled', width: 90, sorter: (a: Site, b: Site) => Number(a.is_enabled) - Number(b.is_enabled) },
   { title: '可签到', key: 'participation', width: 100, sorter: (a: Site, b: Site) => Number(checkinMeta.value.get(b.id)?.include_in_checkin ?? false) - Number(checkinMeta.value.get(a.id)?.include_in_checkin ?? false) },
-  { title: '操作', key: 'actions', width: 560, fixed: 'right' as const },
+  { title: '操作', key: 'actions', width: 136, fixed: 'right' as const },
 ]
 
 const checkinRunColumns = [
@@ -564,6 +585,7 @@ const filteredSites = computed(() => {
         site.last_message,
         site.balance_display,
         site.package_display,
+        siteApiKeyCountLabel(site),
       ],
       keyword,
     ),
@@ -766,7 +788,7 @@ const includedCheckinCount = computed(() =>
 
 const connectivitySweepLabel = computed(() => {
   if (!connectivitySweepProgress.value) {
-    return '一键连通测试'
+    return '连通测试'
   }
   const progress = connectivitySweepProgress.value
   return `连通中 ${progress.done}/${progress.total}`
@@ -774,11 +796,35 @@ const connectivitySweepLabel = computed(() => {
 
 const inviteRefreshAllLabel = computed(() => {
   if (!inviteRefreshProgress.value) {
-    return '一键刷新邀请'
+    return '刷新邀请'
   }
   const progress = inviteRefreshProgress.value
   return `邀请中 ${progress.done}/${progress.total}`
 })
+
+const apiKeyRefreshAllLabel = computed(() => {
+  if (!apiKeyRefreshProgress.value) {
+    return '更新全部 API Key'
+  }
+  const progress = apiKeyRefreshProgress.value
+  return `更新中 ${progress.done}/${progress.total}`
+})
+
+async function syncRoutesAfterApiKeyUpdate(successCount: number) {
+  if (successCount <= 0) {
+    return
+  }
+  await syncRoutesAfterSiteChange()
+}
+
+async function syncRoutesAfterSiteChange() {
+  try {
+    const result = await syncGatewayRoutes()
+    toast.success(`路由池已同步：${result.route_count} 条路由。`)
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '路由池同步失败')
+  }
+}
 
 const checkinAllIncludedLabel = computed(() => {
   if (!checkinBatchProgress.value) {
@@ -966,7 +1012,8 @@ async function loadData(
     if (editingId.value !== null && !options.preserveEditor) {
       const refreshedEditing = siteData.find((item) => item.id === editingId.value) ?? null
       if (refreshedEditing) {
-        assignEditor(refreshedEditing)
+        const fullSite = await getSite(refreshedEditing.id)
+        assignEditor(fullSite)
       }
     }
   } catch (err) {
@@ -993,14 +1040,23 @@ function openCreateDrawer() {
   drawerOpen.value = true
 }
 
-function openEditDrawer(site: Site) {
+async function openEditDrawer(site: Site) {
+  busy.value = true
   editingId.value = site.id
-  assignEditor(site)
   localStorageRawText.value = ''
   testFeedback.value = null
   saveFeedback.value = null
-  lastSavedEditorSnapshot.value = ''
-  drawerOpen.value = true
+  try {
+    const fullSite = await getSite(site.id)
+    assignEditor(fullSite)
+    lastSavedEditorSnapshot.value = JSON.stringify(editor)
+    drawerOpen.value = true
+  } catch (err) {
+    editingId.value = null
+    toast.error(err instanceof Error ? err.message : '站点详情加载失败')
+  } finally {
+    busy.value = false
+  }
 }
 
 function closeDrawer() {
@@ -1015,7 +1071,7 @@ function selectSite(site: Site) {
   testFeedback.value = null
 }
 
-function ensureField(model: Record<string, string | number | boolean>, key: string, type: string) {
+function ensureField(model: Record<string, any>, key: string, type: string) {
   if (model[key] === undefined) {
     model[key] = type === 'number' ? 0 : ''
   }
@@ -1072,6 +1128,80 @@ function normalizeStringList(values: unknown): string[] {
     .filter((item, index, source) => item && source.indexOf(item) === index)
 }
 
+function normalizeApiKeyRouteType(value: unknown): string {
+  const normalized = String(value ?? '').trim().toLowerCase()
+  if (normalized === 'claude' || normalized === 'anthropic') {
+    return 'claude'
+  }
+  if (normalized === 'gemini' || normalized === 'google') {
+    return 'gemini'
+  }
+  if (['codex', 'gpt', 'openai', 'chatgpt'].includes(normalized)) {
+    return 'codex'
+  }
+  return ''
+}
+
+function defaultApiKeyRouteType(site: Pick<Site, 'plugin_config'>): string {
+  const config = site.plugin_config as Record<string, unknown>
+  return normalizeApiKeyRouteType(config?.gateway_route_type) || normalizeApiKeyRouteType(config?.api_format) || 'codex'
+}
+
+function apiKeyEntryValue(item: Record<string, unknown>, key: string): string {
+  const value = String(item?.[key] ?? '').trim()
+  return value === '<nil>' ? '' : value
+}
+
+function isManualApiKeyEntry(item: Record<string, unknown>): boolean {
+  const source = apiKeyEntryValue(item, 'source').toLowerCase()
+  return source === 'manual' || source === 'custom' || source === 'user' || item?.is_custom === true || item?.manual === true
+}
+
+function storedApiKeyEntries(credentials: Record<string, unknown> | undefined): Record<string, unknown>[] {
+  const raw = credentials?.api_keys
+  if (!Array.isArray(raw)) {
+    return []
+  }
+  return raw
+    .map((item) => (item && typeof item === 'object' ? { ...(item as Record<string, unknown>) } : null))
+    .filter((item): item is Record<string, unknown> => Boolean(item && apiKeyEntryValue(item, 'key')))
+}
+
+function mergeApiKeyEntries(entries: Record<string, unknown>[]): Record<string, unknown>[] {
+  const seen = new Set<string>()
+  const out: Record<string, unknown>[] = []
+  for (const entry of entries) {
+    const key = apiKeyEntryValue(entry, 'key')
+    if (!key || seen.has(key)) {
+      continue
+    }
+    seen.add(key)
+    out.push({ ...entry, key })
+  }
+  return out
+}
+
+function storedApiKeyEntriesForEdit(site: Pick<Site, 'credentials' | 'plugin_config'>): Record<string, unknown>[] {
+  const credentials = site.credentials as Record<string, unknown>
+  const entries = storedApiKeyEntries(credentials)
+  const primaryKey = String(credentials?.api_key ?? '').trim()
+  if (primaryKey && !entries.some((item) => apiKeyEntryValue(item, 'key') === primaryKey)) {
+    return [
+      {
+        id: 'primary',
+        name: '默认 Key',
+        key: primaryKey,
+        status: 'active',
+        source: 'manual',
+        route_type: defaultApiKeyRouteType(site),
+        api_type: defaultApiKeyRouteType(site),
+      },
+      ...entries,
+    ]
+  }
+  return entries
+}
+
 function apiKeyValue(site: Pick<Site, 'credentials'>): string {
   const value = (site.credentials as Record<string, unknown>)?.api_key
   return typeof value === 'string' ? value.trim() : String(value ?? '').trim()
@@ -1079,21 +1209,28 @@ function apiKeyValue(site: Pick<Site, 'credentials'>): string {
 
 function siteApiKeyEntries(site: Pick<Site, 'credentials'>): SiteApiKeyEntry[] {
   const credentials = site.credentials as Record<string, unknown>
-  const raw = credentials?.api_keys
-  if (Array.isArray(raw) && raw.length) {
+  const raw = storedApiKeyEntries(credentials)
+  if (raw.length) {
     return raw
       .map((item, index) => {
-        const entry = item as Record<string, unknown>
-        const key = String(entry?.key ?? '').trim()
+        const entry = item
+        const key = apiKeyEntryValue(entry, 'key')
         if (!key) {
           return null
         }
+        const source = apiKeyEntryValue(entry, 'source')
+        const routeType = normalizeApiKeyRouteType(
+          entry?.route_type ?? entry?.api_type ?? entry?.api_format ?? entry?.type,
+        )
         return {
-          id: String(entry?.id ?? index),
-          name: String(entry?.name ?? '').trim() || `Key ${index + 1}`,
+          id: apiKeyEntryValue(entry, 'id') || `${source || 'api-key'}-${index}`,
+          name: apiKeyEntryValue(entry, 'name') || `Key ${index + 1}`,
           key,
-          status: String(entry?.status ?? '').trim() || 'unknown',
+          status: apiKeyEntryValue(entry, 'status') || 'unknown',
           isPrimary: Boolean(entry?.is_primary) || key === apiKeyValue(site),
+          source,
+          routeType,
+          isManual: isManualApiKeyEntry(entry),
         }
       })
       .filter((item): item is SiteApiKeyEntry => Boolean(item))
@@ -1110,8 +1247,41 @@ function siteApiKeyEntries(site: Pick<Site, 'credentials'>): SiteApiKeyEntry[] {
       key: fallback,
       status: 'active',
       isPrimary: true,
+      source: '',
+      routeType: '',
+      isManual: false,
     },
   ]
+}
+
+function siteApiKeyCount(site: Pick<Site, 'credentials'>): number {
+  return siteApiKeyEntries(site).length
+}
+
+function siteSupportsApiKeySync(site: Pick<Site, 'plugin_key'>): boolean {
+  return Boolean(pluginForKey(site.plugin_key)?.capabilities.includes('api_key_sync'))
+}
+
+function siteApiKeyCountNeedsEndpoint(site: Pick<Site, 'credentials' | 'plugin_key'>): boolean {
+  return siteApiKeyCount(site) === 0 && siteSupportsApiKeySync(site)
+}
+
+function siteApiKeyCountLabel(site: Pick<Site, 'credentials' | 'plugin_key'>): string {
+  const count = siteApiKeyCount(site)
+  if (count > 0) {
+    return `${count} 个`
+  }
+  if (siteApiKeyCountNeedsEndpoint(site)) {
+    return '补充 apikey 接口路径'
+  }
+  return '0'
+}
+
+function siteApiKeyCountTagColor(site: Pick<Site, 'credentials' | 'plugin_key'>): string {
+  if (siteApiKeyCount(site) > 0) {
+    return 'green'
+  }
+  return siteApiKeyCountNeedsEndpoint(site) ? 'warning' : 'default'
 }
 
 function requestApiUrlText(site: Pick<Site, 'plugin_config'>): string {
@@ -1147,6 +1317,16 @@ const apiKeyDialogEntries = computed(() => {
   return site ? siteApiKeyEntries(site) : []
 })
 
+const manualApiKeyEntries = computed(() =>
+  apiKeyDialogEntries.value.filter((entry) => entry.isManual),
+)
+
+const apiKeyRouteTypeOptions = [
+  { label: 'GPT / Codex', value: 'codex' },
+  { label: 'Claude', value: 'claude' },
+  { label: 'Gemini', value: 'gemini' },
+]
+
 function siteCheckinActionLabel(site: Site) {
   return checkinMetaFor(site)?.checkin_label || '签到'
 }
@@ -1166,6 +1346,7 @@ function applySiteSummary(summary: SiteSummary) {
   target.last_message = summary.last_message
   target.last_balance = summary.last_balance
   target.balance_display = summary.balance_display
+  applyPackageQuota(target, summary)
   target.package_display = summary.package_display
   if (summary.invite_link) {
     target.plugin_config = {
@@ -1197,7 +1378,11 @@ function isInviteLoading(siteId: number) {
   return inviteLoadingSiteIds.value.includes(siteId)
 }
 
-function applyInvitePluginConfig(targetSite: Site, updates?: Record<string, string | number | boolean>) {
+function isApiKeyRefreshing(siteId: number) {
+  return apiKeyRefreshingSiteIds.value.includes(siteId)
+}
+
+function applyInvitePluginConfig(targetSite: Site, updates?: Record<string, any>) {
   if (!updates) {
     return
   }
@@ -1213,6 +1398,7 @@ function applyInviteRefreshResult(result: SiteInviteRefreshResult) {
     return
   }
   applyInvitePluginConfig(target, result.updated_plugin_config)
+  applyPackageQuota(target, result)
   if (result.invite_link) {
     target.plugin_config = {
       ...target.plugin_config,
@@ -1232,6 +1418,37 @@ function applyInviteRefreshResult(result: SiteInviteRefreshResult) {
       package_display: result.package_display,
     }
   }
+}
+
+function applyPackageQuota(target: Site, source: {
+  package_remaining?: number | null
+  package_total?: number | null
+  package_used?: number | null
+  package_unit?: string | null
+}) {
+  if (source.package_remaining !== undefined) {
+    target.package_remaining = source.package_remaining
+  }
+  if (source.package_total !== undefined) {
+    target.package_total = source.package_total
+  }
+  if (source.package_used !== undefined) {
+    target.package_used = source.package_used
+  }
+  if (source.package_unit !== undefined) {
+    target.package_unit = source.package_unit
+  }
+}
+
+function applyApiKeyRefreshResult(result: SiteApiKeyRefreshResult) {
+  const target = sites.value.find((site) => site.id === result.site_id)
+  if (!target || !result.updated_credentials) {
+    return
+  }
+  target.credentials = {
+    ...(target.credentials as Record<string, unknown>),
+    ...result.updated_credentials,
+  } as Site['credentials']
 }
 
 async function refreshAllInvites() {
@@ -1276,6 +1493,49 @@ async function refreshAllInvites() {
     inviteLoadingSiteIds.value = inviteLoadingSiteIds.value.filter((siteId) => !refreshedIds.has(siteId))
     inviteRefreshProgress.value = null
     inviteRefreshAllLoading.value = false
+  }
+}
+
+async function refreshAllApiKeys() {
+  const targets = sites.value.filter((site) => site.is_enabled && siteSupportsApiKeySync(site))
+  if (!targets.length) {
+    toast.error('当前没有可更新 API Key 的启用站点。')
+    return
+  }
+
+  apiKeyRefreshAllLoading.value = true
+  apiKeyRefreshProgress.value = { total: targets.length, done: 0, success: 0, failed: 0 }
+  apiKeyRefreshingSiteIds.value = Array.from(new Set([...apiKeyRefreshingSiteIds.value, ...targets.map((site) => site.id)]))
+  try {
+    await runSiteBatch(targets, async (site) => {
+      try {
+        const result = await refreshOneSiteApiKeys(site.id)
+        applyApiKeyRefreshResult(result)
+        if (result.ok) {
+          apiKeyRefreshProgress.value!.success += 1
+        } else {
+          apiKeyRefreshProgress.value!.failed += 1
+        }
+      } catch {
+        apiKeyRefreshProgress.value!.failed += 1
+      } finally {
+        apiKeyRefreshProgress.value!.done += 1
+        apiKeyRefreshingSiteIds.value = apiKeyRefreshingSiteIds.value.filter((siteId) => siteId !== site.id)
+      }
+    })
+    if (apiKeyRefreshProgress.value.success > 0) {
+      toast.success(`API Key 更新完成：成功 ${apiKeyRefreshProgress.value.success}，失败 ${apiKeyRefreshProgress.value.failed}。`)
+      await syncRoutesAfterApiKeyUpdate(apiKeyRefreshProgress.value.success)
+    } else {
+      toast.error('未更新到可用 API Key。')
+    }
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '批量更新 API Key 失败')
+  } finally {
+    const refreshedIds = new Set(targets.map((site) => site.id))
+    apiKeyRefreshingSiteIds.value = apiKeyRefreshingSiteIds.value.filter((siteId) => !refreshedIds.has(siteId))
+    apiKeyRefreshProgress.value = null
+    apiKeyRefreshAllLoading.value = false
   }
 }
 
@@ -1386,9 +1646,47 @@ function refreshInviteDialog() {
   void loadInviteInfo(site, { force: true })
 }
 
+async function handleRefreshSiteApiKeys(site: Site) {
+  if (!siteSupportsApiKeySync(site)) {
+    toast.error('当前插件不支持 API Key 同步。')
+    return
+  }
+  apiKeyRefreshingSiteIds.value = Array.from(new Set([...apiKeyRefreshingSiteIds.value, site.id]))
+  try {
+    const result = await refreshSiteApiKeys({ site_ids: [site.id], only_enabled: false }).then((items) => items[0])
+    if (!result) {
+      throw new Error('站点未返回 API Key 更新结果。')
+    }
+    applyApiKeyRefreshResult(result)
+    if (result.ok) {
+      toast.success(`${site.name} ${result.message || `已更新 ${result.api_key_count} 个 API Key。`}`)
+      await syncRoutesAfterApiKeyUpdate(1)
+    } else {
+      toast.error(`${site.name} ${result.message || '未更新到可用 API Key。'}`)
+    }
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : 'API Key 更新失败')
+  } finally {
+    apiKeyRefreshingSiteIds.value = apiKeyRefreshingSiteIds.value.filter((item) => item !== site.id)
+  }
+}
+
 function applyCheckinResultForSite(
   siteId: number,
-  result: { status: string; message: string; balance: number | null; balance_unit?: string | null },
+  result: {
+    status: string
+    message: string
+    balance: number | null
+    balance_unit?: string | null
+    balance_display?: string | null
+    package_remaining?: number | null
+    package_total?: number | null
+    package_used?: number | null
+    package_unit?: string | null
+    package_display?: string | null
+    checkin_status?: string | null
+    connection_status?: string | null
+  },
 ) {
   const target = sites.value.find((site) => site.id === siteId)
   if (!target) {
@@ -1396,19 +1694,41 @@ function applyCheckinResultForSite(
   }
   const now = new Date().toISOString()
   target.last_status = result.status
-  target.checkin_status = result.status
+  target.connection_status = result.connection_status ?? result.status
+  target.checkin_status = result.checkin_status ?? result.status
   target.last_message = result.message
-  target.last_balance = result.balance
-  target.balance_display = formatBalance(result.balance, result.balance_unit)
+  if (result.balance !== null && result.balance !== undefined && !Number.isNaN(result.balance)) {
+    target.last_balance = result.balance
+    target.balance_display = result.balance_display || formatBalance(result.balance, result.balance_unit)
+  }
+  applyPackageQuota(target, result)
+  if (result.package_display) {
+    target.package_display = result.package_display
+  }
   target.last_run_at = now
 }
 
-function openApiKeyDialog(site: Site) {
-  apiKeyDialogSiteId.value = site.id
-  apiKeyDialogForm.site_name = site.name
-  apiKeyDialogForm.request_api_urls = requestApiUrlText(site)
-  apiKeyDialogForm.endpoint_hint = defaultRequestApiUrl(site)
-  apiKeyDialogOpen.value = true
+async function openApiKeyDialog(site: Site) {
+  apiKeyDialogSaving.value = true
+  try {
+    const fullSite = await getSite(site.id)
+    const index = sites.value.findIndex((item) => item.id === fullSite.id)
+    if (index >= 0) {
+      sites.value[index] = fullSite
+    }
+    apiKeyDialogSiteId.value = fullSite.id
+    apiKeyDialogForm.site_name = fullSite.name
+    apiKeyDialogForm.request_api_urls = requestApiUrlText(fullSite)
+    apiKeyDialogForm.endpoint_hint = defaultRequestApiUrl(fullSite)
+    manualApiKeyForm.name = ''
+    manualApiKeyForm.key = ''
+    manualApiKeyForm.route_type = defaultApiKeyRouteType(fullSite)
+    apiKeyDialogOpen.value = true
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : 'API Key 配置加载失败')
+  } finally {
+    apiKeyDialogSaving.value = false
+  }
 }
 
 async function copyApiKeyFromDialog(value: string) {
@@ -1435,6 +1755,90 @@ async function copyPrimaryApiKeyFromDialog() {
   await copyApiKeyFromDialog(value)
 }
 
+function apiKeyRouteTypeLabel(value: string) {
+  return apiKeyRouteTypeOptions.find((option) => option.value === value)?.label ?? '默认类型'
+}
+
+function apiKeySourceLabel(entry: SiteApiKeyEntry) {
+  if (entry.isManual) {
+    return '自定义'
+  }
+  return entry.source ? '接口' : '默认'
+}
+
+function upsertApiKeyDialogSiteCredentials(updater: (site: Site, credentials: Record<string, unknown>) => Record<string, unknown>) {
+  const site = apiKeyDialogSite.value
+  if (!site) {
+    return
+  }
+  const credentials = updater(site, { ...(site.credentials as Record<string, unknown>) })
+  site.credentials = credentials as Site['credentials']
+  const index = sites.value.findIndex((item) => item.id === site.id)
+  if (index >= 0) {
+    sites.value[index] = {
+      ...sites.value[index],
+      credentials: credentials as Site['credentials'],
+    }
+  }
+}
+
+function addManualApiKey() {
+  const key = manualApiKeyForm.key.trim()
+  if (!key) {
+    toast.error('请先填写自定义 API Key。')
+    return
+  }
+  const site = apiKeyDialogSite.value
+  if (!site) {
+    return
+  }
+  const routeType = normalizeApiKeyRouteType(manualApiKeyForm.route_type) || defaultApiKeyRouteType(site)
+  const name = manualApiKeyForm.name.trim() || `自定义 Key ${manualApiKeyEntries.value.length + 1}`
+  const entry = {
+    id: `manual-${Date.now()}`,
+    name,
+    key,
+    status: 'active',
+    source: 'manual',
+    route_type: routeType,
+    api_type: routeType,
+  }
+  upsertApiKeyDialogSiteCredentials((currentSite, credentials) => {
+    const entries = storedApiKeyEntriesForEdit({ ...currentSite, credentials })
+    const exists = entries.some((item) => apiKeyEntryValue(item, 'key') === key)
+    if (exists) {
+      toast.info('已存在相同 API Key，保存后同步接口条目会优先生效。')
+      return credentials
+    }
+    const next = mergeApiKeyEntries([...entries, entry])
+    return {
+      ...credentials,
+      api_keys: next,
+      api_key: String(credentials.api_key ?? '').trim() || key,
+    }
+  })
+  manualApiKeyForm.name = ''
+  manualApiKeyForm.key = ''
+  manualApiKeyForm.route_type = defaultApiKeyRouteType(site)
+}
+
+function removeManualApiKey(entry: SiteApiKeyEntry) {
+  if (!entry.isManual) {
+    return
+  }
+  upsertApiKeyDialogSiteCredentials((_site, credentials) => {
+    const next = storedApiKeyEntries(credentials).filter((item) => apiKeyEntryValue(item, 'key') !== entry.key)
+    const credentialUpdates: Record<string, unknown> = {
+      ...credentials,
+      api_keys: next,
+    }
+    if (apiKeyValue({ credentials }) === entry.key) {
+      credentialUpdates.api_key = apiKeyEntryValue(next[0] ?? {}, 'key')
+    }
+    return credentialUpdates
+  })
+}
+
 async function saveApiKeyDialog() {
   const site = apiKeyDialogSite.value
   if (!site) {
@@ -1453,9 +1857,15 @@ async function saveApiKeyDialog() {
       plugin_config: JSON.parse(JSON.stringify(site.plugin_config)),
     }
     payload.plugin_config.api_request_urls = normalizeStringList(apiKeyDialogForm.request_api_urls).join('\n')
+    const credentials = payload.credentials as Record<string, unknown>
+    credentials.api_keys = mergeApiKeyEntries(storedApiKeyEntriesForEdit({
+      credentials,
+      plugin_config: payload.plugin_config,
+    }))
     await updateSite(site.id, payload)
     apiKeyDialogOpen.value = false
-    toast.success(`${site.name} 请求 API 列表已更新。`)
+    toast.success(`${site.name} API Key 配置已保存。`)
+    await syncRoutesAfterApiKeyUpdate(1)
     await loadData(site.id)
   } catch (err) {
     toast.error(err instanceof Error ? err.message : '保存失败')
@@ -1561,6 +1971,14 @@ function resetCCSwitchSqlPreview() {
   ccSwitchResolveError.value = ''
 }
 
+function openCCSwitchConfig(tab: 'import' | 'export' = 'import') {
+  ccSwitchConfigTab.value = tab
+  ccSwitchConfigOpen.value = true
+  if (tab === 'export' && !ccSwitchExportText.value.trim() && !ccSwitchExportLoading.value) {
+    void handleCCSwitchExport()
+  }
+}
+
 async function handleCCSwitchFileChange(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
@@ -1569,7 +1987,7 @@ async function handleCCSwitchFileChange(event: Event) {
   }
   ccSwitchImportMode.value = file.name.toLowerCase().endsWith('.sql') ? 'sql' : 'json'
   ccSwitchImportText.value = await file.text()
-  ccSwitchImportOpen.value = true
+  openCCSwitchConfig('import')
   input.value = ''
   if (ccSwitchImportMode.value === 'sql') {
     await resolveCCSwitchSqlPreview()
@@ -1629,7 +2047,7 @@ async function submitCCSwitchImport() {
       : await importCCSwitchConfig(payload as Record<string, unknown>, {
         sectionKeys: ccSwitchSelectedSections.value,
       })
-    ccSwitchImportOpen.value = false
+    ccSwitchConfigOpen.value = false
     await loadData(result.imported_site_ids[0] ?? selectedId.value)
     scheduleSummaryRefresh()
     toast.success(`导入完成：新增 ${result.created}，更新 ${result.updated}，删除 ${result.deleted}，跳过 ${result.skipped}。`)
@@ -1674,7 +2092,6 @@ async function handleCCSwitchExport() {
   try {
     const result = await exportCCSwitchConfig()
     ccSwitchExportText.value = JSON.stringify(result.payload, null, 2)
-    ccSwitchExportOpen.value = true
     toast.success(`已生成 ${result.site_count} 条供应商配置。`)
   } catch (err) {
     toast.error(err instanceof Error ? err.message : '供应商导出失败')
@@ -1686,6 +2103,7 @@ async function handleCCSwitchExport() {
 async function handleDuplicateCheck() {
   duplicateCheckLoading.value = true
   duplicateCheckOpen.value = true
+  duplicateChecked.value = true
   try {
     duplicateGroups.value = await getDuplicateSites()
     toast.success(`检测完成：发现 ${duplicateGroups.value.length} 组重复站点。`)
@@ -1707,6 +2125,7 @@ async function handleSuggestedDuplicateMerge() {
     try {
       groups = await getDuplicateSites()
       duplicateGroups.value = groups
+      duplicateChecked.value = true
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '清理检测失败')
       duplicateCheckLoading.value = false
@@ -1734,6 +2153,7 @@ async function handleSuggestedDuplicateMerge() {
         const result = await mergeDuplicateSites()
         await loadData(selectedId.value)
         duplicateGroups.value = await getDuplicateSites()
+        duplicateChecked.value = true
         duplicateCheckOpen.value = true
         toast.success(
           result.merged_group_count
@@ -2085,6 +2505,7 @@ async function saveSite() {
     await ensureStorageAnalysisFinished()
     const saved = await persistEditor()
     if (saved) {
+      await syncRoutesAfterSiteChange()
       await reloadDataWithCheckinExtras(saved.id)
     }
   } catch (err) {
@@ -2244,6 +2665,7 @@ async function handleToggle(site: Site) {
   busy.value = true
   try {
     await toggleSite(site.id)
+    await syncRoutesAfterSiteChange()
     await loadData(selectedSite.value?.id ?? site.id)
     toast.success(site.is_enabled ? '站点已停用。' : '站点已启用。')
   } catch (err) {
@@ -2265,6 +2687,7 @@ async function handleDelete(targetSite = selectedSite.value) {
   busy.value = true
   try {
     await deleteSite(targetSite.id)
+    await syncRoutesAfterSiteChange()
     drawerOpen.value = false
     editingId.value = null
     await loadData(null)
@@ -2438,10 +2861,14 @@ onBeforeUnmount(() => {
             </template>
             {{ inviteRefreshAllLabel }}
           </a-button>
+          <a-button :loading="apiKeyRefreshAllLoading" @click="refreshAllApiKeys">
+            <template #icon>
+              <KeyOutlined />
+            </template>
+            {{ apiKeyRefreshAllLabel }}
+          </a-button>
           <a-button :loading="duplicateCheckLoading" @click="handleDuplicateCheck">清理检测</a-button>
-          <a-button type="primary" :loading="duplicateMergeLoading" @click="handleSuggestedDuplicateMerge">一键按建议合并</a-button>
-          <a-button :loading="ccSwitchExportLoading" @click="handleCCSwitchExport">导出供应商</a-button>
-          <a-button @click="ccSwitchImportOpen = true">导入供应商</a-button>
+          <a-button :loading="ccSwitchExportLoading" @click="openCCSwitchConfig('import')">供应商配置</a-button>
           <a-button type="primary" @click="openCreateDrawer">
             <template #icon>
               <PlusOutlined />
@@ -2500,155 +2927,182 @@ onBeforeUnmount(() => {
         </a-col>
       </a-row>
 
-      <a-row :gutter="[16, 16]" class="page-grid-fill">
-        <a-col :xs="24">
-          <a-card :bordered="false" class="admin-card admin-card--fill">
-            <template #title>站点列表</template>
-            <template #extra>
-              <a-space>
-                <a-input
-                  v-model:value="siteSearch"
-                  allow-clear
-                  placeholder="搜索站点 / 域名 / 分组"
-                  style="width: 240px"
-                />
-                <span>{{ groupedSiteCount }} 个已分组</span>
-                <span>已选签到 {{ selectedCheckinIds.length }} 个</span>
-                <a-button
-                  type="primary"
-                  :disabled="!selectedCheckinIds.length || busy"
-                  @click="handleCheckinSelected"
-                >
-                  {{ checkinBatchProgress ? `签到中 ${checkinBatchProgress.done}/${checkinBatchProgress.total}` : '签到选中' }}
-                </a-button>
-                <a-button :disabled="!selectedCheckinIds.length" @click="selectedCheckinIds = []">清空选择</a-button>
-              </a-space>
-            </template>
+      <a-card :bordered="false" class="admin-card admin-card--fill site-list-card">
+        <template #title>站点列表</template>
+        <template #extra>
+          <a-space>
+            <a-input
+              v-model:value="siteSearch"
+              allow-clear
+              placeholder="搜索站点 / 域名 / 分组"
+              style="width: 240px"
+            />
+            <span>{{ groupedSiteCount }} 个已分组</span>
+            <span>已选签到 {{ selectedCheckinIds.length }} 个</span>
+            <a-button
+              type="primary"
+              :disabled="!selectedCheckinIds.length || busy"
+              @click="handleCheckinSelected"
+            >
+              {{ checkinBatchProgress ? `签到中 ${checkinBatchProgress.done}/${checkinBatchProgress.total}` : '签到选中' }}
+            </a-button>
+            <a-button :disabled="!selectedCheckinIds.length" @click="selectedCheckinIds = []">清空选择</a-button>
+          </a-space>
+        </template>
 
-            <div class="card-shell">
-              <div :ref="bindPageTableContainer" class="table-fill table-fill--management">
-                <a-table
-                  :columns="siteColumns"
-                  :data-source="filteredSites"
-                  :pagination="{ pageSize: tablePageSize }"
-                  :row-key="rowKey"
-                  :row-selection="checkinRowSelection"
-                  size="middle"
-                  :custom-row="siteCustomRow"
-                  :row-class-name="siteRowClassName"
-                  :scroll="{ x: 1780, y: pageTableY }"
-                >
-                  <template #bodyCell="{ column, record }">
-                    <template v-if="column.key === 'site'">
-                      <div class="site-table-cell">
-                        <div class="site-name-cell">
-                          <strong>{{ record.name }}</strong>
-                          <a-tooltip title="新标签页打开站点">
-                            <a-button
-                              type="text"
-                              size="small"
-                              class="site-name-open-btn"
-                              @click.stop="handleOpenSiteInNewTab(asSite(record))"
-                            >
-                              <template #icon>
-                                <ExportOutlined />
-                              </template>
-                            </a-button>
-                          </a-tooltip>
-                        </div>
-                      </div>
-                    </template>
-                    <template v-else-if="column.key === 'plugin'">
-                      <PluginTag :plugin-key="record.plugin_key" :label="displayPluginLabel(asSite(record))" />
-                    </template>
-                    <template v-else-if="column.key === 'balance'">
-                      <span :class="balanceClass(record.last_balance)">
-                        {{ record.balance_display || '暂无' }}
-                      </span>
-                    </template>
-                    <template v-else-if="column.key === 'package'">
-                      {{ record.package_display || '暂无' }}
-                    </template>
-                    <template v-else-if="column.key === 'checkin_status'">
-                      <StatusPill v-if="visibleCheckinStatus(asSite(record))" :value="visibleCheckinStatus(asSite(record))" />
-                    </template>
-                    <template v-else-if="column.key === 'group'">
-                      <span>{{ displayGroupName(asSite(record)) }}</span>
-                    </template>
-                    <template v-else-if="column.key === 'status'">
-                      <StatusPill :value="record.connection_status" />
-                    </template>
-                    <template v-else-if="column.key === 'enabled'">
-                      <a-switch
-                        :checked="asSite(record).is_enabled"
-                        checked-children="开"
-                        un-checked-children="关"
-                        @click.stop
-                        @change="() => handleToggle(asSite(record))"
-                      />
-                    </template>
-                    <template v-else-if="column.key === 'participation'">
-                      <a-switch
-                        :checked="siteIncludedInCheckin(asSite(record))"
-                        :disabled="!siteCanCheckin(asSite(record))"
-                        checked-children="可以"
-                        un-checked-children="禁止"
-                        @click.stop
-                        @change="(checked) => handleParticipationToggle(asSite(record), checked)"
-                      />
-                    </template>
-                    <template v-else-if="column.key === 'actions'">
-                      <a-space wrap size="small">
-                        <a-button size="small" type="primary" ghost @click.stop="openEditDrawer(asSite(record))">
-                          <template #icon><EditOutlined /></template>
-                          编辑
-                        </a-button>
-                        <a-button size="small" @click.stop="handleTest(asSite(record))">
-                          <template #icon><ExperimentOutlined /></template>
-                          {{ isRelayOnlySitePayload(asSite(record)) ? '验证' : '测试' }}
-                        </a-button>
+        <div class="card-shell">
+          <div :ref="bindPageTableContainer" class="table-fill table-fill--management">
+            <a-table
+              :columns="siteColumns"
+              :data-source="filteredSites"
+              :pagination="{ pageSize: tablePageSize }"
+              :row-key="rowKey"
+              :row-selection="checkinRowSelection"
+              size="middle"
+              :custom-row="siteCustomRow"
+              :row-class-name="siteRowClassName"
+              :scroll="{ x: 1530, y: pageTableY }"
+            >
+              <template #bodyCell="{ column, record }">
+                <template v-if="column.key === 'site'">
+                  <div class="site-table-cell">
+                    <div class="site-name-cell">
+                      <strong>{{ record.name }}</strong>
+                      <a-tooltip title="新标签页打开站点">
                         <a-button
-                          v-if="siteCanCheckin(asSite(record)) && !isRelayOnlySitePayload(asSite(record))"
+                          type="text"
                           size="small"
-                          @click.stop="handleCheckin(asSite(record))"
+                          class="site-name-open-btn"
+                          @click.stop="handleOpenSiteInNewTab(asSite(record))"
                         >
-                          <template #icon><CheckCircleOutlined /></template>
-                          {{ siteCheckinActionLabel(asSite(record)) }}
+                          <template #icon>
+                            <ExportOutlined />
+                          </template>
                         </a-button>
-                        <a-button size="small" @click.stop="openApiKeyDialog(asSite(record))">
-                          <template #icon><KeyOutlined /></template>
-                          API Key
-                        </a-button>
-                        <a-button
-                          v-if="siteSupportsInvite(asSite(record))"
-                          size="small"
-                          :loading="isInviteLoading(asSite(record).id)"
-                          @click.stop="loadInviteInfo(asSite(record))"
-                        >
-                          <template #icon><ShareAltOutlined /></template>
-                          邀请
-                        </a-button>
+                      </a-tooltip>
+                    </div>
+                  </div>
+                </template>
+                <template v-else-if="column.key === 'plugin'">
+                  <PluginTag :plugin-key="record.plugin_key" :label="displayPluginLabel(asSite(record))" />
+                </template>
+                <template v-else-if="column.key === 'api_key_count'">
+                  <a-tag :color="siteApiKeyCountTagColor(asSite(record))">
+                    {{ siteApiKeyCountLabel(asSite(record)) }}
+                  </a-tag>
+                </template>
+                <template v-else-if="column.key === 'balance'">
+                  <span :class="balanceClass(record.last_balance)">
+                    {{ record.balance_display || '暂无' }}
+                  </span>
+                </template>
+                <template v-else-if="column.key === 'package'">
+                  {{ record.package_display || '暂无' }}
+                </template>
+                <template v-else-if="column.key === 'checkin_status'">
+                  <StatusPill v-if="visibleCheckinStatus(asSite(record))" :value="visibleCheckinStatus(asSite(record))" />
+                </template>
+                <template v-else-if="column.key === 'group'">
+                  <span>{{ displayGroupName(asSite(record)) }}</span>
+                </template>
+                <template v-else-if="column.key === 'status'">
+                  <StatusPill :value="record.connection_status" />
+                </template>
+                <template v-else-if="column.key === 'enabled'">
+                  <a-switch
+                    :checked="asSite(record).is_enabled"
+                    checked-children="开"
+                    un-checked-children="关"
+                    @click.stop
+                    @change="() => handleToggle(asSite(record))"
+                  />
+                </template>
+                <template v-else-if="column.key === 'participation'">
+                  <a-switch
+                    :checked="siteIncludedInCheckin(asSite(record))"
+                    :disabled="!siteCanCheckin(asSite(record))"
+                    checked-children="可以"
+                    un-checked-children="禁止"
+                    @click.stop
+                    @change="(checked) => handleParticipationToggle(asSite(record), checked)"
+                  />
+                </template>
+                <template v-else-if="column.key === 'actions'">
+                  <a-space size="small" class="site-actions-cell">
+                    <a-button size="small" type="primary" ghost @click.stop="openEditDrawer(asSite(record))">
+                      <template #icon><EditOutlined /></template>
+                      编辑
+                    </a-button>
+                    <a-dropdown :trigger="['click']">
+                      <a-tooltip title="更多操作">
                         <a-button
                           size="small"
-                          :loading="isBalanceProbing(asSite(record).id)"
-                          @click.stop="handleProbeSiteBalance(asSite(record))"
+                          class="site-actions-menu-button"
+                          :loading="isInviteLoading(asSite(record).id) || isBalanceProbing(asSite(record).id) || isApiKeyRefreshing(asSite(record).id)"
+                          @click.stop
                         >
-                          <template #icon><DollarCircleOutlined /></template>
-                          余额
+                          <template #icon><MoreOutlined /></template>
                         </a-button>
-                        <a-button size="small" danger @click.stop="handleDelete(asSite(record))">
-                          <template #icon><DeleteOutlined /></template>
-                          删除
-                        </a-button>
-                      </a-space>
-                    </template>
-                  </template>
-                </a-table>
-              </div>
-            </div>
-          </a-card>
-        </a-col>
-      </a-row>
+                      </a-tooltip>
+                      <template #overlay>
+                        <a-menu @click.stop>
+                          <a-menu-item key="test" @click="handleTest(asSite(record))">
+                            <ExperimentOutlined />
+                            <span>{{ isRelayOnlySitePayload(asSite(record)) ? '验证出口' : '测试连接' }}</span>
+                          </a-menu-item>
+                          <a-menu-item
+                            v-if="siteCanCheckin(asSite(record)) && !isRelayOnlySitePayload(asSite(record))"
+                            key="checkin"
+                            @click="handleCheckin(asSite(record))"
+                          >
+                            <CheckCircleOutlined />
+                            <span>{{ siteCheckinActionLabel(asSite(record)) }}</span>
+                          </a-menu-item>
+                          <a-menu-item key="api-key" @click="openApiKeyDialog(asSite(record))">
+                            <KeyOutlined />
+                            <span>API Key</span>
+                          </a-menu-item>
+                          <a-menu-item
+                            v-if="siteSupportsApiKeySync(asSite(record))"
+                            key="api-key-refresh"
+                            :disabled="isApiKeyRefreshing(asSite(record).id)"
+                            @click="handleRefreshSiteApiKeys(asSite(record))"
+                          >
+                            <ReloadOutlined />
+                            <span>{{ isApiKeyRefreshing(asSite(record).id) ? '更新中' : '更新 API Key' }}</span>
+                          </a-menu-item>
+                          <a-menu-item
+                            v-if="siteSupportsInvite(asSite(record))"
+                            key="invite"
+                            :disabled="isInviteLoading(asSite(record).id)"
+                            @click="loadInviteInfo(asSite(record))"
+                          >
+                            <ShareAltOutlined />
+                            <span>{{ isInviteLoading(asSite(record).id) ? '邀请读取中' : '邀请信息' }}</span>
+                          </a-menu-item>
+                          <a-menu-item
+                            key="balance"
+                            :disabled="isBalanceProbing(asSite(record).id)"
+                            @click="handleProbeSiteBalance(asSite(record))"
+                          >
+                            <DollarCircleOutlined />
+                            <span>{{ isBalanceProbing(asSite(record).id) ? '余额读取中' : '读取余额' }}</span>
+                          </a-menu-item>
+                          <a-menu-divider />
+                          <a-menu-item key="delete" danger @click="handleDelete(asSite(record))">
+                            <DeleteOutlined />
+                            <span>删除站点</span>
+                          </a-menu-item>
+                        </a-menu>
+                      </template>
+                    </a-dropdown>
+                  </a-space>
+                </template>
+              </template>
+            </a-table>
+          </div>
+        </div>
+      </a-card>
 
       <a-drawer
         v-model:open="drawerOpen"
@@ -2675,7 +3129,7 @@ onBeforeUnmount(() => {
           >
             <template #description>
               <a-button type="link" style="padding: 0" @click="applyRecommendedPlugin">
-                一键切换到推荐插件
+                切换到推荐插件
               </a-button>
             </template>
           </a-alert>
@@ -2989,101 +3443,118 @@ onBeforeUnmount(() => {
       </a-drawer>
 
       <a-modal
-        v-model:open="ccSwitchImportOpen"
-        title="导入供应商配置"
+        v-model:open="ccSwitchConfigOpen"
+        title="供应商配置"
         width="820px"
         :confirm-loading="ccSwitchImportLoading"
         :ok-text="ccSwitchImportOkText"
+        :footer="ccSwitchConfigTab === 'import' ? undefined : null"
         @ok="submitCCSwitchImport"
       >
-        <a-space style="margin-bottom: 12px">
-          <a-radio-group v-model:value="ccSwitchImportMode" button-style="solid">
-            <a-radio-button value="json">JSON</a-radio-button>
-            <a-radio-button value="sql">SQL</a-radio-button>
-          </a-radio-group>
-          <a-button @click="openCCSwitchFilePicker">{{ ccSwitchFileButtonLabel }}</a-button>
-          <a-button
-            v-if="ccSwitchImportMode === 'sql'"
-            :loading="ccSwitchSqlPreviewLoading"
-            @click="resolveCCSwitchSqlPreview"
-          >
-            解析 SQL
-          </a-button>
-        </a-space>
-        <a-textarea
-          v-model:value="ccSwitchImportText"
-          :rows="12"
-          :placeholder="ccSwitchImportPlaceholder"
-        />
-        <a-alert
-          v-if="ccSwitchPreviewError"
-          type="error"
-          show-icon
-          style="margin-top: 12px"
-          :message="ccSwitchPreviewError"
-        />
-        <div v-else-if="ccSwitchPreviewRows.length" class="result-block" style="margin-top: 12px">
-          <a-space>
-            <a-select
-              v-model:value="ccSwitchSelectedSections"
-              mode="multiple"
-              :options="ccSwitchSectionOptions"
-              placeholder="选择要导入的供应商分类"
-              style="min-width: 260px"
+        <a-tabs v-model:active-key="ccSwitchConfigTab" :animated="false">
+          <a-tab-pane key="import" tab="导入">
+            <a-space style="margin-bottom: 12px">
+              <a-radio-group v-model:value="ccSwitchImportMode" button-style="solid">
+                <a-radio-button value="json">JSON</a-radio-button>
+                <a-radio-button value="sql">SQL</a-radio-button>
+              </a-radio-group>
+              <a-button @click="openCCSwitchFilePicker">{{ ccSwitchFileButtonLabel }}</a-button>
+              <a-button
+                v-if="ccSwitchImportMode === 'sql'"
+                :loading="ccSwitchSqlPreviewLoading"
+                @click="resolveCCSwitchSqlPreview"
+              >
+                解析 SQL
+              </a-button>
+            </a-space>
+            <a-textarea
+              v-model:value="ccSwitchImportText"
+              :rows="12"
+              :placeholder="ccSwitchImportPlaceholder"
             />
-            <a-input
-              v-model:value="ccSwitchPreviewSearch"
-              allow-clear
-              placeholder="搜索名称 / 站点 / 备注"
-              style="width: 240px"
+            <a-alert
+              v-if="ccSwitchPreviewError"
+              type="error"
+              show-icon
+              style="margin-top: 12px"
+              :message="ccSwitchPreviewError"
             />
-          </a-space>
-          <a-space wrap>
-            <a-tag
-              v-for="item in ccSwitchSectionOptions"
-              :key="item.value"
-              :color="ccSwitchSelectedSections.includes(String(item.value)) ? 'processing' : 'default'"
-            >
-              {{ item.label }}
-            </a-tag>
-            <a-tag color="red">
-              缺认证 {{ ccSwitchFilteredPreviewRows.filter((item) => !item.hasAuth).length }}
-            </a-tag>
-            <a-tag>合计 {{ ccSwitchFilteredPreviewRows.length }}</a-tag>
-          </a-space>
-          <div class="table-fill table-fill--management table-fill--modal">
-            <a-table
-            :columns="ccSwitchPreviewColumns"
-            :data-source="ccSwitchFilteredPreviewRows"
-            :loading="ccSwitchSqlPreviewLoading"
-            :pagination="{ pageSize: tablePageSize }"
-            :row-key="ccSwitchPreviewRowKey"
-            size="small"
-              :scroll="{ x: 860, y: modalTableY }"
-            >
-              <template #bodyCell="{ column, record }">
-                <template v-if="column.key === 'current'">
-                  <a-tag v-if="record.isCurrent" color="processing">默认</a-tag>
-                  <span v-else>-</span>
-                </template>
-                <template v-else-if="column.key === 'name'">
-                  <a-space size="small">
-                    <a-tag v-if="!record.hasAuth" color="error">缺认证</a-tag>
-                    <span>{{ record.name }}</span>
-                  </a-space>
-                </template>
-                <template v-else-if="column.key === 'website'">
-                  <span>{{ record.website || '未填写' }}</span>
-                </template>
-                <template v-else-if="column.key === 'apiKeyStatus'">
-                  <a-tag :color="record.hasAuth ? 'green' : 'red'">
-                    {{ record.apiKeyStatus }}
-                  </a-tag>
-                </template>
-              </template>
-            </a-table>
-          </div>
-        </div>
+            <div v-else-if="ccSwitchPreviewRows.length" class="result-block" style="margin-top: 12px">
+              <a-space>
+                <a-select
+                  v-model:value="ccSwitchSelectedSections"
+                  mode="multiple"
+                  :options="ccSwitchSectionOptions"
+                  placeholder="选择要导入的供应商分类"
+                  style="min-width: 260px"
+                />
+                <a-input
+                  v-model:value="ccSwitchPreviewSearch"
+                  allow-clear
+                  placeholder="搜索名称 / 站点 / 备注"
+                  style="width: 240px"
+                />
+              </a-space>
+              <a-space wrap>
+                <a-tag
+                  v-for="item in ccSwitchSectionOptions"
+                  :key="item.value"
+                  :color="ccSwitchSelectedSections.includes(String(item.value)) ? 'processing' : 'default'"
+                >
+                  {{ item.label }}
+                </a-tag>
+                <a-tag color="red">
+                  缺认证 {{ ccSwitchFilteredPreviewRows.filter((item) => !item.hasAuth).length }}
+                </a-tag>
+                <a-tag>合计 {{ ccSwitchFilteredPreviewRows.length }}</a-tag>
+              </a-space>
+              <div class="table-fill table-fill--management table-fill--modal">
+                <a-table
+                  :columns="ccSwitchPreviewColumns"
+                  :data-source="ccSwitchFilteredPreviewRows"
+                  :loading="ccSwitchSqlPreviewLoading"
+                  :pagination="{ pageSize: tablePageSize }"
+                  :row-key="ccSwitchPreviewRowKey"
+                  size="small"
+                  :scroll="{ x: 860, y: modalTableY }"
+                >
+                  <template #bodyCell="{ column, record }">
+                    <template v-if="column.key === 'current'">
+                      <a-tag v-if="record.isCurrent" color="processing">默认</a-tag>
+                      <span v-else>-</span>
+                    </template>
+                    <template v-else-if="column.key === 'name'">
+                      <a-space size="small">
+                        <a-tag v-if="!record.hasAuth" color="error">缺认证</a-tag>
+                        <span>{{ record.name }}</span>
+                      </a-space>
+                    </template>
+                    <template v-else-if="column.key === 'website'">
+                      <span>{{ record.website || '未填写' }}</span>
+                    </template>
+                    <template v-else-if="column.key === 'apiKeyStatus'">
+                      <a-tag :color="record.hasAuth ? 'green' : 'red'">
+                        {{ record.apiKeyStatus }}
+                      </a-tag>
+                    </template>
+                  </template>
+                </a-table>
+              </div>
+            </div>
+          </a-tab-pane>
+          <a-tab-pane key="export" tab="导出">
+            <a-space style="margin-bottom: 12px">
+              <a-button :loading="ccSwitchExportLoading" @click="handleCCSwitchExport">重新生成</a-button>
+              <a-button type="primary" :disabled="!ccSwitchExportText.trim()" @click="downloadCCSwitchExport">下载 JSON</a-button>
+            </a-space>
+            <a-textarea
+              :value="ccSwitchExportText"
+              :rows="20"
+              readonly
+              placeholder="点击重新生成后显示导出内容"
+            />
+          </a-tab-pane>
+        </a-tabs>
       </a-modal>
 
       <a-modal
@@ -3091,6 +3562,13 @@ onBeforeUnmount(() => {
         title="清理检测"
         width="1080px"
       >
+        <a-alert
+          v-if="duplicateChecked && !duplicateGroups.length"
+          type="success"
+          show-icon
+          message="未发现需要合并的重复站点。"
+          style="margin-bottom: 12px"
+        />
         <a-input
           v-model:value="duplicateSearch"
           allow-clear
@@ -3137,26 +3615,10 @@ onBeforeUnmount(() => {
           <a-space>
             <a-button @click="duplicateCheckOpen = false">关闭</a-button>
             <a-button type="primary" :loading="duplicateMergeLoading" @click="handleSuggestedDuplicateMerge">
-              按建议合并全部
+              按建议合并
             </a-button>
           </a-space>
         </template>
-      </a-modal>
-
-      <a-modal
-        v-model:open="ccSwitchExportOpen"
-        title="导出供应商配置"
-        width="900px"
-        :footer="null"
-      >
-        <a-space style="margin-bottom: 12px">
-          <a-button type="primary" @click="downloadCCSwitchExport">下载 JSON</a-button>
-        </a-space>
-        <a-textarea
-          :value="ccSwitchExportText"
-          :rows="20"
-          readonly
-        />
       </a-modal>
 
       <a-modal
@@ -3207,7 +3669,7 @@ onBeforeUnmount(() => {
                 刷新读取
               </a-button>
               <a-button type="primary" :disabled="!inviteDialogLink && !inviteDialogCode" @click="copyInviteBundle">
-                一键复制
+                复制全部
               </a-button>
               <a-button @click="inviteDialogOpen = false">关闭</a-button>
             </a-space>
@@ -3218,9 +3680,9 @@ onBeforeUnmount(() => {
       <a-modal
         v-model:open="apiKeyDialogOpen"
         title="查看 API Key 与请求 URL"
-        width="760px"
+        width="820px"
         :confirm-loading="apiKeyDialogSaving"
-        ok-text="保存请求 URL"
+        ok-text="保存配置"
         @ok="saveApiKeyDialog"
       >
         <a-form layout="vertical">
@@ -3238,7 +3700,7 @@ onBeforeUnmount(() => {
                 >
                   复制主 Key
                 </a-button>
-                <span class="table-subtitle">如需修改 Key，请进入站点编辑页更新账号凭证。</span>
+                <span class="table-subtitle">接口同步结果会保留，自定义 Key 可在这里添加或删除。</span>
               </a-space>
               <div v-if="apiKeyDialogEntries.length" class="api-key-dialog-list">
                 <div
@@ -3250,9 +3712,21 @@ onBeforeUnmount(() => {
                     <a-space>
                       <strong>{{ entry.name }}</strong>
                       <a-tag v-if="entry.isPrimary" color="processing">主 Key</a-tag>
+                      <a-tag :color="entry.isManual ? 'blue' : 'purple'">{{ apiKeySourceLabel(entry) }}</a-tag>
+                      <a-tag v-if="entry.routeType">{{ apiKeyRouteTypeLabel(entry.routeType) }}</a-tag>
                       <a-tag :color="entry.status === 'active' ? 'green' : 'default'">{{ entry.status }}</a-tag>
                     </a-space>
-                    <a-button size="small" @click="copyApiKeyFromDialog(entry.key)">复制</a-button>
+                    <a-space size="small">
+                      <a-button size="small" @click="copyApiKeyFromDialog(entry.key)">复制</a-button>
+                      <a-button
+                        v-if="entry.isManual"
+                        size="small"
+                        danger
+                        @click="removeManualApiKey(entry)"
+                      >
+                        删除
+                      </a-button>
+                    </a-space>
                   </div>
                   <a-input-password
                     :value="entry.key"
@@ -3264,6 +3738,26 @@ onBeforeUnmount(() => {
               </div>
               <a-empty v-else description="当前站点未配置 API Key" />
             </a-space>
+          </a-form-item>
+          <a-form-item label="添加自定义 API Key">
+            <div class="manual-api-key-editor">
+              <a-input
+                v-model:value="manualApiKeyForm.name"
+                placeholder="名称，例如 Claude 备用"
+              />
+              <a-select
+                v-model:value="manualApiKeyForm.route_type"
+                :options="apiKeyRouteTypeOptions"
+              />
+              <a-input-password
+                v-model:value="manualApiKeyForm.key"
+                placeholder="sk-..."
+                autocomplete="new-password"
+                @press-enter="addManualApiKey"
+              />
+              <a-button type="primary" @click="addManualApiKey">添加</a-button>
+            </div>
+            <small class="field-help">保存后自定义 Key 会与接口同步 Key 同时存在；如果值相同，下次同步时保留接口返回条目。</small>
           </a-form-item>
           <a-form-item label="请求 API URL 列表">
             <a-textarea

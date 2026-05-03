@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"sort"
@@ -14,6 +15,7 @@ import (
 
 	"ai-sign-in-gateway/internal/httpx"
 	"ai-sign-in-gateway/internal/models"
+	"ai-sign-in-gateway/internal/plugins"
 	"ai-sign-in-gateway/internal/schemas"
 	"ai-sign-in-gateway/internal/services"
 	"github.com/go-chi/chi/v5"
@@ -34,6 +36,7 @@ func (a *App) SiteRoutes(r chi.Router) {
 	r.Put("/groups", a.RenameSiteGroup)
 	r.Delete("/groups", a.DeleteSiteGroup)
 	r.Post("/invites/refresh", a.RefreshSiteInvites)
+	r.Post("/api-keys/refresh", a.RefreshSiteAPIKeys)
 	r.Get("/cleanup-duplicates", a.EmptyDuplicateSites)
 	r.Post("/cleanup-duplicates/merge", a.MergeDuplicateSites)
 	r.Post("/refresh-summaries", a.RefreshSiteSummaries)
@@ -48,6 +51,7 @@ func (a *App) SiteRoutes(r chi.Router) {
 	r.Delete("/{siteID}", a.DeleteSite)
 	r.Post("/{siteID}/toggle", a.ToggleSite)
 	r.Post("/{siteID}/test", a.TestSite)
+	r.Post("/{siteID}/api-keys/refresh", a.RefreshOneSiteAPIKeys)
 	r.Post("/{siteID}/balance-probe", a.ProbeSiteBalance)
 	r.Post("/{siteID}/checkin", a.SiteCheckin)
 	r.Get("/{siteID}/queue", a.SiteQueue)
@@ -65,7 +69,7 @@ func (a *App) ListSites(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]schemas.SiteResponse, 0, len(sites))
 	for _, site := range sites {
-		out = append(out, siteResponse(site))
+		out = append(out, siteListResponse(site))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -128,6 +132,50 @@ func (a *App) RefreshSiteInvites(w http.ResponseWriter, r *http.Request) {
 		out = append(out, a.refreshOneSiteInvite(r.Context(), site, timeout))
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func (a *App) RefreshSiteAPIKeys(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		SiteIDs     []uint `json:"site_ids"`
+		OnlyEnabled bool   `json:"only_enabled"`
+	}
+	if err := httpx.Decode(r, &payload); err != nil {
+		writeError(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+
+	query := a.DB.Model(&models.Site{})
+	if len(payload.SiteIDs) > 0 {
+		query = query.Where("id IN ?", payload.SiteIDs)
+	}
+	if payload.OnlyEnabled {
+		query = query.Where("is_enabled = ?", true)
+	}
+
+	var sites []models.Site
+	if err := query.Order("name asc").Find(&sites).Error; err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	settings, _ := a.systemSettings()
+	timeout := siteRequestTimeoutSeconds(settings.RequestTimeout)
+	out := make([]schemas.SiteAPIKeyRefreshResponse, 0, len(sites))
+	for _, site := range sites {
+		out = append(out, a.refreshOneSiteAPIKeys(r.Context(), site, timeout))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (a *App) RefreshOneSiteAPIKeys(w http.ResponseWriter, r *http.Request) {
+	site, ok := a.getSite(w, chi.URLParam(r, "siteID"))
+	if !ok {
+		return
+	}
+	settings, _ := a.systemSettings()
+	timeout := siteRequestTimeoutSeconds(settings.RequestTimeout)
+	result := a.refreshOneSiteAPIKeys(r.Context(), site, timeout)
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (a *App) GetSite(w http.ResponseWriter, r *http.Request) {
@@ -648,6 +696,7 @@ func (a *App) refreshOneSite(ctx context.Context, site models.Site, timeout int)
 			if result.PackageDisplay != nil && strings.TrimSpace(*result.PackageDisplay) != "" {
 				pluginConfigUpdates["package_display"] = strings.TrimSpace(*result.PackageDisplay)
 			}
+			mergePackageQuotaPluginConfig(pluginConfigUpdates, result.PackageRemaining, result.PackageTotal, result.PackageUsed, result.PackageUnit)
 			if result.InviteLink != nil && strings.TrimSpace(*result.InviteLink) != "" {
 				pluginConfigUpdates["invite_link"] = strings.TrimSpace(*result.InviteLink)
 			}
@@ -655,7 +704,7 @@ func (a *App) refreshOneSite(ctx context.Context, site models.Site, timeout int)
 				pluginConfigUpdates["invite_code"] = strings.TrimSpace(*result.InviteCode)
 			}
 			if len(result.UpdatedCredentials) > 0 {
-				site.Credentials = mergeJSON(site.Credentials, result.UpdatedCredentials)
+				mergeCredentialUpdates(&site, result.UpdatedCredentials)
 				updates["credentials"] = site.Credentials
 			}
 			if len(pluginConfigUpdates) > 0 {
@@ -672,7 +721,7 @@ func (a *App) refreshOneSite(ctx context.Context, site models.Site, timeout int)
 
 	_ = a.DB.Model(&site).Updates(updates).Error
 
-	return map[string]any{
+	summary := map[string]any{
 		"site_id":           site.ID,
 		"last_status":       site.LastStatus,
 		"connection_status": site.LastStatus,
@@ -685,6 +734,10 @@ func (a *App) refreshOneSite(ctx context.Context, site models.Site, timeout int)
 		"checkin_status":    site.LastStatus,
 		"last_run_at":       site.LastRunAt,
 	}
+	for key, value := range packageQuotaMap(site) {
+		summary[key] = value
+	}
+	return summary
 }
 
 func (a *App) refreshOneSiteInvite(ctx context.Context, site models.Site, timeout int) schemas.SiteInviteRefreshResponse {
@@ -725,6 +778,7 @@ func (a *App) refreshOneSiteInvite(ctx context.Context, site models.Site, timeou
 	if status.PackageDisplay != nil && strings.TrimSpace(*status.PackageDisplay) != "" {
 		pluginConfigUpdates["package_display"] = strings.TrimSpace(*status.PackageDisplay)
 	}
+	mergePackageQuotaPluginConfig(pluginConfigUpdates, status.PackageRemaining, status.PackageTotal, status.PackageUsed, status.PackageUnit)
 	if status.InviteLink != nil && strings.TrimSpace(*status.InviteLink) != "" {
 		pluginConfigUpdates["invite_link"] = strings.TrimSpace(*status.InviteLink)
 	}
@@ -732,8 +786,9 @@ func (a *App) refreshOneSiteInvite(ctx context.Context, site models.Site, timeou
 		pluginConfigUpdates["invite_code"] = strings.TrimSpace(*status.InviteCode)
 	}
 	updates := map[string]any{}
+	updatedCredentials := models.JSONMap{}
 	if len(status.UpdatedCredentials) > 0 {
-		site.Credentials = mergeJSON(site.Credentials, status.UpdatedCredentials)
+		updatedCredentials = mergeCredentialUpdates(&site, status.UpdatedCredentials)
 		updates["credentials"] = site.Credentials
 	}
 	if len(pluginConfigUpdates) > 0 {
@@ -754,10 +809,105 @@ func (a *App) refreshOneSiteInvite(ctx context.Context, site models.Site, timeou
 		Message:             message,
 		InviteLink:          status.InviteLink,
 		InviteCode:          status.InviteCode,
+		PackageRemaining:    status.PackageRemaining,
+		PackageTotal:        status.PackageTotal,
+		PackageUsed:         status.PackageUsed,
+		PackageUnit:         status.PackageUnit,
 		PackageDisplay:      status.PackageDisplay,
-		UpdatedCredentials:  nonNilJSON(status.UpdatedCredentials),
+		UpdatedCredentials:  updatedCredentials,
 		UpdatedPluginConfig: pluginConfigUpdates,
 	}
+}
+
+func (a *App) refreshOneSiteAPIKeys(ctx context.Context, site models.Site, timeout int) schemas.SiteAPIKeyRefreshResponse {
+	timeout = siteRequestTimeoutSeconds(timeout)
+	empty := schemas.SiteAPIKeyRefreshResponse{
+		SiteID:             site.ID,
+		SiteName:           site.Name,
+		OK:                 false,
+		UpdatedCredentials: models.JSONMap{},
+		APIKeyCount:        siteAPIKeyCount(site.Credentials),
+	}
+	plugin, err := a.PluginManager.Get(site.PluginKey)
+	if err != nil {
+		empty.Message = err.Error()
+		return empty
+	}
+	if !containsFold(plugin.Meta().Capabilities, "api_key_sync") {
+		empty.Message = "当前插件不支持 API Key 同步。"
+		return empty
+	}
+	syncer, ok := plugin.(plugins.APIKeySyncer)
+	if !ok {
+		empty.Message = "当前插件未实现 API Key 同步。"
+		return empty
+	}
+
+	opCtx, cancel := siteOperationContext(ctx, timeout)
+	defer cancel()
+	result, err := syncer.SyncAPIKeys(opCtx, site, timeout)
+	if err != nil {
+		empty.Message = err.Error()
+		return empty
+	}
+
+	credentialUpdates := nonNilJSON(result.UpdatedCredentials)
+	if result.PrimaryKey != "" {
+		credentialUpdates["api_key"] = result.PrimaryKey
+	}
+	if len(credentialUpdates) > 0 {
+		credentialUpdates = mergeCredentialUpdates(&site, credentialUpdates)
+		if err := a.DB.Model(&site).Updates(map[string]any{"credentials": site.Credentials}).Error; err != nil {
+			empty.Message = err.Error()
+			empty.APIKeyCount = siteAPIKeyCount(site.Credentials)
+			empty.UpdatedCredentials = credentialUpdates
+			return empty
+		}
+	}
+
+	updatedCount := siteAPIKeyCount(credentialUpdates)
+	count := siteAPIKeyCount(site.Credentials)
+	message := strings.TrimSpace(result.Message)
+	if message == "" {
+		if updatedCount > 0 {
+			message = fmt.Sprintf("已更新 %d 个 API Key。", updatedCount)
+		} else {
+			message = "未读取到可用 API Key。"
+		}
+	}
+	return schemas.SiteAPIKeyRefreshResponse{
+		SiteID:             site.ID,
+		SiteName:           site.Name,
+		OK:                 updatedCount > 0,
+		Message:            message,
+		APIKeyCount:        count,
+		PrimaryKeyUpdated:  result.PrimaryKey != "",
+		UpdatedCredentials: credentialUpdates,
+	}
+}
+
+func siteAPIKeyCount(credentials models.JSONMap) int {
+	if credentials == nil {
+		return 0
+	}
+	switch raw := credentials["api_keys"].(type) {
+	case []map[string]any:
+		return len(raw)
+	case []any:
+		count := 0
+		for _, item := range raw {
+			if item != nil {
+				count++
+			}
+		}
+		if count > 0 {
+			return count
+		}
+	}
+	if strings.TrimSpace(jsonMapString(credentials, "api_key")) != "" {
+		return 1
+	}
+	return 0
 }
 
 func (a *App) AnalyzeLocalStorage(w http.ResponseWriter, r *http.Request) {
@@ -1213,12 +1363,14 @@ func (a *App) siteHealth(w http.ResponseWriter, ctx context.Context, site models
 	if status.PackageDisplay != nil && strings.TrimSpace(*status.PackageDisplay) != "" {
 		pluginConfigUpdates["package_display"] = strings.TrimSpace(*status.PackageDisplay)
 	}
+	mergePackageQuotaPluginConfig(pluginConfigUpdates, status.PackageRemaining, status.PackageTotal, status.PackageUsed, status.PackageUnit)
 	if status.InviteLink != nil && strings.TrimSpace(*status.InviteLink) != "" {
 		pluginConfigUpdates["invite_link"] = strings.TrimSpace(*status.InviteLink)
 	}
 	if status.InviteCode != nil && strings.TrimSpace(*status.InviteCode) != "" {
 		pluginConfigUpdates["invite_code"] = strings.TrimSpace(*status.InviteCode)
 	}
+	updatedCredentials := models.JSONMap{}
 	if site.ID != 0 {
 		statusText := "failed"
 		if status.LoggedIn {
@@ -1232,7 +1384,7 @@ func (a *App) siteHealth(w http.ResponseWriter, ctx context.Context, site models
 			"last_run_at":  &runAt,
 		}
 		if len(status.UpdatedCredentials) > 0 {
-			site.Credentials = mergeJSON(site.Credentials, status.UpdatedCredentials)
+			updatedCredentials = mergeCredentialUpdates(&site, status.UpdatedCredentials)
 			updates["credentials"] = site.Credentials
 		}
 		if len(pluginConfigUpdates) > 0 {
@@ -1247,11 +1399,15 @@ func (a *App) siteHealth(w http.ResponseWriter, ctx context.Context, site models
 		Message:             status.Message,
 		Balance:             status.Balance,
 		BalanceUnit:         status.BalanceUnit,
+		PackageRemaining:    status.PackageRemaining,
+		PackageTotal:        status.PackageTotal,
+		PackageUsed:         status.PackageUsed,
+		PackageUnit:         status.PackageUnit,
 		PackageDisplay:      status.PackageDisplay,
 		AccountName:         status.AccountName,
 		InviteLink:          status.InviteLink,
 		InviteCode:          status.InviteCode,
-		UpdatedCredentials:  nonNilJSON(status.UpdatedCredentials),
+		UpdatedCredentials:  updatedCredentials,
 		UpdatedPluginConfig: pluginConfigUpdates,
 	})
 }

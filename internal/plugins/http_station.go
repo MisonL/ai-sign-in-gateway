@@ -312,10 +312,27 @@ func pathBool(payload map[string]any, path string) bool {
 }
 
 func pathFloat(payload map[string]any, path string) *float64 {
-	value := pathValue(payload, path)
+	return numberPtr(pathValue(payload, path))
+}
+
+func numberPtr(value any) *float64 {
 	switch typed := value.(type) {
 	case float64:
 		return &typed
+	case float32:
+		value := float64(typed)
+		return &value
+	case int:
+		value := float64(typed)
+		return &value
+	case int64:
+		value := float64(typed)
+		return &value
+	case json.Number:
+		parsed, err := typed.Float64()
+		if err == nil {
+			return &parsed
+		}
 	case string:
 		parsed, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
 		if err == nil {
@@ -323,6 +340,176 @@ func pathFloat(payload map[string]any, path string) *float64 {
 		}
 	}
 	return nil
+}
+
+func quotaPerUnitFromConfig(site models.Site) float64 {
+	raw := strings.TrimSpace(stringValue(site.PluginConfig, "quota_per_unit", ""))
+	if raw == "" {
+		return 500000.0
+	}
+	parsed, err := strconv.ParseFloat(raw, 64)
+	if err != nil || parsed <= 0 {
+		return 500000.0
+	}
+	return parsed
+}
+
+func normalizeQuotaAmount(site models.Site, value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	out := *value
+	if out >= 1000 || out <= -1000 {
+		out = out / quotaPerUnitFromConfig(site)
+	}
+	return &out
+}
+
+func firstPathFloat(payload map[string]any, paths ...string) *float64 {
+	for _, path := range paths {
+		if value := pathFloat(payload, path); value != nil {
+			return value
+		}
+	}
+	return nil
+}
+
+func firstPathString(payload map[string]any, paths ...string) string {
+	for _, path := range paths {
+		value := strings.TrimSpace(pathString(payload, path, ""))
+		if value != "" && value != "<nil>" {
+			return value
+		}
+	}
+	return ""
+}
+
+func quotaUsageFromPayload(site models.Site, payload map[string]any) (remaining, total, used *float64, unit string) {
+	if payload == nil {
+		return nil, nil, nil, ""
+	}
+	remaining = firstPathFloat(
+		payload,
+		"data.remaining",
+		"data.remain_quota",
+		"data.quota_remaining",
+		"data.quota_remain",
+		"data.available_quota",
+		"data.balance",
+		"remaining",
+		"remain_quota",
+		"quota.remaining",
+		"quota_remain",
+		"balance",
+	)
+	total = firstPathFloat(
+		payload,
+		"data.total",
+		"data.total_quota",
+		"data.quota_total",
+		"data.amount_total",
+		"total",
+		"total_quota",
+		"quota.total",
+		"amount_total",
+	)
+	used = firstPathFloat(
+		payload,
+		"data.used",
+		"data.used_quota",
+		"data.quota_used",
+		"data.amount_used",
+		"used",
+		"used_quota",
+		"quota.used",
+		"amount_used",
+	)
+	if remaining == nil && total != nil && used != nil {
+		value := *total - *used
+		remaining = &value
+	}
+	remaining = normalizeQuotaAmount(site, remaining)
+	total = normalizeQuotaAmount(site, total)
+	used = normalizeQuotaAmount(site, used)
+	unit = firstPathString(payload, "data.quota_unit", "data.currency", "data.unit", "data.balance_unit", "unit", "quota.unit")
+	return remaining, total, used, unit
+}
+
+func packageDisplayWithQuota(site models.Site, payload map[string]any, fallback string) (string, *float64, *float64, *float64, string) {
+	display := strings.TrimSpace(fallback)
+	remaining, total, used, unit := quotaUsageFromPayload(site, payload)
+	if display == "" {
+		display = packageDisplayFromPayload(payload)
+	}
+	if display == "" && (remaining != nil || total != nil || used != nil) {
+		display = "套餐余量"
+	}
+	parts := []string{}
+	if display != "" {
+		parts = append(parts, display)
+	}
+	if remaining != nil && total != nil {
+		parts = append(parts, fmt.Sprintf("余量 %.2f / %.2f", *remaining, *total))
+	} else if remaining != nil {
+		parts = append(parts, fmt.Sprintf("余量 %.2f", *remaining))
+	} else if used != nil && total != nil {
+		parts = append(parts, fmt.Sprintf("已用 %.2f / %.2f", *used, *total))
+	}
+	if unit != "" && len(parts) > 0 {
+		parts[len(parts)-1] = parts[len(parts)-1] + " " + unit
+	}
+	return strings.Join(parts, " · "), remaining, total, used, unit
+}
+
+type packageQuotaSnapshot struct {
+	Display   string
+	Remaining *float64
+	Total     *float64
+	Used      *float64
+	Unit      string
+}
+
+func packageQuotaFromPayload(site models.Site, payload map[string]any, fallback string) packageQuotaSnapshot {
+	display, remaining, total, used, unit := packageDisplayWithQuota(site, payload, fallback)
+	return packageQuotaSnapshot{
+		Display:   display,
+		Remaining: remaining,
+		Total:     total,
+		Used:      used,
+		Unit:      unit,
+	}
+}
+
+func (q packageQuotaSnapshot) hasQuota() bool {
+	return q.Remaining != nil || q.Total != nil || q.Used != nil || strings.TrimSpace(q.Display) != ""
+}
+
+func firstNonEmptyPlugin(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" && value != "<nil>" {
+			return value
+		}
+	}
+	return ""
+}
+
+func formatPackageQuotaDisplay(label string, remaining, total, used *float64, unit string) string {
+	parts := []string{}
+	if strings.TrimSpace(label) != "" {
+		parts = append(parts, strings.TrimSpace(label))
+	}
+	if remaining != nil && total != nil {
+		parts = append(parts, fmt.Sprintf("余量 %.2f / %.2f", *remaining, *total))
+	} else if remaining != nil {
+		parts = append(parts, fmt.Sprintf("余量 %.2f", *remaining))
+	} else if used != nil && total != nil {
+		parts = append(parts, fmt.Sprintf("已用 %.2f / %.2f", *used, *total))
+	}
+	if unit != "" && len(parts) > 0 {
+		parts[len(parts)-1] = parts[len(parts)-1] + " " + unit
+	}
+	return strings.Join(parts, " · ")
 }
 
 func packageDisplayFromPayload(payload map[string]any) string {
