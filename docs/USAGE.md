@@ -26,7 +26,7 @@ http://127.0.0.1:8972   # 生产服务或 Docker
 
 - `总览`：查看站点总量、可用状态、余额汇总、最近签到和异常站点。
 - `站点中心`：维护站点、分组、插件配置、连通测试、签到、余额探测、API Key 和邀请码。
-- `网关中心`：查看网关概览、近 1 分钟趋势、路由池、策略配置、路由历史和最近请求。
+- `网关中心`：查看网关概览、实时调用、时间段消耗、路由池、策略配置、路由历史和最近请求。
 - `验证与对话`：选择站点后自动读取模型列表，用所选模型做对话、参考图输入或图片生成验证。
 - `设置`：管理员账号、签到计划、网关策略等系统设置。
 
@@ -162,12 +162,12 @@ http://127.0.0.1:8972   # 生产服务或 Docker
 
 站点状态刷新和路由余额探测会尽量读取真实平台接口：
 
-- `sub2api-platform`：优先读 `/api/v1/subscriptions/progress`，再回退 `/api/v1/subscriptions/summary` 或 `/api/v1/keys` 额度字段。
+- `sub2api-platform`：优先读 `/api/v1/subscriptions/progress`，识别日、周、月限额窗口；如果存在日限额，优先展示当日剩余可用额度。失败时再回退 `/api/v1/subscriptions/summary` 或 `/api/v1/keys` 额度字段。
 - `yellowpeach-newapi`：优先读 `/api/subscription/self`，再回退 `/api/usage/token/`。
 - DeepSeek、StepFun、SiliconFlow、OpenRouter、Novita AI 会按官方余额接口探测。
 - `/v1/usage` 仅作为通用 OpenAI 兼容 fallback。
 
-套餐余量字段独立于余额字段：`package_remaining/package_total/package_used/package_unit/package_display` 用于显示订阅或 Token 套餐余量，`last_balance` 继续表示钱包余额或接口余额。
+套餐余量字段写入 `package_remaining/package_total/package_used/package_unit/package_display`，用于显示订阅或 Token 套餐余量。`last_balance` 表示当前可用余额或当前限额窗口的剩余额度。
 
 ## 聚合网关
 
@@ -261,28 +261,32 @@ curl "http://127.0.0.1:8972/api/gateway/chat/completions?group=main" \
 | Smart 评分 | 综合延迟、并发、失败次数、优先级做选择，适合多数生产场景 |
 | Round Robin | 均匀轮询，适合路由质量接近时分摊请求 |
 | Latency First | 优先低延迟路由，适合追求响应速度 |
-| Priority | 优先使用优先级更高的路由，适合主备或成本分层 |
+| Priority | 严格按 `priority` 数值升序选择路由，适合主备或成本分层 |
 
-### 并发溢出策略
+`Priority` 策略下，数值越小优先级越高。只要高优先级路由未达到单路由并发上限，网关会继续使用该路由；延迟、权重、当前并发均衡和近期失败降权不会把流量提前分配给低优先级路由。
 
-当某条路由达到并发限制时，系统会按配置选择其它路由：
+### 并发控制
 
-- `Latency First`：优先低延迟路由。
-- `Priority`：优先高优先级路由。
-- `Smart`：继续使用综合评分。
+网关策略中可配置单路由并发上限、并发转移策略和并发溢出优先级：
+
+- 单路由并发上限：单条路由达到上限后，新请求转到其它未满路由。
+- 并发达上限转移：保持当前主策略排序，只在达到上限后转移。
+- 并发均衡转移：非 `Priority` 主策略下，优先选择当前并发更低的未满路由。
+- 并发溢出优先级：所有候选路由都达到上限后参与排序，支持低延迟优先或按顺序优先。
 
 ### 熔断
 
 路由连续失败达到阈值后会进入 `open` 状态，在冷却时间内不参与调度。冷却结束后进入 `half_open`，允许一次探测；成功恢复，失败继续熔断。
 
-## 请求历史和趋势
+## 监控和消耗
 
 网关中心包含：
 
-- `近 1 分钟趋势`：20 根柱，每根约 3 秒聚合，展示成功/失败/流式/无请求。
+- `24h 概览`：请求数、成功率、延迟、流式成功率等。
+- `实时调用`：当前正在执行的网关请求。
+- `时间段消耗`：按时间范围查询请求数、成功率、Token 使用量、官方估算费用，并列出使用过的路由。
 - `路由历史`：每个路由的最近请求列表。
 - `最近请求`：全局最近网关请求。
-- `24h 概览`：请求数、成功率、延迟、流式成功率等。
 
 日志中常见字段：
 
@@ -293,6 +297,8 @@ curl "http://127.0.0.1:8972/api/gateway/chat/completions?group=main" \
 - 路由标签。
 - 失败原因。
 - 是否流式。
+- Prompt / Cached / Completion / Total Token。
+- 上游费用和官方估算费用。
 
 ## 常见问题
 

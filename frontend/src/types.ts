@@ -184,6 +184,7 @@ export interface BalanceProbeResult {
   message: string
   checked_at: string
   last_balance: number | null
+  balance_display?: string | null
 }
 
 export interface LocalStorageAnalyzeResult {
@@ -433,15 +434,6 @@ export interface GatewayStrategyStat {
   avg_stream_ttfb_ms: number | null
 }
 
-export interface GatewayTrendBucket {
-  bucket_start: string
-  request_count: number
-  success_count: number
-  failure_count: number
-  stream_request_count: number
-  avg_latency_ms: number | null
-}
-
 export interface GatewayOverview {
   total_routes: number
   healthy_routes: number
@@ -455,7 +447,6 @@ export interface GatewayOverview {
   success_rate_24h: number
   avg_latency_ms_24h: number | null
   strategy_breakdown_24h: GatewayStrategyStat[]
-  recent_trend_5m: GatewayTrendBucket[]
   route_strategy: 'round_robin' | 'latency_first' | 'priority' | 'smart'
   failure_threshold: number
   cooldown_seconds: number
@@ -465,6 +456,39 @@ export interface GatewayOverview {
   route_concurrency_limit: number
   concurrency_transfer_strategy: 'limit_only' | 'balance'
   concurrency_overflow_strategy: 'latency_first' | 'sequential'
+}
+
+export interface GatewayUsageRoute {
+  route_id: number | null
+  route_label: string
+  site_id: number | null
+  site_name: string | null
+  key_name: string
+  key_fingerprint: string
+  group_name: string
+  route_type: string
+  request_count: number
+  success_count: number
+  failure_count: number
+  success_rate: number
+  stream_request_count: number
+  prompt_tokens: number
+  cached_input_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  usage_cost: number | null
+  official_input_cost: number
+  official_cached_cost: number
+  official_output_cost: number
+  official_total_cost: number
+  avg_latency_ms: number | null
+  last_used_at: string | null
+}
+
+export interface GatewayUsage extends GatewayUsageRoute {
+  start: string
+  end: string
+  routes: GatewayUsageRoute[]
 }
 
 export interface GatewaySettingsData {
@@ -587,6 +611,11 @@ export interface GatewayLog {
   status_code: number | null
   success: boolean
   latency_ms: number | null
+  prompt_tokens: number | null
+  cached_input_tokens: number | null
+  completion_tokens: number | null
+  total_tokens: number | null
+  usage_cost: number | null
   circuit_state_before: string
   failure_reason: string | null
   is_stream: boolean

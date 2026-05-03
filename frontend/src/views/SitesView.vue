@@ -2997,7 +2997,10 @@ onBeforeUnmount(() => {
                   </span>
                 </template>
                 <template v-else-if="column.key === 'package'">
-                  {{ record.package_display || '暂无' }}
+                  <a-tooltip v-if="record.package_display" :title="record.package_display">
+                    <span class="site-package-cell">{{ record.package_display }}</span>
+                  </a-tooltip>
+                  <span v-else class="site-package-cell site-package-cell--empty">暂无</span>
                 </template>
                 <template v-else-if="column.key === 'checkin_status'">
                   <StatusPill v-if="visibleCheckinStatus(asSite(record))" :value="visibleCheckinStatus(asSite(record))" />

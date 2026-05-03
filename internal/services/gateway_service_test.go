@@ -254,7 +254,7 @@ func TestGatewayConcurrencyTransferBalancePrefersLowerActiveRoute(t *testing.T) 
 
 	req := httptest.NewRequest(http.MethodGet, "/api/gateway/v1/models", nil)
 	result, err := ProxyGatewayRequest(req.Context(), db, req, "models", "", "", GatewayPolicy{
-		RouteStrategy:               "priority",
+		RouteStrategy:               "round_robin",
 		RequestTimeout:              5,
 		RouteConcurrencyLimit:       5,
 		ConcurrencyTransferStrategy: "balance",
@@ -269,6 +269,299 @@ func TestGatewayConcurrencyTransferBalancePrefersLowerActiveRoute(t *testing.T) 
 	}
 	if busyCalls != 0 || idleCalls != 1 {
 		t.Fatalf("expected balanced transfer to idle route, busy=%d idle=%d", busyCalls, idleCalls)
+	}
+}
+
+func TestGatewayPriorityStrategyIgnoresBalanceTransferBeforeLimit(t *testing.T) {
+	ResetGatewayCountersForTest()
+	busyCalls := 0
+	busy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		busyCalls++
+		_, _ = w.Write([]byte(`{"route":"busy"}`))
+	}))
+	defer busy.Close()
+	idleCalls := 0
+	idle := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		idleCalls++
+		_, _ = w.Write([]byte(`{"route":"idle"}`))
+	}))
+	defer idle.Close()
+
+	db := newGatewayTestDB(t)
+	createGatewaySite(t, db, "aaa-busy", busy.URL, "busy-key")
+	createGatewaySite(t, db, "zzz-idle", idle.URL, "idle-key")
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+	var busyState models.GatewayRouteState
+	if err := db.Joins("JOIN sites ON sites.id = gateway_route_states.site_id").
+		Where("sites.name = ?", "aaa-busy").
+		First(&busyState).Error; err != nil {
+		t.Fatal(err)
+	}
+	var idleState models.GatewayRouteState
+	if err := db.Joins("JOIN sites ON sites.id = gateway_route_states.site_id").
+		Where("sites.name = ?", "zzz-idle").
+		First(&idleState).Error; err != nil {
+		t.Fatal(err)
+	}
+	busyState.RoutePriority = 1
+	if err := db.Save(&busyState).Error; err != nil {
+		t.Fatal(err)
+	}
+	idleState.RoutePriority = 22
+	if err := db.Save(&idleState).Error; err != nil {
+		t.Fatal(err)
+	}
+	acquireRoute(busyState.ID)
+	defer releaseRoute(busyState.ID)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/v1/models", nil)
+	result, err := ProxyGatewayRequest(req.Context(), db, req, "models", "", "", GatewayPolicy{
+		RouteStrategy:               "priority",
+		RequestTimeout:              5,
+		RouteConcurrencyLimit:       5,
+		ConcurrencyTransferStrategy: "balance",
+		ConcurrencyOverflowStrategy: "latency_first",
+		FailureThreshold:            5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.StatusCode != http.StatusOK || !strings.Contains(string(result.Body), `"route":"busy"`) {
+		t.Fatalf("unexpected proxy result: status=%d body=%s", result.StatusCode, result.Body)
+	}
+	if busyCalls != 1 || idleCalls != 0 {
+		t.Fatalf("expected priority strategy to keep filling priority route, busy=%d idle=%d", busyCalls, idleCalls)
+	}
+}
+
+func TestGatewayConcurrencyTransferLimitOnlyFillsActiveRouteUntilLimit(t *testing.T) {
+	ResetGatewayCountersForTest()
+	firstCalls := 0
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstCalls++
+		_, _ = w.Write([]byte(`{"route":"first"}`))
+	}))
+	defer first.Close()
+	secondCalls := 0
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondCalls++
+		_, _ = w.Write([]byte(`{"route":"second"}`))
+	}))
+	defer second.Close()
+
+	db := newGatewayTestDB(t)
+	createGatewaySite(t, db, "aaa-first", first.URL, "first-key")
+	createGatewaySite(t, db, "zzz-second", second.URL, "second-key")
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+	var firstState models.GatewayRouteState
+	if err := db.Joins("JOIN sites ON sites.id = gateway_route_states.site_id").
+		Where("sites.name = ?", "aaa-first").
+		First(&firstState).Error; err != nil {
+		t.Fatal(err)
+	}
+	firstActive := acquireRoute(firstState.ID)
+	if firstActive != 1 {
+		t.Fatalf("first active = %d", firstActive)
+	}
+	defer releaseRoute(firstState.ID)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/v1/models", nil)
+	result, err := ProxyGatewayRequest(req.Context(), db, req, "models", "", "", GatewayPolicy{
+		RouteStrategy:               "round_robin",
+		RequestTimeout:              5,
+		RouteConcurrencyLimit:       5,
+		ConcurrencyTransferStrategy: "limit_only",
+		ConcurrencyOverflowStrategy: "sequential",
+		FailureThreshold:            5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.StatusCode != http.StatusOK || !strings.Contains(string(result.Body), `"route":"first"`) {
+		t.Fatalf("unexpected proxy result: status=%d body=%s", result.StatusCode, result.Body)
+	}
+	if firstCalls != 1 || secondCalls != 0 {
+		t.Fatalf("expected limit-only to keep filling first route, first=%d second=%d", firstCalls, secondCalls)
+	}
+}
+
+func TestGatewayConcurrencyTransferLimitOnlyMovesAfterRouteLimit(t *testing.T) {
+	ResetGatewayCountersForTest()
+	firstCalls := 0
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstCalls++
+		_, _ = w.Write([]byte(`{"route":"first"}`))
+	}))
+	defer first.Close()
+	secondCalls := 0
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondCalls++
+		_, _ = w.Write([]byte(`{"route":"second"}`))
+	}))
+	defer second.Close()
+
+	db := newGatewayTestDB(t)
+	createGatewaySite(t, db, "aaa-first", first.URL, "first-key")
+	createGatewaySite(t, db, "zzz-second", second.URL, "second-key")
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+	var firstState models.GatewayRouteState
+	if err := db.Joins("JOIN sites ON sites.id = gateway_route_states.site_id").
+		Where("sites.name = ?", "aaa-first").
+		First(&firstState).Error; err != nil {
+		t.Fatal(err)
+	}
+	for range 5 {
+		acquireRoute(firstState.ID)
+		defer releaseRoute(firstState.ID)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/v1/models", nil)
+	result, err := ProxyGatewayRequest(req.Context(), db, req, "models", "", "", GatewayPolicy{
+		RouteStrategy:               "round_robin",
+		RequestTimeout:              5,
+		RouteConcurrencyLimit:       5,
+		ConcurrencyTransferStrategy: "limit_only",
+		ConcurrencyOverflowStrategy: "sequential",
+		FailureThreshold:            5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.StatusCode != http.StatusOK || !strings.Contains(string(result.Body), `"route":"second"`) {
+		t.Fatalf("unexpected proxy result: status=%d body=%s", result.StatusCode, result.Body)
+	}
+	if firstCalls != 0 || secondCalls != 1 {
+		t.Fatalf("expected limit-only to move after first route is full, first=%d second=%d", firstCalls, secondCalls)
+	}
+}
+
+func TestGatewayPriorityStrategyHonorsPriorityBeforeLoad(t *testing.T) {
+	ResetGatewayCountersForTest()
+	highCalls := 0
+	high := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		highCalls++
+		_, _ = w.Write([]byte(`{"route":"high"}`))
+	}))
+	defer high.Close()
+	lowCalls := 0
+	low := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lowCalls++
+		_, _ = w.Write([]byte(`{"route":"low"}`))
+	}))
+	defer low.Close()
+
+	db := newGatewayTestDB(t)
+	createGatewaySite(t, db, "aaa-high", high.URL, "high-key")
+	createGatewaySite(t, db, "zzz-low", low.URL, "low-key")
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+	var highState models.GatewayRouteState
+	if err := db.Joins("JOIN sites ON sites.id = gateway_route_states.site_id").
+		Where("sites.name = ?", "aaa-high").
+		First(&highState).Error; err != nil {
+		t.Fatal(err)
+	}
+	var lowState models.GatewayRouteState
+	if err := db.Joins("JOIN sites ON sites.id = gateway_route_states.site_id").
+		Where("sites.name = ?", "zzz-low").
+		First(&lowState).Error; err != nil {
+		t.Fatal(err)
+	}
+	highState.RoutePriority = 0
+	if err := db.Save(&highState).Error; err != nil {
+		t.Fatal(err)
+	}
+	lowState.RoutePriority = 100
+	if err := db.Save(&lowState).Error; err != nil {
+		t.Fatal(err)
+	}
+	acquireRoute(highState.ID)
+	defer releaseRoute(highState.ID)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/v1/models", nil)
+	result, err := ProxyGatewayRequest(req.Context(), db, req, "models", "", "", GatewayPolicy{
+		RouteStrategy:               "priority",
+		RequestTimeout:              5,
+		RouteConcurrencyLimit:       5,
+		ConcurrencyTransferStrategy: "limit_only",
+		ConcurrencyOverflowStrategy: "sequential",
+		FailureThreshold:            5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.StatusCode != http.StatusOK || !strings.Contains(string(result.Body), `"route":"high"`) {
+		t.Fatalf("unexpected proxy result: status=%d body=%s", result.StatusCode, result.Body)
+	}
+	if highCalls != 1 || lowCalls != 0 {
+		t.Fatalf("expected priority strategy to keep high-priority route, high=%d low=%d", highCalls, lowCalls)
+	}
+}
+
+func TestGatewayPriorityStrategyKeepsRecentlyFailedRouteBeforeCircuitOpen(t *testing.T) {
+	ResetGatewayCountersForTest()
+	failedCalls := 0
+	failed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		failedCalls++
+		_, _ = w.Write([]byte(`{"route":"failed"}`))
+	}))
+	defer failed.Close()
+	healthyCalls := 0
+	healthy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		healthyCalls++
+		_, _ = w.Write([]byte(`{"route":"healthy"}`))
+	}))
+	defer healthy.Close()
+
+	db := newGatewayTestDB(t)
+	createGatewaySite(t, db, "aaa-failed", failed.URL, "failed-key")
+	createGatewaySite(t, db, "zzz-healthy", healthy.URL, "healthy-key")
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+	var failedState models.GatewayRouteState
+	if err := db.Joins("JOIN sites ON sites.id = gateway_route_states.site_id").
+		Where("sites.name = ?", "aaa-failed").
+		First(&failedState).Error; err != nil {
+		t.Fatal(err)
+	}
+	var healthyState models.GatewayRouteState
+	if err := db.Joins("JOIN sites ON sites.id = gateway_route_states.site_id").
+		Where("sites.name = ?", "zzz-healthy").
+		First(&healthyState).Error; err != nil {
+		t.Fatal(err)
+	}
+	failedState.RoutePriority = 0
+	UpdateRouteFailure(db, &failedState, "temporary upstream failure", 42, nil, GatewayPolicy{FailureThreshold: 5})
+	healthyState.RoutePriority = 100
+	if err := db.Save(&healthyState).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/v1/models", nil)
+	result, err := ProxyGatewayRequest(req.Context(), db, req, "models", "", "", GatewayPolicy{
+		RouteStrategy:               "priority",
+		RequestTimeout:              5,
+		RouteConcurrencyLimit:       5,
+		ConcurrencyTransferStrategy: "limit_only",
+		ConcurrencyOverflowStrategy: "sequential",
+		FailureThreshold:            5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.StatusCode != http.StatusOK || !strings.Contains(string(result.Body), `"route":"failed"`) {
+		t.Fatalf("unexpected proxy result: status=%d body=%s", result.StatusCode, result.Body)
+	}
+	if failedCalls != 1 || healthyCalls != 0 {
+		t.Fatalf("expected strict priority to keep recently failed route until circuit opens, failed=%d healthy=%d", failedCalls, healthyCalls)
 	}
 }
 
@@ -601,6 +894,60 @@ func TestGatewayStreamingForwarding(t *testing.T) {
 	}
 	if rec.Header().Get("Content-Type") != "text/event-stream" {
 		t.Fatalf("missing SSE content-type, got %q", rec.Header().Get("Content-Type"))
+	}
+}
+
+func TestGatewayUsageLoggedFromOpenAIResponse(t *testing.T) {
+	ResetGatewayCountersForTest()
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-demo","usage":{"prompt_tokens":12,"prompt_tokens_details":{"cached_tokens":4},"completion_tokens":8,"total_tokens":20,"total_cost":0.0042}}`))
+	}))
+	defer upstream.Close()
+
+	db := newGatewayTestDB(t)
+	createGatewaySite(t, db, "usage-up", upstream.URL, "k")
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+
+	body := strings.NewReader(`{"messages":[]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/v1/chat/completions", body)
+	req.Header.Set("Content-Type", "application/json")
+	res, err := ProxyGatewayRequestWithOptions(req.Context(), db, req, "chat/completions", ProxyGatewayOptions{}, GatewayPolicy{
+		RouteStrategy:  "round_robin",
+		RequestTimeout: 5,
+		MaxAttempts:    1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Success || res.TotalTokens == nil || *res.TotalTokens != 20 {
+		t.Fatalf("expected usage in proxy result, success=%v total=%v", res.Success, res.TotalTokens)
+	}
+	if res.CachedInputTokens == nil || *res.CachedInputTokens != 4 {
+		t.Fatalf("cached input tokens = %v", res.CachedInputTokens)
+	}
+
+	var log models.GatewayRequestLog
+	if err := db.Order("created_at desc").First(&log).Error; err != nil {
+		t.Fatal(err)
+	}
+	if log.PromptTokens == nil || *log.PromptTokens != 12 {
+		t.Fatalf("prompt tokens = %v", log.PromptTokens)
+	}
+	if log.CachedInputTokens == nil || *log.CachedInputTokens != 4 {
+		t.Fatalf("cached input tokens = %v", log.CachedInputTokens)
+	}
+	if log.CompletionTokens == nil || *log.CompletionTokens != 8 {
+		t.Fatalf("completion tokens = %v", log.CompletionTokens)
+	}
+	if log.TotalTokens == nil || *log.TotalTokens != 20 {
+		t.Fatalf("total tokens = %v", log.TotalTokens)
+	}
+	if log.UsageCost == nil || *log.UsageCost != 0.0042 {
+		t.Fatalf("usage cost = %v", log.UsageCost)
 	}
 }
 

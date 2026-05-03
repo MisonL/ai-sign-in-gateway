@@ -34,11 +34,8 @@ interface ChatMessage {
   images?: ChatImageReference[]
 }
 
-const defaultTextPrompt = '帮我用一句话说明当前网关是否可以正常对话。'
-const defaultImagePrompt = '生成一张干净的产品海报，主体是发光的 AI 网关控制台，风格现代、清晰、适合网页展示。'
-
 const form = reactive({
-  input: defaultTextPrompt,
+  input: '',
   model_key: undefined as string | undefined,
   image_size: '1024x1024',
   image_width: 1024,
@@ -53,15 +50,7 @@ const modelsLoading = ref(false)
 const modelItems = ref<ModelListItem[]>([])
 const modelLoadMessage = ref('')
 const modelLoadError = ref(false)
-const messages = ref<ChatMessage[]>([
-  {
-    id: 'welcome',
-    role: 'assistant',
-    content: '选择站点后会自动读取模型列表。选择对话模型即可聊天，选择图片模型即可生成图片，也可以添加参考图。',
-    createdAt: new Date().toISOString(),
-    status: 'done',
-  },
-])
+const messages = ref<ChatMessage[]>([])
 const referenceImages = ref<ChatImageReference[]>([])
 const fileInput = ref<HTMLInputElement | null>(null)
 const scrollBody = ref<HTMLElement | null>(null)
@@ -246,7 +235,7 @@ function modelListExceptionMessage(err: unknown) {
 }
 
 function handleModelChange() {
-  form.input = activeMode.value === 'image' ? defaultImagePrompt : defaultTextPrompt
+  form.input = ''
 }
 
 function setScrollBody(element: Element | ComponentPublicInstance | null) {

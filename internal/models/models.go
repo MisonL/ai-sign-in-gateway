@@ -129,6 +129,11 @@ type GatewayRequestLog struct {
 	StatusCode         *int      `json:"status_code,omitempty"`
 	Success            bool      `gorm:"default:false;index" json:"success"`
 	LatencyMS          *float64  `json:"latency_ms,omitempty"`
+	PromptTokens       *int      `json:"prompt_tokens,omitempty"`
+	CachedInputTokens  *int      `json:"cached_input_tokens,omitempty"`
+	CompletionTokens   *int      `json:"completion_tokens,omitempty"`
+	TotalTokens        *int      `json:"total_tokens,omitempty"`
+	UsageCost          *float64  `json:"usage_cost,omitempty"`
 	CircuitStateBefore string    `gorm:"size:20;default:closed" json:"circuit_state_before"`
 	FailureReason      *string   `gorm:"type:text" json:"failure_reason,omitempty"`
 	IsStream           bool      `gorm:"default:false;index" json:"is_stream"`

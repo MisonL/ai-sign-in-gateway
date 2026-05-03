@@ -301,11 +301,11 @@ http://127.0.0.1:8972/api/gateway
 
 余额探测优先使用站点和供应商的真实余额接口，普通 OpenAI 兼容 `/v1/usage` 只作为 fallback：
 
-- `sub2api-platform`：登录态读取 `/api/v1/subscriptions/progress`，失败时回退 `/api/v1/subscriptions/summary` 或 `/api/v1/keys` 的额度字段。
+- `sub2api-platform`：登录态读取 `/api/v1/subscriptions/progress`，识别日、周、月限额窗口；如果存在日限额，优先展示当日剩余可用额度。失败时回退 `/api/v1/subscriptions/summary` 或 `/api/v1/keys` 的额度字段。
 - `yellowpeach-newapi`：登录态读取 `/api/subscription/self` 的 `amount_total/amount_used`，失败时使用 API Key 调 `/api/usage/token/` 的 `total_available/total_used/total_granted`。
 - 官方供应商余额探测支持 DeepSeek、StepFun、SiliconFlow、OpenRouter、Novita AI 的公开余额接口。
 
-套餐余量会写入 `package_remaining/package_total/package_used/package_unit/package_display`，路由列表余额仍保留钱包余额或 API Key 余额。
+套餐余量会写入 `package_remaining/package_total/package_used/package_unit/package_display`，路由列表余额展示当前可用余额或当前限额窗口的剩余额度。
 
 ## 站点与插件
 

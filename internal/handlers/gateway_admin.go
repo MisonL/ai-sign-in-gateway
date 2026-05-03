@@ -3,6 +3,7 @@ package handlers
 import (
 	"errors"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ type gormDB = gorm.DB
 
 func (a *App) GatewayAdminRoutes(r chi.Router) {
 	r.Get("/overview", a.GatewayOverview)
+	r.Get("/usage", a.GatewayUsage)
 	r.Get("/settings", a.GetGatewaySettings)
 	r.Put("/settings", a.UpdateGatewaySettings)
 	r.Post("/sync", a.SyncGatewayRoutes)
@@ -89,7 +91,6 @@ func (a *App) GatewayOverview(w http.ResponseWriter, r *http.Request) {
 		"success_rate_24h":              successRate,
 		"avg_latency_ms_24h":            avgLatency,
 		"strategy_breakdown_24h":        strategyBreakdown24h(logs),
-		"recent_trend_5m":               recentTrend5m(logs, now),
 		"route_strategy":                settings.GatewayRouteStrategy,
 		"failure_threshold":             settings.GatewayFailureThreshold,
 		"cooldown_seconds":              settings.GatewayCooldownSeconds,
@@ -139,6 +140,278 @@ func formatFloat(v float64) string {
 		return strconv.FormatInt(int64(v), 10)
 	}
 	return strconv.FormatFloat(round2(v), 'f', -1, 64)
+}
+
+func (a *App) GatewayUsage(w http.ResponseWriter, r *http.Request) {
+	now := time.Now()
+	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local).UTC()
+	end := now.UTC()
+	var err error
+	if raw := strings.TrimSpace(r.URL.Query().Get("start")); raw != "" {
+		start, err = parseGatewayUsageTime(raw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "开始时间格式无效")
+			return
+		}
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("end")); raw != "" {
+		end, err = parseGatewayUsageTime(raw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "结束时间格式无效")
+			return
+		}
+	}
+	if !end.After(start) {
+		writeError(w, http.StatusBadRequest, "结束时间必须晚于开始时间")
+		return
+	}
+	if end.Sub(start) > 366*24*time.Hour {
+		writeError(w, http.StatusBadRequest, "查询时间段不能超过 366 天")
+		return
+	}
+
+	var logs []models.GatewayRequestLog
+	if err := a.DB.Preload("Site").Where("created_at >= ? AND created_at < ?", start, end).Order("created_at desc").Find(&logs).Error; err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, a.gatewayUsageResponse(logs, start, end))
+}
+
+func parseGatewayUsageTime(raw string) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		return t.UTC(), nil
+	}
+	if t, err := time.ParseInLocation("2006-01-02 15:04:05", raw, time.Local); err == nil {
+		return t.UTC(), nil
+	}
+	if t, err := time.ParseInLocation("2006-01-02", raw, time.Local); err == nil {
+		return t.UTC(), nil
+	}
+	return time.Time{}, errors.New("invalid time")
+}
+
+type gatewayUsageAgg struct {
+	RouteID            *uint
+	RouteLabel         string
+	SiteID             *uint
+	SiteName           *string
+	KeyName            string
+	KeyFingerprint     string
+	GroupName          string
+	RouteType          string
+	RequestCount       int
+	SuccessCount       int
+	FailureCount       int
+	StreamRequestCount int
+	PromptTokens       int
+	CachedInputTokens  int
+	CompletionTokens   int
+	TotalTokens        int
+	UsageCost          float64
+	hasUsageCost       bool
+	latencySum         float64
+	latencySamples     int
+	lastUsedAt         time.Time
+}
+
+func (a *App) gatewayUsageResponse(logs []models.GatewayRequestLog, start, end time.Time) map[string]any {
+	routeByID, routeBySiteKey := a.gatewayLogRouteLookup(logs)
+	total := gatewayUsageAgg{}
+	groups := map[string]*gatewayUsageAgg{}
+	for _, log := range logs {
+		total.RequestCount++
+		if log.Success {
+			total.SuccessCount++
+		} else {
+			total.FailureCount++
+		}
+		if log.IsStream {
+			total.StreamRequestCount++
+		}
+		addGatewayUsageTokens(&total, log)
+		addGatewayUsageLatency(&total, log)
+
+		state, matched := models.GatewayRouteState{}, false
+		if log.RouteStateID != nil {
+			state, matched = routeByID[*log.RouteStateID]
+		}
+		if !matched && log.SiteID != nil {
+			state, matched = routeBySiteKey[gatewayLogRouteKey(*log.SiteID, log.KeyFingerprint)]
+		}
+
+		routeID := log.RouteStateID
+		if matched {
+			id := state.ID
+			routeID = &id
+		}
+		routeKey := "unknown"
+		if routeID != nil && *routeID > 0 {
+			routeKey = "route:" + strconv.FormatUint(uint64(*routeID), 10)
+		} else if log.SiteID != nil {
+			routeKey = gatewayLogRouteKey(*log.SiteID, log.KeyFingerprint)
+		}
+		agg, ok := groups[routeKey]
+		if !ok {
+			var siteName *string
+			if log.Site != nil {
+				siteName = &log.Site.Name
+			}
+			if siteName == nil && matched {
+				name := services.GatewayRouteSiteLabel(services.GatewayRoute{State: state, Site: state.Site})
+				siteName = &name
+			}
+			agg = &gatewayUsageAgg{
+				RouteID:        routeID,
+				SiteID:         log.SiteID,
+				SiteName:       siteName,
+				KeyName:        log.KeyName,
+				KeyFingerprint: log.KeyFingerprint,
+				GroupName:      log.GroupName,
+				RouteType:      state.RouteType,
+				RouteLabel:     gatewayLogRouteLabel(log, state, matched, siteName),
+			}
+			if matched {
+				if agg.SiteID == nil {
+					siteID := state.SiteID
+					agg.SiteID = &siteID
+				}
+				if strings.TrimSpace(agg.KeyName) == "" {
+					agg.KeyName = state.KeyName
+				}
+				if strings.TrimSpace(agg.GroupName) == "" {
+					agg.GroupName = state.GroupName
+				}
+			}
+			groups[routeKey] = agg
+		}
+		agg.RequestCount++
+		if log.Success {
+			agg.SuccessCount++
+		} else {
+			agg.FailureCount++
+		}
+		if log.IsStream {
+			agg.StreamRequestCount++
+		}
+		addGatewayUsageTokens(agg, log)
+		addGatewayUsageLatency(agg, log)
+		if log.CreatedAt.After(agg.lastUsedAt) {
+			agg.lastUsedAt = log.CreatedAt
+		}
+	}
+
+	routes := make([]map[string]any, 0, len(groups))
+	for _, agg := range groups {
+		routes = append(routes, gatewayUsageAggResponse(agg))
+	}
+	sortGatewayUsageRoutes(routes)
+	out := gatewayUsageAggResponse(&total)
+	out["start"] = start.Format(time.RFC3339)
+	out["end"] = end.Format(time.RFC3339)
+	out["routes"] = routes
+	return out
+}
+
+func addGatewayUsageTokens(agg *gatewayUsageAgg, log models.GatewayRequestLog) {
+	if log.PromptTokens != nil {
+		agg.PromptTokens += *log.PromptTokens
+	}
+	if log.CachedInputTokens != nil {
+		agg.CachedInputTokens += *log.CachedInputTokens
+	}
+	if log.CompletionTokens != nil {
+		agg.CompletionTokens += *log.CompletionTokens
+	}
+	if log.TotalTokens != nil {
+		agg.TotalTokens += *log.TotalTokens
+	}
+	if log.UsageCost != nil {
+		agg.UsageCost += *log.UsageCost
+		agg.hasUsageCost = true
+	}
+}
+
+func addGatewayUsageLatency(agg *gatewayUsageAgg, log models.GatewayRequestLog) {
+	if log.Success && log.LatencyMS != nil {
+		agg.latencySum += *log.LatencyMS
+		agg.latencySamples++
+	}
+}
+
+func gatewayUsageAggResponse(agg *gatewayUsageAgg) map[string]any {
+	var avgLatency any
+	if agg.latencySamples > 0 {
+		avgLatency = round2(agg.latencySum / float64(agg.latencySamples))
+	}
+	var usageCost any
+	if agg.hasUsageCost {
+		usageCost = round2(agg.UsageCost)
+	}
+	officialCost := gatewayOfficialUsageCost(agg.PromptTokens, agg.CachedInputTokens, agg.CompletionTokens)
+	successRate := 0.0
+	if agg.RequestCount > 0 {
+		successRate = round2(float64(agg.SuccessCount) / float64(agg.RequestCount) * 100)
+	}
+	return map[string]any{
+		"route_id":             agg.RouteID,
+		"route_label":          agg.RouteLabel,
+		"site_id":              agg.SiteID,
+		"site_name":            agg.SiteName,
+		"key_name":             agg.KeyName,
+		"key_fingerprint":      agg.KeyFingerprint,
+		"group_name":           agg.GroupName,
+		"route_type":           agg.RouteType,
+		"request_count":        agg.RequestCount,
+		"success_count":        agg.SuccessCount,
+		"failure_count":        agg.FailureCount,
+		"success_rate":         successRate,
+		"stream_request_count": agg.StreamRequestCount,
+		"prompt_tokens":        agg.PromptTokens,
+		"cached_input_tokens":  agg.CachedInputTokens,
+		"completion_tokens":    agg.CompletionTokens,
+		"total_tokens":         agg.TotalTokens,
+		"usage_cost":           usageCost,
+		"official_input_cost":  roundCost(float64(agg.PromptTokens) / 1_000_000 * 5),
+		"official_cached_cost": roundCost(float64(agg.CachedInputTokens) / 1_000_000 * 0.5),
+		"official_output_cost": roundCost(float64(agg.CompletionTokens) / 1_000_000 * 30),
+		"official_total_cost":  officialCost,
+		"avg_latency_ms":       avgLatency,
+		"last_used_at":         nullableTime(agg.lastUsedAt),
+	}
+}
+
+func gatewayOfficialUsageCost(promptTokens, cachedInputTokens, completionTokens int) float64 {
+	return roundCost(float64(promptTokens)/1_000_000*5 + float64(cachedInputTokens)/1_000_000*0.5 + float64(completionTokens)/1_000_000*30)
+}
+
+func roundCost(value float64) float64 {
+	return float64(int64(value*1_000_000+0.5)) / 1_000_000
+}
+
+func sortGatewayUsageRoutes(routes []map[string]any) {
+	sort.SliceStable(routes, func(i, j int) bool {
+		leftTokens, _ := routes[i]["total_tokens"].(int)
+		rightTokens, _ := routes[j]["total_tokens"].(int)
+		if leftTokens != rightTokens {
+			return leftTokens > rightTokens
+		}
+		leftRequests, _ := routes[i]["request_count"].(int)
+		rightRequests, _ := routes[j]["request_count"].(int)
+		if leftRequests != rightRequests {
+			return leftRequests > rightRequests
+		}
+		leftLabel, _ := routes[i]["route_label"].(string)
+		rightLabel, _ := routes[j]["route_label"].(string)
+		return strings.TrimSpace(leftLabel) < strings.TrimSpace(rightLabel)
+	})
+}
+
+func nullableTime(value time.Time) any {
+	if value.IsZero() {
+		return nil
+	}
+	return value.UTC().Format(time.RFC3339)
 }
 
 type strategyAgg struct {
@@ -208,71 +481,6 @@ func strategyBreakdown24h(logs []models.GatewayRequestLog) []map[string]any {
 			"stream_request_count": agg.stream,
 			"stream_success_rate":  streamSuccessRate,
 			"avg_stream_ttfb_ms":   avgStreamTTFB,
-		})
-	}
-	return out
-}
-
-const (
-	trendBucketSeconds = 1
-	trendBucketCount   = 60
-)
-
-func recentTrend5m(logs []models.GatewayRequestLog, now time.Time) []map[string]any {
-	endEpoch := now.Unix()
-	endAligned := (endEpoch/int64(trendBucketSeconds) + 1) * int64(trendBucketSeconds)
-	starts := make([]int64, trendBucketCount)
-	for i := 0; i < trendBucketCount; i++ {
-		starts[trendBucketCount-1-i] = endAligned - int64((i+1)*trendBucketSeconds)
-	}
-	earliest := starts[0]
-	latest := starts[trendBucketCount-1] + int64(trendBucketSeconds)
-
-	type bucketAgg struct {
-		total, success, failure, stream int
-		latencies                       []float64
-	}
-	buckets := make(map[int64]*bucketAgg, trendBucketCount)
-	for _, s := range starts {
-		buckets[s] = &bucketAgg{}
-	}
-	for _, log := range logs {
-		ts := log.CreatedAt.Unix()
-		if ts < earliest || ts >= latest {
-			continue
-		}
-		bucketStart := (ts / int64(trendBucketSeconds)) * int64(trendBucketSeconds)
-		agg, ok := buckets[bucketStart]
-		if !ok {
-			continue
-		}
-		agg.total++
-		if log.Success {
-			agg.success++
-			if log.LatencyMS != nil {
-				agg.latencies = append(agg.latencies, *log.LatencyMS)
-			}
-		} else {
-			agg.failure++
-		}
-		if log.IsStream {
-			agg.stream++
-		}
-	}
-	out := make([]map[string]any, 0, trendBucketCount)
-	for _, s := range starts {
-		agg := buckets[s]
-		var avgLatency any
-		if len(agg.latencies) > 0 {
-			avgLatency = round2(sumFloat(agg.latencies) / float64(len(agg.latencies)))
-		}
-		out = append(out, map[string]any{
-			"bucket_start":         time.Unix(s, 0).UTC().Format("2006-01-02T15:04:05Z"),
-			"request_count":        agg.total,
-			"success_count":        agg.success,
-			"failure_count":        agg.failure,
-			"stream_request_count": agg.stream,
-			"avg_latency_ms":       avgLatency,
 		})
 	}
 	return out
@@ -507,6 +715,11 @@ func (a *App) gatewayLogResponse(logs []models.GatewayRequestLog) []map[string]a
 			"status_code":          item.StatusCode,
 			"success":              item.Success,
 			"latency_ms":           item.LatencyMS,
+			"prompt_tokens":        item.PromptTokens,
+			"cached_input_tokens":  item.CachedInputTokens,
+			"completion_tokens":    item.CompletionTokens,
+			"total_tokens":         item.TotalTokens,
+			"usage_cost":           item.UsageCost,
 			"circuit_state_before": item.CircuitStateBefore,
 			"failure_reason":       item.FailureReason,
 			"is_stream":            item.IsStream,
@@ -901,7 +1114,7 @@ func gatewayRouteResponse(route services.GatewayRoute) map[string]any {
 		"has_api_key":            route.APIKey != "",
 		"group_name":             state.GroupName,
 		"last_balance":           route.Site.LastBalance,
-		"balance_display":        balanceDisplay(route.Site.LastBalance),
+		"balance_display":        balanceDisplayWithUnit(route.Site.LastBalance, jsonMapString(route.Site.PluginConfig, "balance_unit")),
 		"package_display":        packageDisplay(route.Site),
 		"checkin_status":         route.Site.LastStatus,
 		"key_name":               state.KeyName,

@@ -15,6 +15,7 @@ import type {
   GatewayActiveRequest,
   GatewayLog,
   GatewayOverview,
+  GatewayUsage,
   GatewayRouteDiagnosis,
   GatewayRouteProbeResult,
   GatewayRoute,
@@ -602,6 +603,18 @@ export function testMcp(payload: {
 
 export function getGatewayOverview(): Promise<GatewayOverview> {
   return request('/gateway-admin/overview')
+}
+
+export function getGatewayUsage(options?: { start?: string; end?: string }): Promise<GatewayUsage> {
+  const params = new URLSearchParams()
+  if (options?.start) {
+    params.set('start', options.start)
+  }
+  if (options?.end) {
+    params.set('end', options.end)
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : ''
+  return request(`/gateway-admin/usage${suffix}`)
 }
 
 export function getGatewaySettings(): Promise<GatewaySettingsData> {

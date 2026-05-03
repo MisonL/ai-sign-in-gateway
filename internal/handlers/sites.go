@@ -683,6 +683,7 @@ func (a *App) refreshOneSite(ctx context.Context, site models.Site, timeout int)
 		if err != nil {
 			message = err.Error()
 		} else {
+			a.applySub2APIBalanceFallback(ctx, site, timeout, &result)
 			message = result.Message
 			if result.LoggedIn {
 				status = "success"
@@ -727,7 +728,7 @@ func (a *App) refreshOneSite(ctx context.Context, site models.Site, timeout int)
 		"connection_status": site.LastStatus,
 		"last_message":      site.LastMessage,
 		"last_balance":      site.LastBalance,
-		"balance_display":   balanceDisplay(site.LastBalance),
+		"balance_display":   balanceDisplayWithUnit(site.LastBalance, jsonMapString(site.PluginConfig, "balance_unit")),
 		"package_display":   packageDisplay(site),
 		"invite_link":       strings.TrimSpace(jsonMapString(site.PluginConfig, "invite_link")),
 		"invite_code":       strings.TrimSpace(jsonMapString(site.PluginConfig, "invite_code")),
@@ -1268,6 +1269,32 @@ func (a *App) ProbeSiteBalance(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, balanceProbeResponse(result))
 }
+
+func (a *App) applySub2APIBalanceFallback(ctx context.Context, site models.Site, timeout int, status *plugins.AccountStatus) {
+	if status == nil || status.Balance != nil || site.ID == 0 || !strings.EqualFold(strings.TrimSpace(site.PluginKey), "sub2api-platform") {
+		return
+	}
+	if status.PackageRemaining != nil {
+		status.Balance = status.PackageRemaining
+		if status.BalanceUnit == nil && status.PackageUnit != nil && strings.TrimSpace(*status.PackageUnit) != "" {
+			unit := strings.TrimSpace(*status.PackageUnit)
+			status.BalanceUnit = &unit
+		}
+		return
+	}
+	result, err := services.ProbeSiteBalance(ctx, a.DB, site.ID, timeout)
+	if err != nil || !result.OK || result.Remaining == nil {
+		return
+	}
+	status.Balance = result.Remaining
+	if strings.TrimSpace(result.Unit) != "" {
+		unit := strings.TrimSpace(result.Unit)
+		status.BalanceUnit = &unit
+	}
+	if strings.TrimSpace(status.Message) != "" {
+		status.Message = strings.TrimSpace(status.Message) + " API Key 余额兜底读取成功。"
+	}
+}
 func (a *App) BrowserOpen(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusNotImplemented, map[string]any{"detail": "Go 浏览器自动化待接入。"})
 }
@@ -1356,6 +1383,7 @@ func (a *App) siteHealth(w http.ResponseWriter, ctx context.Context, site models
 		writeJSON(w, http.StatusOK, schemas.SiteHealthResponse{SiteID: site.ID, LoggedIn: false, Message: err.Error(), UpdatedCredentials: models.JSONMap{}, UpdatedPluginConfig: models.JSONMap{}})
 		return
 	}
+	a.applySub2APIBalanceFallback(ctx, site, timeout, &status)
 	pluginConfigUpdates := nonNilJSON(status.UpdatedPluginConfig)
 	if status.BalanceUnit != nil && strings.TrimSpace(*status.BalanceUnit) != "" {
 		pluginConfigUpdates["balance_unit"] = strings.TrimSpace(*status.BalanceUnit)

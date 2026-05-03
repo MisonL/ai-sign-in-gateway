@@ -40,6 +40,11 @@ func addMissingColumns(db *gorm.DB) error {
 	patches := []columnPatch{
 		{table: "gateway_request_logs", column: "is_stream", statement: "ALTER TABLE gateway_request_logs ADD COLUMN is_stream BOOLEAN NOT NULL DEFAULT 0"},
 		{table: "gateway_request_logs", column: "route_state_id", statement: "ALTER TABLE gateway_request_logs ADD COLUMN route_state_id INTEGER"},
+		{table: "gateway_request_logs", column: "prompt_tokens", statement: "ALTER TABLE gateway_request_logs ADD COLUMN prompt_tokens INTEGER"},
+		{table: "gateway_request_logs", column: "cached_input_tokens", statement: "ALTER TABLE gateway_request_logs ADD COLUMN cached_input_tokens INTEGER"},
+		{table: "gateway_request_logs", column: "completion_tokens", statement: "ALTER TABLE gateway_request_logs ADD COLUMN completion_tokens INTEGER"},
+		{table: "gateway_request_logs", column: "total_tokens", statement: "ALTER TABLE gateway_request_logs ADD COLUMN total_tokens INTEGER"},
+		{table: "gateway_request_logs", column: "usage_cost", statement: "ALTER TABLE gateway_request_logs ADD COLUMN usage_cost FLOAT"},
 		{table: "gateway_route_states", column: "ewma_latency_ms", statement: "ALTER TABLE gateway_route_states ADD COLUMN ewma_latency_ms FLOAT"},
 		{table: "system_settings", column: "desktop_keep_running", statement: "ALTER TABLE system_settings ADD COLUMN desktop_keep_running BOOLEAN NOT NULL DEFAULT 0"},
 		{table: "system_settings", column: "database_backup_enabled", statement: "ALTER TABLE system_settings ADD COLUMN database_backup_enabled BOOLEAN NOT NULL DEFAULT 0"},

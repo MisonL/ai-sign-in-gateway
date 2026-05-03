@@ -129,6 +129,12 @@ func (p *Sub2API) FetchAccountStatus(ctx context.Context, site models.Site, time
 	currency := pathString(profile, "data.currency", "$")
 	balanceUnit := strings.TrimSpace(currency)
 	packageQuota := p.fetchPackageQuota(ctx, site, &auth, profile, timeoutSeconds)
+	if balance == nil && packageQuota.Remaining != nil {
+		balance = packageQuota.Remaining
+		if strings.TrimSpace(packageQuota.Unit) != "" {
+			balanceUnit = strings.TrimSpace(packageQuota.Unit)
+		}
+	}
 	if primaryKey != "" {
 		updatedCredentials["api_key"] = primaryKey
 	}
@@ -369,6 +375,7 @@ func sub2apiQuotaFromProgressPayload(payload map[string]any) packageQuotaSnapsho
 	items := extractItems(payload)
 	var best packageQuotaSnapshot
 	bestRank := -1
+	displays := []string{}
 	for _, item := range items {
 		progress, ok := item["progress"].(map[string]any)
 		if !ok {
@@ -380,9 +387,9 @@ func sub2apiQuotaFromProgressPayload(payload map[string]any) packageQuotaSnapsho
 			label string
 			rank  int
 		}{
-			{key: "monthly", label: "月度套餐", rank: 3},
+			{key: "monthly", label: "月度套餐", rank: 1},
 			{key: "weekly", label: "周度套餐", rank: 2},
-			{key: "daily", label: "日度套餐", rank: 1},
+			{key: "daily", label: "日度套餐", rank: 3},
 		} {
 			raw, ok := progress[window.key].(map[string]any)
 			if !ok {
@@ -399,8 +406,10 @@ func sub2apiQuotaFromProgressPayload(payload map[string]any) packageQuotaSnapsho
 				continue
 			}
 			fullLabel := strings.TrimSpace(label + " " + window.label)
+			display := formatPackageQuotaDisplay(fullLabel, remaining, limit, used, "USD")
+			displays = appendUniqueNonEmpty(displays, display)
 			quota := packageQuotaSnapshot{
-				Display:   formatPackageQuotaDisplay(fullLabel, remaining, limit, used, "USD"),
+				Display:   display,
 				Remaining: remaining,
 				Total:     limit,
 				Used:      used,
@@ -411,6 +420,9 @@ func sub2apiQuotaFromProgressPayload(payload map[string]any) packageQuotaSnapsho
 				bestRank = window.rank
 			}
 		}
+	}
+	if best.hasQuota() && len(displays) > 0 {
+		best.Display = strings.Join(displays, "；")
 	}
 	return best
 }
@@ -429,6 +441,7 @@ func sub2apiQuotaFromSummaryPayload(payload map[string]any) packageQuotaSnapshot
 	}
 	var best packageQuotaSnapshot
 	bestRank := -1
+	displays := []string{}
 	for _, item := range items {
 		label := strings.TrimSpace(fmt.Sprint(firstExistingValue(item, "group_name", "name")))
 		if label == "" || label == "<nil>" {
@@ -440,9 +453,9 @@ func sub2apiQuotaFromSummaryPayload(payload map[string]any) packageQuotaSnapshot
 			label    string
 			rank     int
 		}{
-			{usedKey: "monthly_used_usd", limitKey: "monthly_limit_usd", label: "月度套餐", rank: 3},
+			{usedKey: "monthly_used_usd", limitKey: "monthly_limit_usd", label: "月度套餐", rank: 1},
 			{usedKey: "weekly_used_usd", limitKey: "weekly_limit_usd", label: "周度套餐", rank: 2},
-			{usedKey: "daily_used_usd", limitKey: "daily_limit_usd", label: "日度套餐", rank: 1},
+			{usedKey: "daily_used_usd", limitKey: "daily_limit_usd", label: "日度套餐", rank: 3},
 		} {
 			total := numberPtr(item[window.limitKey])
 			used := numberPtr(item[window.usedKey])
@@ -450,8 +463,10 @@ func sub2apiQuotaFromSummaryPayload(payload map[string]any) packageQuotaSnapshot
 				continue
 			}
 			remaining := *total - *used
+			display := formatPackageQuotaDisplay(label+" "+window.label, &remaining, total, used, "USD")
+			displays = appendUniqueNonEmpty(displays, display)
 			quota := packageQuotaSnapshot{
-				Display:   formatPackageQuotaDisplay(label+" "+window.label, &remaining, total, used, "USD"),
+				Display:   display,
 				Remaining: &remaining,
 				Total:     total,
 				Used:      used,
@@ -463,7 +478,23 @@ func sub2apiQuotaFromSummaryPayload(payload map[string]any) packageQuotaSnapshot
 			}
 		}
 	}
+	if best.hasQuota() && len(displays) > 0 {
+		best.Display = strings.Join(displays, "；")
+	}
 	return best
+}
+
+func appendUniqueNonEmpty(values []string, value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return values
+	}
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 func sub2apiQuotaFromKeysPayload(payload map[string]any) packageQuotaSnapshot {

@@ -76,3 +76,11 @@
 | sub2api 类平台 | `sub2api-platform` |
 | 只有模型 API Key，不需要登录签到 | `api-supplier` |
 | 自定义 HTTP 登录、状态或签到接口 | `http-relay-station` |
+
+## 余额和套餐余量
+
+站点状态刷新和路由余额探测会尽量读取真实平台接口，普通 OpenAI 兼容 `/v1/usage` 只作为通用 fallback。
+
+`sub2api-platform` 会优先读取订阅进度，并识别日、周、月等限额窗口；如果存在日限额，站点中心和路由池优先展示当日剩余可用额度。登录态读取失败时，会回退订阅汇总或 API Key 额度字段。
+
+套餐内容在站点中心保持单行显示，超出部分省略，鼠标悬浮可查看完整套餐文本。套餐余量写入 `package_remaining/package_total/package_used/package_unit/package_display`，余额字段 `last_balance` 用于当前可用余额或当前限额窗口的剩余额度。

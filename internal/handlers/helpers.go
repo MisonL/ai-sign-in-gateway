@@ -61,7 +61,7 @@ func siteResponseWithSecrets(site models.Site, includeSecrets bool) schemas.Site
 		ConnectionStatus: site.LastStatus,
 		LastMessage:      site.LastMessage,
 		LastBalance:      site.LastBalance,
-		BalanceDisplay:   balanceDisplay(site.LastBalance),
+		BalanceDisplay:   balanceDisplayWithUnit(site.LastBalance, jsonMapString(site.PluginConfig, "balance_unit")),
 		PackageRemaining: jsonMapNumberPtr(site.PluginConfig, "package_remaining"),
 		PackageTotal:     jsonMapNumberPtr(site.PluginConfig, "package_total"),
 		PackageUsed:      jsonMapNumberPtr(site.PluginConfig, "package_used"),
@@ -370,12 +370,26 @@ func isManualAPIKeyEntry(item map[string]any) bool {
 }
 
 func balanceDisplay(value *float64) *string {
+	return balanceDisplayWithUnit(value, "")
+}
+
+func balanceDisplayWithUnit(value *float64, unit string) *string {
 	if value == nil {
 		return nil
 	}
 	text := strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.4f", *value), "0"), ".")
 	if text == "" {
 		text = "0"
+	}
+	unit = strings.TrimSpace(unit)
+	if unit == "" {
+		return &text
+	}
+	switch unit {
+	case "$", "¥", "€", "£":
+		text = unit + text
+	default:
+		text = text + " " + unit
 	}
 	return &text
 }
@@ -402,17 +416,18 @@ func jsonMapString(m models.JSONMap, key string) string {
 
 func balanceProbeResponse(result services.BalanceProbeResult) map[string]any {
 	return map[string]any{
-		"site_id":      result.SiteID,
-		"route_id":     result.RouteID,
-		"ok":           result.OK,
-		"status_code":  result.StatusCode,
-		"latency_ms":   result.LatencyMS,
-		"remaining":    result.Remaining,
-		"unit":         result.Unit,
-		"base_url":     result.BaseURL,
-		"message":      result.Message,
-		"checked_at":   result.CheckedAt,
-		"last_balance": result.Remaining,
+		"site_id":         result.SiteID,
+		"route_id":        result.RouteID,
+		"ok":              result.OK,
+		"status_code":     result.StatusCode,
+		"latency_ms":      result.LatencyMS,
+		"remaining":       result.Remaining,
+		"unit":            result.Unit,
+		"base_url":        result.BaseURL,
+		"message":         result.Message,
+		"checked_at":      result.CheckedAt,
+		"last_balance":    result.Remaining,
+		"balance_display": balanceDisplayWithUnit(result.Remaining, result.Unit),
 	}
 }
 

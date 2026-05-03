@@ -268,6 +268,11 @@ func TestSub2APIStatusReadsSubscriptionProgress(t *testing.T) {
 								"used_usd":      25,
 								"remaining_usd": 75,
 							},
+							"weekly": map[string]any{
+								"limit_usd":     20,
+								"used_usd":      3,
+								"remaining_usd": 17,
+							},
 							"daily": map[string]any{
 								"limit_usd":     5,
 								"used_usd":      1,
@@ -299,13 +304,13 @@ func TestSub2APIStatusReadsSubscriptionProgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchAccountStatus returned error: %v", err)
 	}
-	if status.PackageRemaining == nil || *status.PackageRemaining != 75 {
+	if status.PackageRemaining == nil || *status.PackageRemaining != 4 {
 		t.Fatalf("PackageRemaining = %v", status.PackageRemaining)
 	}
-	if status.PackageTotal == nil || *status.PackageTotal != 100 {
+	if status.PackageTotal == nil || *status.PackageTotal != 5 {
 		t.Fatalf("PackageTotal = %v", status.PackageTotal)
 	}
-	if status.PackageUsed == nil || *status.PackageUsed != 25 {
+	if status.PackageUsed == nil || *status.PackageUsed != 1 {
 		t.Fatalf("PackageUsed = %v", status.PackageUsed)
 	}
 	if status.PackageUnit == nil || *status.PackageUnit != "USD" {
@@ -313,6 +318,9 @@ func TestSub2APIStatusReadsSubscriptionProgress(t *testing.T) {
 	}
 	if status.PackageDisplay == nil || !strings.Contains(*status.PackageDisplay, "Pro 月度套餐") {
 		t.Fatalf("PackageDisplay = %v", status.PackageDisplay)
+	}
+	if !strings.Contains(*status.PackageDisplay, "Pro 周度套餐") || !strings.Contains(*status.PackageDisplay, "Pro 日度套餐") {
+		t.Fatalf("PackageDisplay missing weekly/daily quota = %v", *status.PackageDisplay)
 	}
 }
 
@@ -337,6 +345,10 @@ func TestSub2APIStatusFallsBackToSubscriptionSummary(t *testing.T) {
 							"group_name":        "Team",
 							"monthly_used_usd":  12.5,
 							"monthly_limit_usd": 50,
+							"weekly_used_usd":   2,
+							"weekly_limit_usd":  10,
+							"daily_used_usd":    0.5,
+							"daily_limit_usd":   1.5,
 						},
 					},
 				},
@@ -363,10 +375,73 @@ func TestSub2APIStatusFallsBackToSubscriptionSummary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchAccountStatus returned error: %v", err)
 	}
-	if status.PackageRemaining == nil || *status.PackageRemaining != 37.5 {
+	if status.PackageRemaining == nil || *status.PackageRemaining != 1 {
 		t.Fatalf("PackageRemaining = %v", status.PackageRemaining)
 	}
 	if status.PackageDisplay == nil || !strings.Contains(*status.PackageDisplay, "Team 月度套餐") {
+		t.Fatalf("PackageDisplay = %v", status.PackageDisplay)
+	}
+	if !strings.Contains(*status.PackageDisplay, "Team 周度套餐") || !strings.Contains(*status.PackageDisplay, "Team 日度套餐") {
+		t.Fatalf("PackageDisplay missing weekly/daily quota = %v", *status.PackageDisplay)
+	}
+}
+
+func TestSub2APIStatusUsesPackageRemainingAsBalanceWhenProfileBalanceMissing(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/auth/me":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"email":    "user@example.com",
+					"currency": "USD",
+				},
+			})
+		case "/api/v1/subscriptions/progress":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]any{
+					{
+						"subscription": map[string]any{
+							"group": map[string]any{"name": "OpenToken-1.5R日卡"},
+						},
+						"progress": map[string]any{
+							"daily": map[string]any{
+								"limit_usd": 1.5,
+								"used_usd":  0.4,
+							},
+						},
+					},
+				},
+			})
+		case "/api/v1/keys":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"items": []map[string]any{}}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	plugin := NewSub2API()
+	status, err := plugin.FetchAccountStatus(context.Background(), models.Site{
+		BaseURL:   server.URL,
+		PluginKey: "sub2api-platform",
+		Credentials: models.JSONMap{
+			"access_token": "valid-access-token",
+		},
+		PluginConfig: models.JSONMap{
+			"api_keys_url": "/api/v1/keys",
+		},
+	}, 5)
+	if err != nil {
+		t.Fatalf("FetchAccountStatus returned error: %v", err)
+	}
+	if status.Balance == nil || *status.Balance != 1.1 {
+		t.Fatalf("Balance = %v", status.Balance)
+	}
+	if status.BalanceUnit == nil || *status.BalanceUnit != "USD" {
+		t.Fatalf("BalanceUnit = %v", status.BalanceUnit)
+	}
+	if status.PackageDisplay == nil || !strings.Contains(*status.PackageDisplay, "OpenToken-1.5R日卡 日度套餐") {
 		t.Fatalf("PackageDisplay = %v", status.PackageDisplay)
 	}
 }

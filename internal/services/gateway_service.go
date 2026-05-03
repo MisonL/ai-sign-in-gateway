@@ -224,15 +224,20 @@ type GatewayRoute struct {
 }
 
 type GatewayProxyResult struct {
-	Route      GatewayRoute
-	StatusCode int
-	Header     http.Header
-	Body       []byte
-	LatencyMS  float64
-	Success    bool
-	Error      string
-	Attempts   int
-	IsStream   bool
+	Route             GatewayRoute
+	StatusCode        int
+	Header            http.Header
+	Body              []byte
+	LatencyMS         float64
+	Success           bool
+	Error             string
+	Attempts          int
+	IsStream          bool
+	PromptTokens      *int
+	CachedInputTokens *int
+	CompletionTokens  *int
+	TotalTokens       *int
+	UsageCost         *float64
 }
 
 type GatewayAllRoutesFailedError struct {
@@ -641,29 +646,14 @@ func filterAndOrderCandidates(routes []GatewayRoute, group, routeType string, po
 	case "latency_first":
 		ordered = append(sortByLatency(withinClosed), sortByLoadAndPriority(halfOpen)...)
 	case "priority":
-		merged := append([]GatewayRoute{}, withinClosed...)
-		merged = append(merged, halfOpen...)
-		sort.SliceStable(merged, func(i, j int) bool {
-			ai, bi := candidateHealthRank(merged[i]), candidateHealthRank(merged[j])
-			if ai != bi {
-				return ai < bi
-			}
-			al, bl := candidateLoadRank(merged[i]), candidateLoadRank(merged[j])
-			if al != bl {
-				return al < bl
-			}
-			if merged[i].State.RoutePriority != merged[j].State.RoutePriority {
-				return merged[i].State.RoutePriority < merged[j].State.RoutePriority
-			}
-			if merged[i].State.Weight != merged[j].State.Weight {
-				return merged[i].State.Weight > merged[j].State.Weight
-			}
-			return merged[i].Site.Name < merged[j].Site.Name
-		})
-		ordered = merged
+		ordered = append(sortByStrictPriority(withinClosed), sortByStrictPriority(halfOpen)...)
 	default: // round_robin
 		base := append([]GatewayRoute{}, withinClosed...)
 		sort.SliceStable(base, func(i, j int) bool {
+			fi, fj := candidateFailureRank(base[i]), candidateFailureRank(base[j])
+			if fi != fj {
+				return fi < fj
+			}
 			if base[i].State.RoutePriority != base[j].State.RoutePriority {
 				return base[i].State.RoutePriority < base[j].State.RoutePriority
 			}
@@ -672,28 +662,15 @@ func filterAndOrderCandidates(routes []GatewayRoute, group, routeType string, po
 			}
 			return base[i].Site.Name < base[j].Site.Name
 		})
-		var leastBusy []GatewayRoute
-		var busier []GatewayRoute
-		if len(base) > 0 {
-			lowest := RouteActiveCount(base[0].State.ID)
-			for _, r := range base[1:] {
-				if c := RouteActiveCount(r.State.ID); c < lowest {
-					lowest = c
-				}
-			}
-			for _, r := range base {
-				if RouteActiveCount(r.State.ID) == lowest {
-					leastBusy = append(leastBusy, r)
-				} else {
-					busier = append(busier, r)
-				}
-			}
+		if policy.ConcurrencyTransferStrategy == "limit_only" {
+			ordered = preferActiveWithinLimit(base, policy)
+		} else {
+			ordered = rotateUnique(base, bucket, true)
 		}
-		ordered = append(rotateUnique(leastBusy, bucket, true), sortByLoadAndPriority(busier)...)
 		ordered = append(ordered, sortByLoadAndPriority(halfOpen)...)
 	}
 
-	if policy.ConcurrencyTransferStrategy == "balance" {
+	if policy.ConcurrencyTransferStrategy == "balance" && normalizeStrategy(policy.RouteStrategy) != "priority" {
 		ordered = sortByLoadThenExistingOrder(ordered)
 	}
 
@@ -731,6 +708,10 @@ func candidateBelowConcurrencyLimit(r GatewayRoute, policy GatewayPolicy) bool {
 func sortByLatency(in []GatewayRoute) []GatewayRoute {
 	out := append([]GatewayRoute{}, in...)
 	sort.SliceStable(out, func(i, j int) bool {
+		fi, fj := candidateFailureRank(out[i]), candidateFailureRank(out[j])
+		if fi != fj {
+			return fi < fj
+		}
 		ai := candidateEffectiveLatency(out[i])
 		aj := candidateEffectiveLatency(out[j])
 		if ai != aj {
@@ -744,6 +725,10 @@ func sortByLatency(in []GatewayRoute) []GatewayRoute {
 func sortByLoadAndPriority(in []GatewayRoute) []GatewayRoute {
 	out := append([]GatewayRoute{}, in...)
 	sort.SliceStable(out, func(i, j int) bool {
+		fi, fj := candidateFailureRank(out[i]), candidateFailureRank(out[j])
+		if fi != fj {
+			return fi < fj
+		}
 		ai, aj := candidateLoadRank(out[i]), candidateLoadRank(out[j])
 		if ai != aj {
 			return ai < aj
@@ -769,18 +754,63 @@ func sortBySmart(in []GatewayRoute, ref float64, policy GatewayPolicy, now time.
 	return out
 }
 
+func sortByStrictPriority(in []GatewayRoute) []GatewayRoute {
+	out := append([]GatewayRoute{}, in...)
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].State.RoutePriority != out[j].State.RoutePriority {
+			return out[i].State.RoutePriority < out[j].State.RoutePriority
+		}
+		if out[i].State.ID != out[j].State.ID {
+			return out[i].State.ID < out[j].State.ID
+		}
+		return out[i].Site.Name < out[j].Site.Name
+	})
+	return out
+}
+
 func sortByLoadThenExistingOrder(in []GatewayRoute) []GatewayRoute {
 	out := append([]GatewayRoute{}, in...)
 	sort.SliceStable(out, func(i, j int) bool {
+		fi, fj := candidateFailureRank(out[i]), candidateFailureRank(out[j])
+		if fi != fj {
+			return fi < fj
+		}
 		return RouteActiveCount(out[i].State.ID) < RouteActiveCount(out[j].State.ID)
+	})
+	return out
+}
+
+func preferActiveWithinLimit(in []GatewayRoute, policy GatewayPolicy) []GatewayRoute {
+	if strings.ToLower(strings.TrimSpace(policy.ConcurrencyTransferStrategy)) != "limit_only" {
+		return append([]GatewayRoute{}, in...)
+	}
+	out := append([]GatewayRoute{}, in...)
+	sort.SliceStable(out, func(i, j int) bool {
+		ai, aj := RouteActiveCount(out[i].State.ID), RouteActiveCount(out[j].State.ID)
+		iActive := ai > 0 && candidateBelowConcurrencyLimit(out[i], policy)
+		jActive := aj > 0 && candidateBelowConcurrencyLimit(out[j], policy)
+		if iActive != jActive {
+			return iActive
+		}
+		if iActive && ai != aj {
+			return ai > aj
+		}
+		return false
 	})
 	return out
 }
 
 func sortConcurrencyOverflow(in []GatewayRoute, policy GatewayPolicy) []GatewayRoute {
 	out := append([]GatewayRoute{}, in...)
+	if normalizeStrategy(policy.RouteStrategy) == "priority" {
+		return sortByStrictPriority(out)
+	}
 	if strings.ToLower(strings.TrimSpace(policy.ConcurrencyOverflowStrategy)) == "sequential" {
 		sort.SliceStable(out, func(i, j int) bool {
+			fi, fj := candidateFailureRank(out[i]), candidateFailureRank(out[j])
+			if fi != fj {
+				return fi < fj
+			}
 			if out[i].State.RoutePriority != out[j].State.RoutePriority {
 				return out[i].State.RoutePriority < out[j].State.RoutePriority
 			}
@@ -789,6 +819,10 @@ func sortConcurrencyOverflow(in []GatewayRoute, policy GatewayPolicy) []GatewayR
 		return out
 	}
 	sort.SliceStable(out, func(i, j int) bool {
+		fi, fj := candidateFailureRank(out[i]), candidateFailureRank(out[j])
+		if fi != fj {
+			return fi < fj
+		}
 		ai := candidateEffectiveLatency(out[i])
 		aj := candidateEffectiveLatency(out[j])
 		if ai != aj {
@@ -807,7 +841,31 @@ func candidateHealthRank(r GatewayRoute) int {
 }
 
 func candidateLoadRank(r GatewayRoute) int {
-	return RouteActiveCount(r.State.ID)*1000 - r.State.Weight
+	return RouteActiveCount(r.State.ID)*1000 - candidateEffectiveWeight(r)
+}
+
+func candidateEffectiveWeight(r GatewayRoute) int {
+	weight := maxInt(r.State.Weight, 1)
+	failures := maxInt(r.State.ConsecutiveFailures, 0)
+	if failures == 0 {
+		return weight
+	}
+	penalty := 1
+	for i := 0; i < failures && i < 8; i++ {
+		penalty *= 2
+	}
+	return maxInt(weight/penalty, 1)
+}
+
+func candidateFailureRank(r GatewayRoute) int {
+	rank := maxInt(r.State.ConsecutiveFailures, 0) * 1000
+	if r.State.LastFailureAt != nil && (r.State.LastSuccessAt == nil || r.State.LastFailureAt.After(*r.State.LastSuccessAt)) {
+		rank += 500
+	}
+	if r.State.RequestCount >= 5 {
+		rank += int(float64(r.State.FailureCount) / float64(maxInt(r.State.RequestCount, 1)) * 100)
+	}
+	return rank
 }
 
 func candidateEffectiveLatency(r GatewayRoute) float64 {
@@ -977,7 +1035,13 @@ func ProxyGatewayRequestWithOptions(ctx context.Context, db *gorm.DB, r *http.Re
 			result, shouldFallback, err := proxyGatewayAttempt(ctx, db, r, body, candidateRoute, targetPath, opts, policy, streaming, attempt)
 			result.Attempts = attempt
 			result.IsStream = streaming
-			LogGatewayRequest(db, candidateRoute, targetPath, r.Method, statusCodePtrOrNil(result.StatusCode), result.Success, result.LatencyMS, result.Error, policy.RouteStrategy, attempt, streaming, opts.RequestID)
+			LogGatewayRequest(db, candidateRoute, targetPath, r.Method, statusCodePtrOrNil(result.StatusCode), result.Success, result.LatencyMS, result.Error, policy.RouteStrategy, attempt, streaming, opts.RequestID, GatewayUsage{
+				PromptTokens:      result.PromptTokens,
+				CachedInputTokens: result.CachedInputTokens,
+				CompletionTokens:  result.CompletionTokens,
+				TotalTokens:       result.TotalTokens,
+				UsageCost:         result.UsageCost,
+			})
 			lastResult = result
 			lastErr = err
 			if err == nil && result.Success {
@@ -1079,6 +1143,7 @@ func proxyGatewayAttempt(ctx context.Context, db *gorm.DB, r *http.Request, body
 	_ = resp.Body.Close()
 
 	if is2xx {
+		usage := ExtractGatewayUsage(respBody)
 		route.State.LastRequestBaseURL = route.RequestBaseURL
 		UpdateRouteSuccess(db, &route.State, statusCode, latency)
 		if opts.ResponseWriter != nil {
@@ -1088,7 +1153,19 @@ func proxyGatewayAttempt(ctx context.Context, db *gorm.DB, r *http.Request, body
 			writeStreamHeaders(opts.ResponseWriter, resp.Header, statusCode)
 			_, _ = opts.ResponseWriter.Write(respBody)
 		}
-		return GatewayProxyResult{Route: route, StatusCode: statusCode, Header: resp.Header.Clone(), Body: respBody, LatencyMS: latency, Success: true}, false, nil
+		return GatewayProxyResult{
+			Route:             route,
+			StatusCode:        statusCode,
+			Header:            resp.Header.Clone(),
+			Body:              respBody,
+			LatencyMS:         latency,
+			Success:           true,
+			PromptTokens:      usage.PromptTokens,
+			CachedInputTokens: usage.CachedInputTokens,
+			CompletionTokens:  usage.CompletionTokens,
+			TotalTokens:       usage.TotalTokens,
+			UsageCost:         usage.UsageCost,
+		}, false, nil
 	}
 
 	reason := strings.TrimSpace(string(respBody))
@@ -1237,7 +1314,95 @@ func roundTo(value float64, digits int) float64 {
 
 // ----------------------------- logging -----------------------------
 
-func LogGatewayRequest(db *gorm.DB, route GatewayRoute, targetPath, method string, statusCode *int, success bool, latency float64, reason string, strategy string, attemptIndex int, isStream bool, requestID string) {
+type GatewayUsage struct {
+	PromptTokens      *int
+	CachedInputTokens *int
+	CompletionTokens  *int
+	TotalTokens       *int
+	UsageCost         *float64
+}
+
+func ExtractGatewayUsage(body []byte) GatewayUsage {
+	var payload map[string]any
+	if len(body) == 0 || json.Unmarshal(body, &payload) != nil {
+		return GatewayUsage{}
+	}
+	usageMap, ok := payload["usage"].(map[string]any)
+	if !ok || len(usageMap) == 0 {
+		return GatewayUsage{}
+	}
+	prompt := usageInt(usageMap, "prompt_tokens", "input_tokens")
+	cachedInput := usageInt(usageMap, "cached_input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "prompt_cache_hit_tokens")
+	if cachedInput == nil {
+		if details, ok := usageMap["prompt_tokens_details"].(map[string]any); ok {
+			cachedInput = usageInt(details, "cached_tokens")
+		}
+	}
+	if cachedInput == nil {
+		if details, ok := usageMap["input_tokens_details"].(map[string]any); ok {
+			cachedInput = usageInt(details, "cached_tokens")
+		}
+	}
+	completion := usageInt(usageMap, "completion_tokens", "output_tokens")
+	total := usageInt(usageMap, "total_tokens")
+	if total == nil && prompt != nil && completion != nil {
+		v := *prompt + *completion
+		total = &v
+	}
+	return GatewayUsage{
+		PromptTokens:      prompt,
+		CachedInputTokens: cachedInput,
+		CompletionTokens:  completion,
+		TotalTokens:       total,
+		UsageCost:         usageFloat(usageMap, "total_cost", "cost", "usage_cost"),
+	}
+}
+
+func usageInt(values map[string]any, keys ...string) *int {
+	for _, key := range keys {
+		switch value := values[key].(type) {
+		case float64:
+			if value >= 0 {
+				v := int(value)
+				return &v
+			}
+		case int:
+			if value >= 0 {
+				v := value
+				return &v
+			}
+		case json.Number:
+			if parsed, err := value.Int64(); err == nil && parsed >= 0 {
+				v := int(parsed)
+				return &v
+			}
+		}
+	}
+	return nil
+}
+
+func usageFloat(values map[string]any, keys ...string) *float64 {
+	for _, key := range keys {
+		switch value := values[key].(type) {
+		case float64:
+			if value >= 0 {
+				return &value
+			}
+		case int:
+			if value >= 0 {
+				v := float64(value)
+				return &v
+			}
+		case json.Number:
+			if parsed, err := value.Float64(); err == nil && parsed >= 0 {
+				return &parsed
+			}
+		}
+	}
+	return nil
+}
+
+func LogGatewayRequest(db *gorm.DB, route GatewayRoute, targetPath, method string, statusCode *int, success bool, latency float64, reason string, strategy string, attemptIndex int, isStream bool, requestID string, usage GatewayUsage) {
 	siteID := route.State.SiteID
 	if route.Site.ID != 0 {
 		siteID = route.Site.ID
@@ -1263,6 +1428,11 @@ func LogGatewayRequest(db *gorm.DB, route GatewayRoute, targetPath, method strin
 		StatusCode:         statusCode,
 		Success:            success,
 		LatencyMS:          &latency,
+		PromptTokens:       usage.PromptTokens,
+		CachedInputTokens:  usage.CachedInputTokens,
+		CompletionTokens:   usage.CompletionTokens,
+		TotalTokens:        usage.TotalTokens,
+		UsageCost:          usage.UsageCost,
 		CircuitStateBefore: route.State.CircuitState,
 		IsStream:           isStream,
 	}
