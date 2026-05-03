@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +33,11 @@ var gatewayActive = struct {
 	sync.Mutex
 	counts map[uint]int
 }{counts: map[uint]int{}}
+
+var gatewayActiveRequests = struct {
+	sync.Mutex
+	items map[string]GatewayActiveRequest
+}{items: map[string]GatewayActiveRequest{}}
 
 func acquireRoute(stateID uint) int {
 	gatewayActive.Lock()
@@ -66,12 +72,107 @@ func RouteTotalActive() int {
 	return total
 }
 
+type GatewayActiveRequest struct {
+	ID                string    `json:"id"`
+	RequestID         string    `json:"request_id"`
+	RouteID           uint      `json:"route_id"`
+	SiteID            uint      `json:"site_id"`
+	RouteLabel        string    `json:"route_label"`
+	SiteName          string    `json:"site_name"`
+	KeyName           string    `json:"key_name"`
+	KeyFingerprint    string    `json:"key_fingerprint"`
+	GroupName         string    `json:"group_name"`
+	TargetPath        string    `json:"target_path"`
+	Method            string    `json:"method"`
+	RouteStrategy     string    `json:"route_strategy"`
+	AttemptIndex      int       `json:"attempt_index"`
+	IsStream          bool      `json:"is_stream"`
+	RouteType         string    `json:"route_type"`
+	RequestBaseURL    string    `json:"request_base_url"`
+	ActiveConcurrency int       `json:"active_concurrency"`
+	StartedAt         time.Time `json:"started_at"`
+	ElapsedMS         int64     `json:"elapsed_ms"`
+}
+
+func ListGatewayActiveRequests() []GatewayActiveRequest {
+	gatewayActiveRequests.Lock()
+	out := make([]GatewayActiveRequest, 0, len(gatewayActiveRequests.items))
+	for _, item := range gatewayActiveRequests.items {
+		out = append(out, item)
+	}
+	gatewayActiveRequests.Unlock()
+
+	now := time.Now().UTC()
+	for idx := range out {
+		out[idx].ElapsedMS = now.Sub(out[idx].StartedAt).Milliseconds()
+		out[idx].ActiveConcurrency = RouteActiveCount(out[idx].RouteID)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].StartedAt.After(out[j].StartedAt)
+	})
+	return out
+}
+
+func beginGatewayActiveRequest(route GatewayRoute, targetPath, method, strategy string, attemptIndex int, isStream bool, requestID string, activeConcurrency int) string {
+	if requestID == "" {
+		requestID = newRequestID()
+	}
+	if attemptIndex <= 0 {
+		attemptIndex = 1
+	}
+	token := requestID + ":" + newRequestID()
+	siteName := GatewayRouteSiteLabel(route)
+	routeLabel := siteName
+	if keyName := strings.TrimSpace(route.State.KeyName); keyName != "" {
+		routeLabel += " · " + keyName
+	}
+	siteID := route.State.SiteID
+	if route.Site.ID != 0 {
+		siteID = route.Site.ID
+	}
+	gatewayActiveRequests.Lock()
+	gatewayActiveRequests.items[token] = GatewayActiveRequest{
+		ID:                token,
+		RequestID:         requestID,
+		RouteID:           route.State.ID,
+		SiteID:            siteID,
+		RouteLabel:        routeLabel,
+		SiteName:          siteName,
+		KeyName:           route.State.KeyName,
+		KeyFingerprint:    route.State.KeyFingerprint,
+		GroupName:         route.State.GroupName,
+		TargetPath:        targetPath,
+		Method:            method,
+		RouteStrategy:     normalizeStrategy(strategy),
+		AttemptIndex:      attemptIndex,
+		IsStream:          isStream,
+		RouteType:         route.State.RouteType,
+		RequestBaseURL:    route.RequestBaseURL,
+		ActiveConcurrency: activeConcurrency,
+		StartedAt:         time.Now().UTC(),
+	}
+	gatewayActiveRequests.Unlock()
+	return token
+}
+
+func finishGatewayActiveRequest(token string) {
+	if token == "" {
+		return
+	}
+	gatewayActiveRequests.Lock()
+	delete(gatewayActiveRequests.items, token)
+	gatewayActiveRequests.Unlock()
+}
+
 // ResetGatewayCountersForTest clears in-memory gateway counters/offsets.
 // Intended for tests; safe to call from any goroutine.
 func ResetGatewayCountersForTest() {
 	gatewayActive.Lock()
 	gatewayActive.counts = map[uint]int{}
 	gatewayActive.Unlock()
+	gatewayActiveRequests.Lock()
+	gatewayActiveRequests.items = map[string]GatewayActiveRequest{}
+	gatewayActiveRequests.Unlock()
 	gatewayRoundRobin.Lock()
 	gatewayRoundRobin.offsets = map[string]int{}
 	gatewayRoundRobin.Unlock()
@@ -91,12 +192,28 @@ type GatewayPolicy struct {
 	CooldownSeconds             int
 	RequestTimeout              int
 	MaxAttempts                 int
+	FailureRetryMode            string
 	RouteConcurrencyLimit       int
+	ConcurrencyTransferStrategy string
 	ConcurrencyOverflowStrategy string
 	SmartLatencyBias            float64
 	SmartConcurrencyBias        float64
 	SmartFailureBias            float64
 	SmartPriorityBias           float64
+}
+
+type GatewayRoutePriorityMode string
+
+const (
+	GatewayRoutePriorityMove    GatewayRoutePriorityMode = "move"
+	GatewayRoutePriorityPackage GatewayRoutePriorityMode = "package"
+	GatewayRoutePriorityBalance GatewayRoutePriorityMode = "balance"
+)
+
+type GatewayRoutePriorityReorderOptions struct {
+	RouteID uint
+	Mode    GatewayRoutePriorityMode
+	Index   int
 }
 
 type GatewayRoute struct {
@@ -116,6 +233,27 @@ type GatewayProxyResult struct {
 	Error      string
 	Attempts   int
 	IsStream   bool
+}
+
+type GatewayAllRoutesFailedError struct {
+	Attempts int
+	Last     string
+}
+
+func (e GatewayAllRoutesFailedError) Error() string {
+	return fmt.Sprintf("网关路由池全部失败，已尝试 %d 个候选", e.Attempts)
+}
+
+type GatewayNonRetryableUpstreamError struct {
+	Attempts   int
+	StatusCode int
+}
+
+func (e GatewayNonRetryableUpstreamError) Error() string {
+	if e.StatusCode > 0 {
+		return fmt.Sprintf("上游返回不可重试错误，网关已停止切换路由，已尝试 %d 个候选，状态码 %d", e.Attempts, e.StatusCode)
+	}
+	return fmt.Sprintf("上游返回不可重试错误，网关已停止切换路由，已尝试 %d 个候选", e.Attempts)
 }
 
 type GatewayProbeResult struct {
@@ -188,7 +326,9 @@ func SyncGatewayRoutes(db *gorm.DB) (int, error) {
 				state.SiteBaseURLSnapshot = site.BaseURL
 				state.SiteAPIURLSnapshot = marshalStringSlice(GatewayRequestBaseCandidates(site))
 				state.GroupName = site.GroupName
-				state.RoutePriority = intValue(site.PluginConfig, "gateway_priority", state.RoutePriority)
+				if !state.RoutePriorityManual {
+					state.RoutePriority = intValue(site.PluginConfig, "gateway_priority", state.RoutePriority)
+				}
 				state.Weight = intValue(site.PluginConfig, "gateway_weight", state.Weight)
 				if !state.RouteTypeManual {
 					state.RouteType = routeType
@@ -207,15 +347,7 @@ func SyncGatewayRoutes(db *gorm.DB) (int, error) {
 			if activeFingerprints[state.KeyFingerprint] {
 				continue
 			}
-			state.SiteNameSnapshot = site.Name
-			state.SiteBaseURLSnapshot = site.BaseURL
-			state.SiteAPIURLSnapshot = marshalStringSlice(GatewayRequestBaseCandidates(site))
-			state.GroupName = site.GroupName
-			state.IsEnabled = false
-			state.CircuitState = "paused"
-			message := "API Key 已从站点凭证中移除，请更新站点凭证或删除该路由。"
-			state.LastError = &message
-			if err := db.Save(&state).Error; err != nil {
+			if err := db.Delete(&state).Error; err != nil {
 				return count, err
 			}
 		}
@@ -238,6 +370,10 @@ func ListGatewayRoutes(db *gorm.DB, group string, includeDisabled bool) ([]Gatew
 	if _, err := SyncGatewayRoutes(db); err != nil {
 		return nil, err
 	}
+	return listGatewayRoutes(db, group, includeDisabled)
+}
+
+func listGatewayRoutes(db *gorm.DB, group string, includeDisabled bool) ([]GatewayRoute, error) {
 	query := db.Preload("Site")
 	if strings.TrimSpace(group) != "" {
 		query = query.Where("group_name = ?", strings.TrimSpace(group))
@@ -255,6 +391,192 @@ func ListGatewayRoutes(db *gorm.DB, group string, includeDisabled bool) ([]Gatew
 		routes = append(routes, GatewayRoute{State: state, Site: state.Site, APIKey: key, RequestBaseURL: GatewayRouteRequestBase(state, state.Site)})
 	}
 	return routes, nil
+}
+
+func ReorderGatewayRoutePriorities(db *gorm.DB, opts GatewayRoutePriorityReorderOptions) ([]GatewayRoute, error) {
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		return nil, err
+	}
+
+	var out []GatewayRoute
+	err := db.Transaction(func(tx *gorm.DB) error {
+		routes, err := listGatewayRoutes(tx, "", true)
+		if err != nil {
+			return err
+		}
+		if len(routes) == 0 {
+			out = routes
+			return nil
+		}
+
+		ordered := append([]GatewayRoute{}, routes...)
+		switch opts.Mode {
+		case GatewayRoutePriorityMove:
+			next, err := moveGatewayRoutePriority(ordered, opts.RouteID, opts.Index)
+			if err != nil {
+				return err
+			}
+			ordered = next
+		case GatewayRoutePriorityPackage:
+			sort.SliceStable(ordered, func(i, j int) bool {
+				return gatewayRoutePackageRank(ordered[i]) < gatewayRoutePackageRank(ordered[j])
+			})
+		case GatewayRoutePriorityBalance:
+			sort.SliceStable(ordered, func(i, j int) bool {
+				left, right := ordered[i].Site.LastBalance, ordered[j].Site.LastBalance
+				if (left != nil) != (right != nil) {
+					return left != nil
+				}
+				if left != nil && right != nil && *left != *right {
+					return *left > *right
+				}
+				return false
+			})
+		default:
+			return fmt.Errorf("unsupported priority reorder mode %q", opts.Mode)
+		}
+
+		for idx, route := range ordered {
+			if err := tx.Model(&models.GatewayRouteState{}).
+				Where("id = ?", route.State.ID).
+				Updates(map[string]any{
+					"route_priority":        idx,
+					"route_priority_manual": true,
+				}).Error; err != nil {
+				return err
+			}
+		}
+		out, err = listGatewayRoutes(tx, "", true)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func moveGatewayRoutePriority(routes []GatewayRoute, routeID uint, index int) ([]GatewayRoute, error) {
+	if routeID == 0 {
+		return nil, errors.New("route id is required")
+	}
+	source := -1
+	for idx, route := range routes {
+		if route.State.ID == routeID {
+			source = idx
+			break
+		}
+	}
+	if source < 0 {
+		return nil, errors.New("gateway route not found")
+	}
+	target := routes[source]
+	ordered := append([]GatewayRoute{}, routes[:source]...)
+	ordered = append(ordered, routes[source+1:]...)
+	if index < 0 {
+		index = 0
+	}
+	if index > len(ordered) {
+		index = len(ordered)
+	}
+	ordered = append(ordered, GatewayRoute{})
+	copy(ordered[index+1:], ordered[index:])
+	ordered[index] = target
+	return ordered, nil
+}
+
+func gatewayRoutePackageRank(route GatewayRoute) int {
+	if gatewayRouteHasPriorityPackageGroup(route.State.GroupName) || gatewayRoutePackageLooksSubscribed(GatewayRoutePackageDisplay(route.Site)) {
+		return 0
+	}
+	if strings.TrimSpace(GatewayRoutePackageDisplay(route.Site)) != "" {
+		return 1
+	}
+	return 2
+}
+
+func gatewayRouteHasPriorityPackageGroup(value string) bool {
+	for _, group := range parseGatewayRouteGroupNames(value) {
+		if group == "订阅" || group == "套餐" {
+			return true
+		}
+	}
+	return false
+}
+
+func parseGatewayRouteGroupNames(value string) []string {
+	return normalizeStringList(strings.FieldsFunc(value, func(r rune) bool {
+		return strings.ContainsRune(",，;/|、\n\r\t", r)
+	}))
+}
+
+func GatewayRoutePackageDisplay(site models.Site) string {
+	value := strings.TrimSpace(stringMapValue(site.PluginConfig, "package_display", ""))
+	if value == "" {
+		value = strings.TrimSpace(stringMapValue(site.PluginConfig, "package_name", ""))
+	}
+	if value == "" {
+		value = strings.TrimSpace(stringMapValue(site.PluginConfig, "plan_name", ""))
+	}
+	remaining, hasRemaining := numericMapValue(site.PluginConfig, "package_remaining")
+	total, hasTotal := numericMapValue(site.PluginConfig, "package_total")
+	used, hasUsed := numericMapValue(site.PluginConfig, "package_used")
+	unit := strings.TrimSpace(stringMapValue(site.PluginConfig, "package_unit", ""))
+	quota := ""
+	if hasRemaining && hasTotal {
+		quota = fmt.Sprintf("余量 %s / %s", formatCompactNumber(remaining), formatCompactNumber(total))
+	} else if hasRemaining {
+		quota = fmt.Sprintf("余量 %s", formatCompactNumber(remaining))
+	} else if hasUsed && hasTotal {
+		quota = fmt.Sprintf("已用 %s / %s", formatCompactNumber(used), formatCompactNumber(total))
+	}
+	if quota != "" && unit != "" {
+		quota += " " + unit
+	}
+	if value != "" && quota != "" && !strings.Contains(value, quota) {
+		return value + " · " + quota
+	}
+	if value == "" {
+		return quota
+	}
+	return value
+}
+
+func numericMapValue(m models.JSONMap, key string) (float64, bool) {
+	if m == nil || m[key] == nil {
+		return 0, false
+	}
+	switch typed := m[key].(type) {
+	case float64:
+		return typed, true
+	case float32:
+		return float64(typed), true
+	case int:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	case json.Number:
+		value, err := typed.Float64()
+		return value, err == nil
+	case string:
+		value, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		return value, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func formatCompactNumber(value float64) string {
+	return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.2f", value), "0"), ".")
+}
+
+func gatewayRoutePackageLooksSubscribed(value string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" {
+		return false
+	}
+	return strings.Contains(normalized, "订阅") ||
+		strings.Contains(normalized, "subscription") ||
+		strings.Contains(normalized, "subscribe")
 }
 
 func GetGatewayRoute(db *gorm.DB, routeID string) (GatewayRoute, error) {
@@ -277,7 +599,7 @@ func filterAndOrderCandidates(routes []GatewayRoute, group, routeType string, po
 	rt := normalizeRouteType(routeType)
 	candidates := make([]GatewayRoute, 0, len(routes))
 	for _, route := range routes {
-		if route.APIKey == "" || !route.Site.IsEnabled {
+		if route.APIKey == "" || !route.Site.IsEnabled || !route.State.IsEnabled {
 			continue
 		}
 		if rt != "" && route.State.RouteType != rt {
@@ -371,14 +693,15 @@ func filterAndOrderCandidates(routes []GatewayRoute, group, routeType string, po
 		ordered = append(ordered, sortByLoadAndPriority(halfOpen)...)
 	}
 
+	if policy.ConcurrencyTransferStrategy == "balance" {
+		ordered = sortByLoadThenExistingOrder(ordered)
+	}
+
 	if len(overflowClosed) > 0 {
 		ordered = append(ordered, sortConcurrencyOverflow(overflowClosed, policy)...)
 	}
 	if len(overflowHalf) > 0 {
 		ordered = append(ordered, sortByLoadAndPriority(overflowHalf)...)
-	}
-	if policy.MaxAttempts > 0 && len(ordered) > policy.MaxAttempts {
-		ordered = ordered[:policy.MaxAttempts]
 	}
 	return ordered
 }
@@ -442,6 +765,14 @@ func sortBySmart(in []GatewayRoute, ref float64, policy GatewayPolicy, now time.
 			return si < sj
 		}
 		return out[i].Site.Name < out[j].Site.Name
+	})
+	return out
+}
+
+func sortByLoadThenExistingOrder(in []GatewayRoute) []GatewayRoute {
+	out := append([]GatewayRoute{}, in...)
+	sort.SliceStable(out, func(i, j int) bool {
+		return RouteActiveCount(out[i].State.ID) < RouteActiveCount(out[j].State.ID)
 	})
 	return out
 }
@@ -633,15 +964,17 @@ func ProxyGatewayRequestWithOptions(ctx context.Context, db *gorm.DB, r *http.Re
 
 	var lastResult GatewayProxyResult
 	var lastErr error
+	attemptCount := 0
 	for index, route := range ordered {
 		for candidateIndex, baseURL := range gatewayRouteBasesInOrder(route) {
 			attempt := index + 1
 			if candidateIndex > 0 {
 				attempt = index + 1
 			}
+			attemptCount++
 			candidateRoute := route
 			candidateRoute.RequestBaseURL = baseURL
-			result, retry, err := proxyGatewayAttempt(ctx, db, r, body, candidateRoute, targetPath, opts, policy, streaming, attempt)
+			result, shouldFallback, err := proxyGatewayAttempt(ctx, db, r, body, candidateRoute, targetPath, opts, policy, streaming, attempt)
 			result.Attempts = attempt
 			result.IsStream = streaming
 			LogGatewayRequest(db, candidateRoute, targetPath, r.Method, statusCodePtrOrNil(result.StatusCode), result.Success, result.LatencyMS, result.Error, policy.RouteStrategy, attempt, streaming, opts.RequestID)
@@ -650,24 +983,42 @@ func ProxyGatewayRequestWithOptions(ctx context.Context, db *gorm.DB, r *http.Re
 			if err == nil && result.Success {
 				return result, nil
 			}
-			if !retry {
-				return result, err
+			if !shouldFallback {
+				lastResult.Success = false
+				lastResult.Body = nil
+				lastResult.Header = nil
+				return lastResult, GatewayNonRetryableUpstreamError{Attempts: attemptCount, StatusCode: lastResult.StatusCode}
 			}
 		}
 	}
-	return lastResult, lastErr
+	lastMessage := strings.TrimSpace(lastResult.Error)
+	if lastMessage == "" && lastErr != nil {
+		lastMessage = lastErr.Error()
+	}
+	if lastMessage == "" && lastResult.StatusCode > 0 {
+		lastMessage = fmt.Sprintf("status=%d", lastResult.StatusCode)
+	}
+	lastResult.Success = false
+	lastResult.Body = nil
+	lastResult.Header = nil
+	lastResult.Error = lastMessage
+	return lastResult, GatewayAllRoutesFailedError{Attempts: attemptCount, Last: lastMessage}
 }
 
 func proxyGatewayAttempt(ctx context.Context, db *gorm.DB, r *http.Request, body []byte, route GatewayRoute, targetPath string, opts ProxyGatewayOptions, policy GatewayPolicy, streaming bool, attempt int) (GatewayProxyResult, bool, error) {
 	upstreamURL, err := targetURL(route.RequestBaseURL, targetPath, r.URL.RawQuery, route.State.RouteType)
 	if err != nil {
-		return GatewayProxyResult{Route: route, Error: err.Error()}, false, err
+		return GatewayProxyResult{Route: route, Error: err.Error()}, true, err
 	}
 
 	circuitBefore := route.State.CircuitState
 	_ = circuitBefore // captured by caller through LogGatewayRequest via fresh route.State
-	acquireRoute(route.State.ID)
-	defer releaseRoute(route.State.ID)
+	activeConcurrency := acquireRoute(route.State.ID)
+	activeToken := beginGatewayActiveRequest(route, targetPath, r.Method, policy.RouteStrategy, attempt, streaming, opts.RequestID, activeConcurrency)
+	defer func() {
+		finishGatewayActiveRequest(activeToken)
+		releaseRoute(route.State.ID)
+	}()
 
 	timeout := time.Duration(policy.RequestTimeout) * time.Second
 	reqCtx := ctx
@@ -683,7 +1034,7 @@ func proxyGatewayAttempt(ctx context.Context, db *gorm.DB, r *http.Request, body
 	}
 	req, err := http.NewRequestWithContext(reqCtx, r.Method, upstreamURL, bodyReader)
 	if err != nil {
-		return GatewayProxyResult{Route: route, Error: err.Error()}, false, err
+		return GatewayProxyResult{Route: route, Error: err.Error()}, true, err
 	}
 	copyGatewayHeaders(req.Header, r.Header)
 	req.Header.Set("Authorization", "Bearer "+route.APIKey)
@@ -740,29 +1091,12 @@ func proxyGatewayAttempt(ctx context.Context, db *gorm.DB, r *http.Request, body
 		return GatewayProxyResult{Route: route, StatusCode: statusCode, Header: resp.Header.Clone(), Body: respBody, LatencyMS: latency, Success: true}, false, nil
 	}
 
-	retryable := shouldRetryStatus(statusCode)
 	reason := strings.TrimSpace(string(respBody))
 	if reason == "" {
 		reason = fmt.Sprintf("status=%d", statusCode)
 	}
-	UpdateRouteFailure(db, &route.State, reason, latency, &statusCode, policyForFailureSideEffect(policy, retryable))
-	res := GatewayProxyResult{Route: route, StatusCode: statusCode, Header: resp.Header.Clone(), Body: respBody, LatencyMS: latency, Success: false, Error: reason}
-	if !retryable && opts.ResponseWriter != nil {
-		if opts.BeforeWrite != nil {
-			opts.BeforeWrite(statusCode, resp.Header.Clone())
-		}
-		writeStreamHeaders(opts.ResponseWriter, resp.Header, statusCode)
-		_, _ = opts.ResponseWriter.Write(respBody)
-	}
-	return res, retryable, nil
-}
-
-func policyForFailureSideEffect(policy GatewayPolicy, retryable bool) GatewayPolicy {
-	if !retryable {
-		// avoid bumping circuit when we won't retry (e.g. 400)
-		policy.FailureThreshold = 1 << 30
-	}
-	return policy
+	UpdateRouteFailure(db, &route.State, reason, latency, &statusCode, policy)
+	return GatewayProxyResult{Route: route, StatusCode: statusCode, Header: resp.Header.Clone(), Body: respBody, LatencyMS: latency, Success: false, Error: reason}, shouldFallbackStatus(statusCode, policy.FailureRetryMode), nil
 }
 
 func writeStreamHeaders(w http.ResponseWriter, src http.Header, status int) {
@@ -801,16 +1135,6 @@ func streamBody(w http.ResponseWriter, src io.Reader) (int, error) {
 			return written, err
 		}
 	}
-}
-
-func shouldRetryStatus(status int) bool {
-	if status >= 200 && status < 300 {
-		return false
-	}
-	if status == http.StatusBadRequest {
-		return false
-	}
-	return true
 }
 
 func isStreamingRequest(r *http.Request, body []byte) bool {
@@ -1216,6 +1540,10 @@ func apiKeyForFingerprint(site models.Site, fp string) string {
 	return ""
 }
 
+func GatewayRouteAPIKeyForState(state models.GatewayRouteState) string {
+	return apiKeyForFingerprint(state.Site, state.KeyFingerprint)
+}
+
 func fingerprint(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])[:16]
@@ -1325,6 +1653,10 @@ func targetURL(baseURL, targetPath, rawQuery, routeType string) (string, error) 
 	return u.String(), nil
 }
 
+func GatewayTargetURL(baseURL, targetPath, rawQuery, routeType string) (string, error) {
+	return targetURL(baseURL, targetPath, rawQuery, routeType)
+}
+
 func copyGatewayHeaders(dst, src http.Header) {
 	allowed := map[string]bool{"content-type": true, "accept": true, "openai-organization": true, "openai-project": true}
 	for key, values := range src {
@@ -1367,6 +1699,7 @@ func normalizePolicy(policy GatewayPolicy) GatewayPolicy {
 	if policy.RouteStrategy == "" {
 		policy.RouteStrategy = "round_robin"
 	}
+	policy.FailureRetryMode = NormalizeGatewayFailureRetryMode(policy.FailureRetryMode)
 	if policy.FailureThreshold <= 0 {
 		policy.FailureThreshold = 3
 	}
@@ -1385,11 +1718,36 @@ func normalizePolicy(policy GatewayPolicy) GatewayPolicy {
 	default:
 		policy.ConcurrencyOverflowStrategy = "latency_first"
 	}
+	switch strings.ToLower(strings.TrimSpace(policy.ConcurrencyTransferStrategy)) {
+	case "limit_only", "balance":
+		policy.ConcurrencyTransferStrategy = strings.ToLower(strings.TrimSpace(policy.ConcurrencyTransferStrategy))
+	default:
+		policy.ConcurrencyTransferStrategy = "limit_only"
+	}
 	policy.SmartLatencyBias = clampBias(policy.SmartLatencyBias, 1.0)
 	policy.SmartConcurrencyBias = clampBias(policy.SmartConcurrencyBias, 1.5)
 	policy.SmartFailureBias = clampBias(policy.SmartFailureBias, 1.0)
 	policy.SmartPriorityBias = clampBias(policy.SmartPriorityBias, 0.5)
 	return policy
+}
+
+func NormalizeGatewayFailureRetryMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "all":
+		return "all"
+	default:
+		return "retryable"
+	}
+}
+
+func shouldFallbackStatus(status int, mode string) bool {
+	if status >= 200 && status < 300 {
+		return false
+	}
+	if NormalizeGatewayFailureRetryMode(mode) == "all" {
+		return true
+	}
+	return status == http.StatusTooManyRequests || status >= 500
 }
 
 func clampBias(value, fallback float64) float64 {

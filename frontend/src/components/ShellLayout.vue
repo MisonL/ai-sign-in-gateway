@@ -2,9 +2,10 @@
 import {
   ClusterOutlined,
   DashboardOutlined,
+  DeploymentUnitOutlined,
+  FundProjectionScreenOutlined,
   MessageOutlined,
   SettingOutlined,
-  WifiOutlined,
 } from '@ant-design/icons-vue'
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -22,22 +23,26 @@ let kpiTimer: number | null = null
 const enabledFeatureKeys = new Set([
   'overview',
   'sites',
-  'gateway',
-  'connectivity',
+  'gateway-routes',
+  'gateway-monitor',
   'chat-test',
   'settings',
 ])
 
 const navigation = [
   { key: 'overview', label: '总览', to: '/overview', icon: DashboardOutlined, description: '关键指标、执行状态与异常站点。' },
-  { key: 'sites', label: '站点中心', to: '/sites', icon: ClusterOutlined, description: '站点授权、批量签到与连通性。' },
-  { key: 'gateway', label: '网关中心', to: '/gateway', icon: ClusterOutlined, description: '统一出口路由池、熔断状态与请求监控。' },
-  { key: 'connectivity', label: '模型连通性', to: '/connectivity', icon: WifiOutlined, description: '基础接口连通性与模型列表探测。' },
-  { key: 'chat-test', label: '验证与对话', to: '/chat-test', icon: MessageOutlined, description: '对话请求与 MCP 调用验证。' },
+  { key: 'sites', label: '站点中心', to: '/sites', icon: ClusterOutlined, description: '站点授权、批量签到与状态巡检。' },
+  { key: 'gateway-routes', label: '路由管理', to: '/gateway/routes', icon: DeploymentUnitOutlined, description: '统一出口路由池、熔断状态与上游维护。' },
+  { key: 'gateway-monitor', label: '网关监控', to: '/gateway/monitor', icon: FundProjectionScreenOutlined, description: '请求趋势、策略统计与网关访问配置。' },
+  { key: 'chat-test', label: '对话', to: '/chat-test', icon: MessageOutlined, description: '按站点读取模型并发起对话或图片生成。' },
   { key: 'settings', label: '设置', to: '/settings', icon: SettingOutlined, description: '调度计划、超时与执行策略。' },
 ]
 
 const visibleNavigation = computed(() => navigation.filter((item) => enabledFeatureKeys.has(item.key)))
+const selectedNavigationKeys = computed(() => {
+  const matched = visibleNavigation.value.find((item) => route.path === item.to || route.path.startsWith(`${item.to}/`))
+  return [matched?.to ?? route.path]
+})
 
 const headerKpis = computed(() => {
   const ov = gatewayOverview.value
@@ -130,7 +135,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <a-menu :selected-keys="[route.path]" mode="inline" class="app-menu">
+      <a-menu :selected-keys="selectedNavigationKeys" mode="inline" class="app-menu">
         <a-menu-item
           v-for="item in visibleNavigation"
           :key="item.to"

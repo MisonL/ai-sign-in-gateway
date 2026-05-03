@@ -30,7 +30,16 @@ const router = createRouter({
     },
     {
       path: '/gateway',
-      component: () => import('./views/GatewayView.vue'),
+      redirect: '/gateway/routes',
+    },
+    {
+      path: '/gateway/routes',
+      component: () => import('./views/GatewayRouteManagementView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/gateway/monitor',
+      component: () => import('./views/GatewayMonitorView.vue'),
       meta: { requiresAuth: true },
     },
     {
@@ -39,8 +48,7 @@ const router = createRouter({
     },
     {
       path: '/connectivity',
-      component: () => import('./views/ConnectivityView.vue'),
-      meta: { requiresAuth: true },
+      redirect: '/chat-test',
     },
     {
       path: '/chat-test',
