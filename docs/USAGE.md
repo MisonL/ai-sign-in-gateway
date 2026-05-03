@@ -27,8 +27,7 @@ http://127.0.0.1:8972   # 生产服务或 Docker
 - `总览`：查看站点总量、可用状态、余额汇总、最近签到和异常站点。
 - `站点中心`：维护站点、分组、插件配置、连通测试、签到、余额探测、API Key 和邀请码。
 - `网关中心`：查看网关概览、近 1 分钟趋势、路由池、策略配置、路由历史和最近请求。
-- `连通测试`：对指定站点或手动地址做接口测试。
-- `对话测试`：使用保存的站点/API Key 做 OpenAI 风格或 MCP 请求测试。
+- `验证与对话`：选择站点后自动读取模型列表，用所选模型做对话、参考图输入或图片生成验证。
 - `设置`：管理员账号、签到计划、网关策略等系统设置。
 
 ## 站点管理
@@ -138,6 +137,37 @@ http://127.0.0.1:8972   # 生产服务或 Docker
 - `邀请`：读取邀请链接和邀请码，支持复制。
 
 公开邀请码列表显示在登录页，只有已启用且有邀请信息的站点会展示。
+
+## 验证与对话
+
+`验证与对话` 同时承担模型连通性验证和真实对话测试，不再单独提供“模型连通性检测”页面。
+
+流程：
+
+1. 选择已保存站点。
+2. 系统读取该站点保存的 API Key、请求 API URL 和路由类型，自动请求模型列表。
+3. 在模型下拉框选择模型。
+4. 输入消息发送。
+
+请求方式由模型决定：
+
+- 普通模型走 OpenAI 兼容 `/chat/completions`。
+- `gpt-image-*`、`dall-e*`、`imagen` 等图片模型走图片生成/编辑接口。
+- 图片模型支持预设尺寸和自定义宽高；锁定按钮会以当前宽高作为固定比例，继续修改任一边时自动联动另一边。
+- 对话和图片模型都可以添加参考图；实际是否支持由上游模型决定。
+
+如果模型列表加载 404，先检查站点的 `api_request_urls` / `gateway_request_urls` 是否是模型请求根地址，并确认后端已经更新到包含 `/api/tools/models` 的版本。
+
+## 余额与套餐余量
+
+站点状态刷新和路由余额探测会尽量读取真实平台接口：
+
+- `sub2api-platform`：优先读 `/api/v1/subscriptions/progress`，再回退 `/api/v1/subscriptions/summary` 或 `/api/v1/keys` 额度字段。
+- `yellowpeach-newapi`：优先读 `/api/subscription/self`，再回退 `/api/usage/token/`。
+- DeepSeek、StepFun、SiliconFlow、OpenRouter、Novita AI 会按官方余额接口探测。
+- `/v1/usage` 仅作为通用 OpenAI 兼容 fallback。
+
+套餐余量字段独立于余额字段：`package_remaining/package_total/package_used/package_unit/package_display` 用于显示订阅或 Token 套餐余量，`last_balance` 继续表示钱包余额或接口余额。
 
 ## 聚合网关
 

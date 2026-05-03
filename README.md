@@ -16,6 +16,8 @@ release 单文件已经把前端 `frontend/dist` 嵌入 Go 二进制，直接运
 
 主要优势：
 
+- 对应平台的二进制不需要在运行机器安装 Go 环境；Go 只在源码构建时需要。
+- `linux-amd64` 是 Linux x86_64 目标产物，不是 Windows/macOS/Linux 通用跨平台文件；其他系统或架构需要下载或构建对应产物。
 - 无需安装 Node.js、npm、Nginx 或额外静态资源目录。
 - 一个文件即可复制、备份、迁移、升级，适合 VPS、NAS、Windows 桌面和 Linux 桌面。
 - 默认使用 SQLite，数据与程序分离，升级程序时不用移动数据库。
@@ -57,12 +59,9 @@ chmod +x ai-sign-in-gateway-server-linux-amd64
 export SECRET_KEY="$(openssl rand -base64 32)"
 export GATEWAY_API_KEY="$(openssl rand -base64 32)"
 export DEFAULT_ADMIN_PASSWORD="<change-this-password>"
-export AI_SIGN_IN_GATEWAY_HOST="0.0.0.0"
-export AI_SIGN_IN_GATEWAY_PORT="8972"
-export AI_SIGN_IN_GATEWAY_OPEN_BROWSER="false"
 export CORS_ORIGINS="http://127.0.0.1:8972,http://localhost:8972"
 
-./ai-sign-in-gateway-server-linux-amd64
+./ai-sign-in-gateway-server-linux-amd64 --host 0.0.0.0 --port 8972 --no-browser
 ```
 
 访问：
@@ -88,9 +87,15 @@ http://<server-ip>:8972
 如需命令行指定配置目录：
 
 ```powershell
-$env:AI_SIGN_IN_GATEWAY_CONFIG_DIR="D:\ai-sign-in-gateway-data"
 $env:GATEWAY_API_KEY="change-this-gateway-key"
-.\ai-sign-in-gateway-windows-amd64.exe
+.\ai-sign-in-gateway-windows-amd64.exe --config-dir "D:\ai-sign-in-gateway-data"
+```
+
+如需快速换端口，服务版直接用 `--port`，桌面版可分别设置窗口入口和后端网关端口：
+
+```bash
+./ai-sign-in-gateway-server-linux-amd64 --port 9000
+./ai-sign-in-gateway --frontend-port 3722 --backend-port 8973
 ```
 
 ### Linux 桌面 AppImage
@@ -150,7 +155,8 @@ sudo journalctl -u ai-sign-in-gateway -f
 6. 对站点执行 `测试连接`、`余额`、`API Key 同步`。
 7. 按需要创建分组，把站点加入不同分组。
 8. 在 `设置` 中开启定时签到，并配置运行时间、并发、重试和超时。
-9. 使用 `/api/gateway` 作为统一模型请求入口。
+9. 进入 `验证与对话`，选择站点后自动读取该站点 API Key 和请求 API URL 下的模型列表，用真实模型执行对话或图片生成验证。
+10. 使用 `/api/gateway` 作为统一模型请求入口。
 
 ## 数据、日志与备份
 
@@ -178,9 +184,21 @@ cp ~/.ai-sign-in-gateway/ai-sign-in-gateway.db ./ai-sign-in-gateway.db.bak
 
 迁移到新机器时，复制单文件程序和数据库目录即可。升级版本时通常只替换二进制文件，保留数据目录不变。
 
-## 配置变量
+## 启动参数与配置变量
 
-程序本身不依赖复杂命令行参数，主要通过环境变量配置。
+单文件二进制支持少量启动参数，用于快速覆盖本次运行的端口和目录：
+
+| 参数 | 说明 |
+|---|---|
+| `--port` / `-p` | 快速设置服务/API/网关端口 |
+| `--backend-port` | 桌面模式后端/API/网关端口，优先级高于 `--port` |
+| `--frontend-port` | 桌面模式前端窗口入口端口 |
+| `--host` | 监听地址，例如 `127.0.0.1` 或 `0.0.0.0` |
+| `--config-dir` | 用户配置、日志和默认 SQLite 数据目录 |
+| `--browser` / `--no-browser` | 启动后是否打开浏览器或桌面窗口 |
+| `--desktop` / `--no-desktop` | 是否启用桌面 WebView/托盘 |
+
+更完整的配置仍通过环境变量提供。
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
@@ -258,6 +276,36 @@ curl http://127.0.0.1:8972/api/gateway/chat/completions \
 ```text
 http://127.0.0.1:8972/api/gateway
 ```
+
+## 验证与对话
+
+`验证与对话` 是统一的模型连通性验证入口，原独立“模型连通性检测”页面已合并到这里。
+
+使用方式：
+
+1. 选择已保存站点。
+2. 系统使用该站点保存的 API Key、请求 API URL 和路由类型自动请求模型列表。
+3. 从模型下拉框选择模型。
+4. 输入消息并发送。
+
+模型决定请求方式：
+
+- 普通对话模型走 OpenAI 兼容 `/chat/completions`。
+- `gpt-image-*`、`dall-e*`、`imagen` 等图片模型走图片生成/编辑接口。
+- 图片模型支持预设尺寸和自定义宽高；锁定按钮会以当前宽高作为固定比例，继续修改任一边时自动联动另一边。
+- 对话和图片模型都可以添加参考图；是否支持由上游模型决定。
+
+如果模型加载提示 404，通常表示当前站点的请求 API URL 不支持模型列表接口，或后台进程尚未更新到包含 `/api/tools/models` 的版本。先确认站点的 `api_request_urls` / `gateway_request_urls` 是否指向模型请求根地址，并重启最新二进制或后端进程。
+
+## 余额与套餐余量
+
+余额探测优先使用站点和供应商的真实余额接口，普通 OpenAI 兼容 `/v1/usage` 只作为 fallback：
+
+- `sub2api-platform`：登录态读取 `/api/v1/subscriptions/progress`，失败时回退 `/api/v1/subscriptions/summary` 或 `/api/v1/keys` 的额度字段。
+- `yellowpeach-newapi`：登录态读取 `/api/subscription/self` 的 `amount_total/amount_used`，失败时使用 API Key 调 `/api/usage/token/` 的 `total_available/total_used/total_granted`。
+- 官方供应商余额探测支持 DeepSeek、StepFun、SiliconFlow、OpenRouter、Novita AI 的公开余额接口。
+
+套餐余量会写入 `package_remaining/package_total/package_used/package_unit/package_display`，路由列表余额仍保留钱包余额或 API Key 余额。
 
 ## 站点与插件
 
