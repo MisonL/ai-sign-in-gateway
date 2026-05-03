@@ -8,16 +8,20 @@ import type {
   CheckinSite,
   ChatResult,
   CheckinRun,
-  ConnectivityResult,
+  ChatImageReference,
+  ChatRequestMessage,
   DuplicateSiteGroup,
   DuplicateSiteMergeResult,
+  GatewayActiveRequest,
   GatewayLog,
   GatewayOverview,
+  GatewayRouteDiagnosis,
   GatewayRouteProbeResult,
   GatewayRoute,
   GatewaySettingsData,
   LocalStorageAnalyzeResult,
   McpTestResult,
+  ModelListResult,
   OverviewData,
   PluginMeta,
   PublicInvite,
@@ -29,6 +33,7 @@ import type {
   RuntimeStopStalePortsResult,
   SettingsData,
   Site,
+  SiteApiKeyRefreshResult,
   SiteGroup,
   SiteHealth,
   SiteInviteRefreshResult,
@@ -140,6 +145,58 @@ async function requestForm<T>(path: string, body: FormData): Promise<T> {
   return data as T
 }
 
+function filenameFromDisposition(disposition: string | null, fallback: string): string {
+  if (!disposition) {
+    return fallback
+  }
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i)
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1])
+    } catch {
+      return utf8Match[1]
+    }
+  }
+  const match = disposition.match(/filename="?([^";]+)"?/i)
+  return match?.[1] || fallback
+}
+
+async function requestDownload(path: string, fallbackFilename: string): Promise<{ blob: Blob; filename: string }> {
+  const headers = new Headers()
+  const token = getToken()
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`)
+  }
+
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: 'GET',
+    headers,
+  })
+
+  if (response.status === 401) {
+    clearToken()
+    throw new ApiError('登录状态失效，请重新登录。', 401)
+  }
+
+  if (!response.ok) {
+    const text = await response.text()
+    let data: unknown = null
+    if (text) {
+      try {
+        data = JSON.parse(text)
+      } catch {
+        data = { message: text }
+      }
+    }
+    throw new ApiError(extractErrorMessage(data), response.status)
+  }
+
+  return {
+    blob: await response.blob(),
+    filename: filenameFromDisposition(response.headers.get('Content-Disposition'), fallbackFilename),
+  }
+}
+
 export async function login(username: string, password: string): Promise<void> {
   const data = await request<{ access_token: string }>('/auth/login', {
     method: 'POST',
@@ -197,6 +254,10 @@ export function getSites(): Promise<Site[]> {
   return request('/sites')
 }
 
+export function getSite(id: number): Promise<Site> {
+  return request(`/sites/${id}`)
+}
+
 export function getDuplicateSites(): Promise<DuplicateSiteGroup[]> {
   return request('/sites/cleanup-duplicates')
 }
@@ -224,6 +285,22 @@ export function refreshSiteInvites(payload: { site_ids?: number[]; only_enabled?
       site_ids: payload.site_ids ?? [],
       only_enabled: payload.only_enabled ?? false,
     }),
+  })
+}
+
+export function refreshSiteApiKeys(payload: { site_ids?: number[]; only_enabled?: boolean } = {}): Promise<SiteApiKeyRefreshResult[]> {
+  return request('/sites/api-keys/refresh', {
+    method: 'POST',
+    body: JSON.stringify({
+      site_ids: payload.site_ids ?? [],
+      only_enabled: payload.only_enabled ?? false,
+    }),
+  })
+}
+
+export function refreshOneSiteApiKeys(id: number): Promise<SiteApiKeyRefreshResult> {
+  return request(`/sites/${id}/api-keys/refresh`, {
+    method: 'POST',
   })
 }
 
@@ -366,7 +443,17 @@ export function previewSiteTotp(id: number): Promise<TotpPreview> {
 
 export function runSiteCheckin(
   id: number,
-): Promise<{ run: number; status: string; message: string; balance: number | null; balance_unit?: string | null }> {
+): Promise<{
+  run: number
+  status: string
+  message: string
+  balance: number | null
+  balance_unit?: string | null
+  balance_display?: string | null
+  package_display?: string | null
+  checkin_status?: string | null
+  connection_status?: string | null
+}> {
   return request(`/sites/${id}/checkin`, {
     method: 'POST',
   })
@@ -463,22 +550,33 @@ export function deleteRuntimeDatabaseBackup(name: string): Promise<RuntimeDataba
   })
 }
 
-export function testConnectivity(payload: {
-  base_url: string
-  api_key: string
-  model: string
-}): Promise<ConnectivityResult> {
-  return request('/tools/connectivity-test', {
+export function downloadRuntimeDatabaseBackup(name: string): Promise<{ blob: Blob; filename: string }> {
+  return requestDownload(`/settings/runtime/database/backups/${encodeURIComponent(name)}/download`, name)
+}
+
+export function downloadRuntimeConfigArchive(): Promise<{ blob: Blob; filename: string }> {
+  return requestDownload('/settings/runtime/config-dir/archive', 'ai-sign-in-gateway-config.zip')
+}
+
+export function listToolModels(siteId: number): Promise<ModelListResult> {
+  return request('/tools/models', {
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ site_id: siteId }),
   })
 }
 
 export function testChat(payload: {
-  base_url: string
-  api_key: string
+  base_url?: string
+  api_key?: string
+  site_id?: number
+  route_type?: string
+  key_fingerprint?: string
   model: string
-  prompt: string
+  prompt?: string
+  mode?: 'chat' | 'image' | 'auto'
+  messages?: ChatRequestMessage[]
+  reference_images?: ChatImageReference[]
+  image_size?: string
 }): Promise<ChatResult> {
   return request('/tools/chat-test', {
     method: 'POST',
@@ -541,6 +639,18 @@ export function toggleGatewayRoute(id: number): Promise<{ id: number; is_enabled
   })
 }
 
+export function disableAllGatewayRoutes(): Promise<{ status: string; disabled_count: number }> {
+  return request('/gateway-admin/routes/disable-all', {
+    method: 'POST',
+  })
+}
+
+export function enableOnlyGatewayRoute(id: number): Promise<{ status: string; enabled_route_id: number }> {
+  return request(`/gateway-admin/routes/${id}/enable-only`, {
+    method: 'POST',
+  })
+}
+
 export function resetGatewayRouteCircuit(id: number): Promise<{ id: number; is_enabled: boolean; circuit_state: string }> {
   return request(`/gateway-admin/routes/${id}/reset-circuit`, {
     method: 'POST',
@@ -554,10 +664,25 @@ export function updateGatewayRouteType(id: number, routeType: 'claude' | 'codex'
   })
 }
 
+export function reorderGatewayRoutePriorities(payload: {
+  route_id?: number
+  mode: 'move' | 'package' | 'balance'
+  index?: number
+}): Promise<GatewayRoute[]> {
+  return request('/gateway-admin/routes/priorities/reorder', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
 export function probeGatewayRoute(id: number): Promise<GatewayRouteProbeResult> {
   return request(`/gateway-admin/routes/${id}/probe`, {
     method: 'POST',
   })
+}
+
+export function diagnoseGatewayRoute(id: number): Promise<GatewayRouteDiagnosis> {
+  return request(`/gateway-admin/routes/${id}/diagnose`)
 }
 
 export function probeGatewayRouteBalance(id: number): Promise<BalanceProbeResult> {
@@ -575,6 +700,10 @@ export function probeGatewayRoutes(routeIds: number[]): Promise<GatewayRouteProb
 
 export function getGatewayLogs(limit = 80): Promise<GatewayLog[]> {
   return request(`/gateway-admin/logs?limit=${limit}`)
+}
+
+export function getGatewayActiveRequests(): Promise<GatewayActiveRequest[]> {
+  return request('/gateway-admin/active-requests')
 }
 
 export function getGatewayRouteLogs(routeId: number, limit = 80): Promise<GatewayLog[]> {

@@ -31,8 +31,8 @@ export interface SitePayload {
   group_name: string
   is_enabled: boolean
   notes: string
-  credentials: Record<string, string>
-  plugin_config: Record<string, string | number | boolean>
+  credentials: Record<string, any>
+  plugin_config: Record<string, any>
 }
 
 export interface Site extends SitePayload {
@@ -42,6 +42,10 @@ export interface Site extends SitePayload {
   last_message: string | null
   last_balance: number | null
   balance_display?: string | null
+  package_remaining?: number | null
+  package_total?: number | null
+  package_used?: number | null
+  package_unit?: string | null
   package_display?: string | null
   checkin_status?: string | null
   last_run_at: string | null
@@ -56,6 +60,10 @@ export interface SiteSummary {
   last_message: string | null
   last_balance: number | null
   balance_display?: string | null
+  package_remaining?: number | null
+  package_total?: number | null
+  package_used?: number | null
+  package_unit?: string | null
   package_display?: string | null
   invite_link?: string | null
   invite_code?: string | null
@@ -69,9 +77,23 @@ export interface SiteInviteRefreshResult {
   message: string
   invite_link?: string | null
   invite_code?: string | null
+  package_remaining?: number | null
+  package_total?: number | null
+  package_used?: number | null
+  package_unit?: string | null
   package_display?: string | null
-  updated_credentials: Record<string, string>
-  updated_plugin_config: Record<string, string | number | boolean>
+  updated_credentials: Record<string, any>
+  updated_plugin_config: Record<string, any>
+}
+
+export interface SiteApiKeyRefreshResult {
+  site_id: number
+  site_name: string
+  ok: boolean
+  message: string
+  api_key_count: number
+  primary_key_updated: boolean
+  updated_credentials: Record<string, unknown>
 }
 
 export interface DuplicateSiteItem {
@@ -127,12 +149,16 @@ export interface SiteHealth {
   message: string
   balance: number | null
   balance_unit?: string | null
+  package_remaining?: number | null
+  package_total?: number | null
+  package_used?: number | null
+  package_unit?: string | null
   package_display?: string | null
   account_name: string | null
   invite_link?: string | null
   invite_code?: string | null
-  updated_credentials?: Record<string, string>
-  updated_plugin_config?: Record<string, string | number | boolean>
+  updated_credentials?: Record<string, any>
+  updated_plugin_config?: Record<string, any>
 }
 
 export interface PublicInvite {
@@ -171,7 +197,7 @@ export interface LocalStorageAnalyzeResult {
   suggested_plugin_key?: string
   suggested_site_name?: string
   suggested_base_url?: string
-  suggested_plugin_config?: Record<string, string | number | boolean>
+  suggested_plugin_config?: Record<string, any>
   matched_keys: string[]
   message: string
 }
@@ -219,6 +245,10 @@ export interface CheckinSite {
   last_message: string | null
   last_balance?: number | null
   balance_display?: string | null
+  package_remaining?: number | null
+  package_total?: number | null
+  package_used?: number | null
+  package_unit?: string | null
   package_display?: string | null
   checkin_status?: string | null
   last_run_at: string | null
@@ -286,6 +316,7 @@ export interface SettingsData {
   runtime_default_config_dir: string
   runtime_database_path: string
   runtime_pending_config_dir: string
+  security_warnings: string[]
 }
 
 export interface RuntimeStopPortResult {
@@ -333,12 +364,26 @@ export interface RuntimeDatabaseBackupNowResult extends RuntimeDatabaseBackupsRe
   message: string
 }
 
-export interface ConnectivityResult {
+export interface ModelListItem {
+  id: string
+  route_type: 'claude' | 'codex' | 'gemini' | string
+  mode: 'chat' | 'image' | string
+  base_url: string
+  key_fingerprint: string
+  key_name: string
+}
+
+export interface ModelListResult {
   ok: boolean
   status_code: number | null
   latency_ms: number | null
   message: string
   models: string[]
+  items: ModelListItem[]
+  base_url: string
+  route_type: string
+  key_fingerprint: string
+  key_name: string
 }
 
 export interface ChatResult {
@@ -347,6 +392,25 @@ export interface ChatResult {
   latency_ms: number | null
   message: string
   output: string
+  images?: ChatImageOutput[]
+  revised_prompt?: string
+}
+
+export interface ChatImageReference {
+  name: string
+  url: string
+}
+
+export interface ChatRequestMessage {
+  role: 'system' | 'user' | 'assistant'
+  content: string
+  reference_images?: ChatImageReference[]
+}
+
+export interface ChatImageOutput {
+  url: string
+  b64_json: string
+  revised_prompt: string
 }
 
 export interface McpTestResult {
@@ -397,7 +461,9 @@ export interface GatewayOverview {
   cooldown_seconds: number
   request_timeout: number
   max_attempts: number
+  failure_retry_mode: 'retryable' | 'all'
   route_concurrency_limit: number
+  concurrency_transfer_strategy: 'limit_only' | 'balance'
   concurrency_overflow_strategy: 'latency_first' | 'sequential'
 }
 
@@ -407,7 +473,9 @@ export interface GatewaySettingsData {
   cooldown_seconds: number
   request_timeout: number
   max_attempts: number
+  failure_retry_mode: 'retryable' | 'all'
   route_concurrency_limit: number
+  concurrency_transfer_strategy: 'limit_only' | 'balance'
   concurrency_overflow_strategy: 'latency_first' | 'sequential'
   smart_latency_bias: number
   smart_concurrency_bias: number
@@ -431,6 +499,10 @@ export interface GatewayRoute {
   group_name: string
   last_balance?: number | null
   balance_display?: string | null
+  package_remaining?: number | null
+  package_total?: number | null
+  package_used?: number | null
+  package_unit?: string | null
   package_display?: string | null
   checkin_status?: string | null
   key_name: string
@@ -439,6 +511,7 @@ export interface GatewayRoute {
   route_type: 'claude' | 'codex' | 'gemini'
   route_type_manual?: boolean
   route_priority: number
+  route_priority_manual?: boolean
   weight: number
   is_enabled: boolean
   circuit_state: string
@@ -479,6 +552,24 @@ export interface GatewayRouteProbeResult {
   checked_at: string
 }
 
+export interface GatewayRouteDiagnosticItem {
+  label: string
+  ok: boolean
+  severity: 'ok' | 'warning' | 'error'
+  message: string
+  detail: string
+}
+
+export interface GatewayRouteDiagnosis {
+  id: number
+  healthy: boolean
+  route_label: string
+  route: GatewayRoute
+  diagnostics: GatewayRouteDiagnosticItem[]
+  checked_at: string
+  active_count: number
+}
+
 export interface GatewayLog {
   id: number
   request_id: string
@@ -500,4 +591,26 @@ export interface GatewayLog {
   failure_reason: string | null
   is_stream: boolean
   created_at: string
+}
+
+export interface GatewayActiveRequest {
+  id: string
+  request_id: string
+  route_id: number
+  site_id: number
+  route_label: string
+  site_name: string
+  key_name: string
+  key_fingerprint: string
+  group_name: string
+  target_path: string
+  method: string
+  route_strategy: string
+  attempt_index: number
+  is_stream: boolean
+  route_type: 'claude' | 'codex' | 'gemini' | string
+  request_base_url: string
+  active_concurrency: number
+  started_at: string
+  elapsed_ms: number
 }

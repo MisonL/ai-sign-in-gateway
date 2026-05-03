@@ -58,6 +58,7 @@ const settings = reactive<SettingsData>({
   runtime_default_config_dir: '',
   runtime_database_path: '',
   runtime_pending_config_dir: '',
+  security_warnings: [],
 })
 
 const adminUrl = computed(() => joinAppPath(settings.desktop_frontend_url || window.location.origin, '/overview'))
