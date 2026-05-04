@@ -322,6 +322,9 @@ func TestSub2APIStatusReadsSubscriptionProgress(t *testing.T) {
 	if !strings.Contains(*status.PackageDisplay, "Pro 周度套餐") || !strings.Contains(*status.PackageDisplay, "Pro 日度套餐") {
 		t.Fatalf("PackageDisplay missing weekly/daily quota = %v", *status.PackageDisplay)
 	}
+	if status.Balance == nil || *status.Balance != 4 {
+		t.Fatalf("Balance = %v", status.Balance)
+	}
 }
 
 func TestSub2APIStatusFallsBackToSubscriptionSummary(t *testing.T) {

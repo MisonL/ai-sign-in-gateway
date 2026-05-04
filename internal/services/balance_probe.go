@@ -55,6 +55,22 @@ func probeBalanceForSite(ctx context.Context, db *gorm.DB, site models.Site, rou
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = 20
 	}
+	if result, ok := packageBalanceProbeResult(site, routeID); ok {
+		updates := map[string]any{"last_balance": result.Remaining}
+		site.LastBalance = result.Remaining
+		if result.Unit != "" {
+			if site.PluginConfig == nil {
+				site.PluginConfig = models.JSONMap{}
+			}
+			site.PluginConfig["balance_unit"] = result.Unit
+			updates["plugin_config"] = site.PluginConfig
+		}
+		_ = db.Model(&site).Updates(updates).Error
+		if routeID != 0 {
+			_ = db.Model(&models.GatewayRouteState{}).Where("id = ?", routeID).Update("last_request_base_url", result.BaseURL).Error
+		}
+		return result, nil
+	}
 	key := firstSiteAPIKey(site)
 	if key == "" {
 		return BalanceProbeResult{SiteID: site.ID, RouteID: routeID, OK: false, Message: "站点缺少 API Key", CheckedAt: time.Now().UTC()}, nil
@@ -94,6 +110,33 @@ func probeBalanceForSite(ctx context.Context, db *gorm.DB, site models.Site, rou
 		last.Message = "所有 API 请求 URL 均未返回可用余额"
 	}
 	return last, nil
+}
+
+func packageBalanceProbeResult(site models.Site, routeID uint) (BalanceProbeResult, bool) {
+	if !strings.EqualFold(strings.TrimSpace(site.PluginKey), "sub2api-platform") {
+		return BalanceProbeResult{}, false
+	}
+	remaining, ok := numericMapValue(site.PluginConfig, "package_remaining")
+	if !ok {
+		return BalanceProbeResult{}, false
+	}
+	unit := strings.TrimSpace(stringMapValue(site.PluginConfig, "package_unit", ""))
+	if unit == "" {
+		unit = strings.TrimSpace(stringMapValue(site.PluginConfig, "balance_unit", ""))
+	}
+	if unit == "" {
+		unit = "USD"
+	}
+	return BalanceProbeResult{
+		SiteID:    site.ID,
+		RouteID:   routeID,
+		OK:        true,
+		Remaining: &remaining,
+		Unit:      unit,
+		BaseURL:   firstNonEmpty(site.BaseURL, GatewayRequestBase(site)),
+		Message:   "已使用当前套餐余量作为余额",
+		CheckedAt: time.Now().UTC(),
+	}, true
 }
 
 func requestUsageBalance(ctx context.Context, site models.Site, baseURL, apiKey string, timeoutSeconds int) BalanceProbeResult {

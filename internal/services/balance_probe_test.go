@@ -1,8 +1,12 @@
 package services
 
 import (
+	"context"
 	"testing"
 
+	"ai-sign-in-gateway/internal/config"
+	"ai-sign-in-gateway/internal/database"
+	"ai-sign-in-gateway/internal/migrations"
 	"ai-sign-in-gateway/internal/models"
 )
 
@@ -104,5 +108,48 @@ func TestUsageURLCandidatesOnlyProbeNewAPIForKnownNewAPI(t *testing.T) {
 	}
 	if candidates[0].URL != "https://relay.example/api/usage/token/" {
 		t.Fatalf("newapi candidate URL = %s", candidates[0].URL)
+	}
+}
+
+func TestProbeSiteBalanceUsesSub2APIPackageRemaining(t *testing.T) {
+	db, err := database.Open(config.Config{DatabaseURL: "sqlite:///" + t.TempDir() + "/balance.db"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close(db) })
+	if err := migrations.Apply(db); err != nil {
+		t.Fatal(err)
+	}
+	site := models.Site{
+		Name:      "panglong",
+		BaseURL:   "https://panglong.example",
+		PluginKey: "sub2api-platform",
+		IsEnabled: true,
+		Credentials: models.JSONMap{
+			"api_key": "sk-demo",
+		},
+		PluginConfig: models.JSONMap{
+			"package_remaining": 82.82,
+			"package_unit":      "USD",
+		},
+	}
+	if err := db.Create(&site).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := ProbeSiteBalance(context.Background(), db, site.ID, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.OK || result.Remaining == nil || *result.Remaining != 82.82 {
+		t.Fatalf("unexpected balance result: ok=%v remaining=%v", result.OK, result.Remaining)
+	}
+
+	var stored models.Site
+	if err := db.First(&stored, site.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.LastBalance == nil || *stored.LastBalance != 82.82 {
+		t.Fatalf("stored.LastBalance = %v", stored.LastBalance)
 	}
 }

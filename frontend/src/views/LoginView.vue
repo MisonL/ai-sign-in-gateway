@@ -281,7 +281,6 @@ onMounted(loadInvites)
 
               <div class="login-options">
                 <a-checkbox v-model:checked="rememberMe">记住我</a-checkbox>
-                <span>初次使用默认 admin / admin123</span>
               </div>
 
               <a-button class="login-submit" block type="primary" html-type="submit" size="large" :loading="loading">
@@ -1148,8 +1147,7 @@ onMounted(loadInvites)
 
 .login-options {
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  justify-content: flex-start;
   margin: 2px 0 14px;
   color: #4770a5;
   font-size: 13px;
@@ -1322,9 +1320,5 @@ onMounted(loadInvites)
     justify-content: flex-start;
   }
 
-  .login-options {
-    align-items: flex-start;
-    flex-direction: column;
-  }
 }
 </style>

@@ -129,7 +129,7 @@ func (p *Sub2API) FetchAccountStatus(ctx context.Context, site models.Site, time
 	currency := pathString(profile, "data.currency", "$")
 	balanceUnit := strings.TrimSpace(currency)
 	packageQuota := p.fetchPackageQuota(ctx, site, &auth, profile, timeoutSeconds)
-	if balance == nil && packageQuota.Remaining != nil {
+	if packageQuota.Remaining != nil {
 		balance = packageQuota.Remaining
 		if strings.TrimSpace(packageQuota.Unit) != "" {
 			balanceUnit = strings.TrimSpace(packageQuota.Unit)
