@@ -538,8 +538,8 @@ build_artifacts
 collect_artifacts
 generate_checksums
 generate_release_notes
-prepare_tag
 publish_release_branch
+prepare_tag
 if [[ "$RELEASE_PUBLISHER" == "api" ]]; then
   publish_github_release_api
 else
