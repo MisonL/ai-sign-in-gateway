@@ -186,6 +186,22 @@ ensure_version() {
   fi
 }
 
+validate_tag() {
+  local head_commit
+  local tag_commit=""
+
+  head_commit="$(git -C "$ROOT_DIR" rev-parse HEAD)"
+  if git -C "$ROOT_DIR" rev-parse "$VERSION" >/dev/null 2>&1; then
+    tag_commit="$(git -C "$ROOT_DIR" rev-parse "$VERSION^{}")"
+  fi
+
+  if [[ "$FORCE_RETAG_CURRENT" -eq 0 && -n "$tag_commit" && "$tag_commit" != "$head_commit" ]]; then
+    echo "错误: $VERSION 已存在且指向 $tag_commit，不是当前 HEAD $head_commit"
+    echo "如需覆盖该 tag，请显式使用 --retag-current"
+    exit 1
+  fi
+}
+
 prepare_tag() {
   local head_commit
   local tag_commit=""
@@ -206,6 +222,10 @@ prepare_tag() {
   elif [[ -z "$tag_commit" ]]; then
     echo ">> 创建 tag: $VERSION"
     git -C "$ROOT_DIR" tag -a "$VERSION" -m "Release $VERSION" "$head_commit"
+  elif [[ "$tag_commit" != "$head_commit" ]]; then
+    echo "错误: $VERSION 已存在且指向 $tag_commit，不是当前 HEAD $head_commit"
+    echo "如需覆盖该 tag，请显式使用 --retag-current"
+    exit 1
   fi
 
   if [[ "$TAG_PUSH_FORCE" -eq 1 ]]; then
@@ -531,6 +551,7 @@ resolve_git_remote
 resolve_github_repo
 detect_release_publisher
 ensure_version
+validate_tag
 confirm_release
 trap cleanup EXIT
 

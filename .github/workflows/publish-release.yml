@@ -29,6 +29,15 @@ jobs:
             exit 1
           fi
 
+          tag_version="${GITHUB_REF_NAME:-}"
+          if [[ -z "$tag_version" ]]; then
+            tag_version="${GITHUB_REF#refs/tags/}"
+          fi
+          if [[ "$version" != "$tag_version" ]]; then
+            echo "Release artifact version $version does not match pushed tag $tag_version" >&2
+            exit 1
+          fi
+
           notes_file="RELEASE_NOTES.md"
           if [[ ! -f "$notes_file" ]]; then
             echo "RELEASE_NOTES.md not found" >&2
