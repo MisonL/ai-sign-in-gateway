@@ -55,14 +55,15 @@ type PluginMetaResponse struct {
 }
 
 type SiteBase struct {
-	Name         string         `json:"name"`
-	BaseURL      string         `json:"base_url"`
-	PluginKey    string         `json:"plugin_key"`
-	GroupName    string         `json:"group_name"`
-	IsEnabled    bool           `json:"is_enabled"`
-	Notes        string         `json:"notes"`
-	Credentials  models.JSONMap `json:"credentials"`
-	PluginConfig models.JSONMap `json:"plugin_config"`
+	Name            string         `json:"name"`
+	BaseURL         string         `json:"base_url"`
+	PluginKey       string         `json:"plugin_key"`
+	GroupName       string         `json:"group_name"`
+	SupportedModels []string       `json:"supported_models"`
+	IsEnabled       bool           `json:"is_enabled"`
+	Notes           string         `json:"notes"`
+	Credentials     models.JSONMap `json:"credentials"`
+	PluginConfig    models.JSONMap `json:"plugin_config"`
 }
 
 type SiteCreate = SiteBase
@@ -76,6 +77,7 @@ type SiteResponse struct {
 	LastMessage      *string    `json:"last_message"`
 	LastBalance      *float64   `json:"last_balance"`
 	BalanceDisplay   *string    `json:"balance_display"`
+	BalanceUnit      *string    `json:"balance_unit"`
 	PackageRemaining *float64   `json:"package_remaining"`
 	PackageTotal     *float64   `json:"package_total"`
 	PackageUsed      *float64   `json:"package_used"`
@@ -371,36 +373,59 @@ type GatewaySettingsResponse struct {
 
 type GatewaySettingsUpdate = GatewaySettingsResponse
 
+type GatewayRouteStateUpdateRequest struct {
+	RouteType       string    `json:"route_type"`
+	SupportedModels *[]string `json:"supported_models"`
+}
+
 type GatewayRouteStateResponse struct {
-	ID                uint       `json:"id"`
-	SiteID            uint       `json:"site_id"`
-	SiteName          string     `json:"site_name"`
-	BaseURL           string     `json:"base_url"`
-	RequestBaseURL    string     `json:"request_base_url"`
-	GroupName         string     `json:"group_name"`
-	LastBalance       *float64   `json:"last_balance"`
-	BalanceDisplay    *string    `json:"balance_display"`
-	PackageDisplay    *string    `json:"package_display"`
-	CheckinStatus     *string    `json:"checkin_status"`
-	KeyName           string     `json:"key_name"`
-	KeyFingerprint    string     `json:"key_fingerprint"`
-	KeySource         string     `json:"key_source"`
-	RouteType         string     `json:"route_type"`
-	RoutePriority     int        `json:"route_priority"`
-	Weight            int        `json:"weight"`
-	IsEnabled         bool       `json:"is_enabled"`
-	CircuitState      string     `json:"circuit_state"`
-	ActiveConcurrency int        `json:"active_concurrency"`
-	RequestCount      int        `json:"request_count"`
-	SuccessCount      int        `json:"success_count"`
-	FailureCount      int        `json:"failure_count"`
-	AvgLatencyMS      *float64   `json:"avg_latency_ms"`
-	LastLatencyMS     *float64   `json:"last_latency_ms"`
-	SuccessRate       float64    `json:"success_rate"`
-	LastStatusCode    *int       `json:"last_status_code"`
-	LastError         *string    `json:"last_error"`
-	LastUsedAt        *time.Time `json:"last_used_at"`
-	LastSuccessAt     *time.Time `json:"last_success_at"`
-	LastFailureAt     *time.Time `json:"last_failure_at"`
-	CircuitOpenUntil  *time.Time `json:"circuit_open_until"`
+	ID                  uint       `json:"id"`
+	SiteID              uint       `json:"site_id"`
+	SiteName            string     `json:"site_name"`
+	BaseURL             string     `json:"base_url"`
+	RequestBaseURL      string     `json:"request_base_url"`
+	RequestBaseURLs     []string   `json:"request_base_urls"`
+	LastRequestBaseURL  string     `json:"last_request_base_url"`
+	SiteNameSnapshot    string     `json:"site_name_snapshot"`
+	SiteBaseURLSnapshot string     `json:"site_base_url_snapshot"`
+	SiteMissing         bool       `json:"site_missing"`
+	HasAPIKey           bool       `json:"has_api_key"`
+	GroupName           string     `json:"group_name"`
+	LastBalance         *float64   `json:"last_balance"`
+	BalanceDisplay      *string    `json:"balance_display"`
+	PackageRemaining    *float64   `json:"package_remaining"`
+	PackageTotal        *float64   `json:"package_total"`
+	PackageUsed         *float64   `json:"package_used"`
+	PackageUnit         *string    `json:"package_unit"`
+	PackageDisplay      *string    `json:"package_display"`
+	CheckinStatus       *string    `json:"checkin_status"`
+	KeyName             string     `json:"key_name"`
+	KeyFingerprint      string     `json:"key_fingerprint"`
+	KeySource           string     `json:"key_source"`
+	RouteType           string     `json:"route_type"`
+	RouteTypeManual     bool       `json:"route_type_manual"`
+	SupportedModels     []string   `json:"supported_models"`
+	ModelProbeStatus    string     `json:"model_probe_status"`
+	ModelProbeMessage   string     `json:"model_probe_message"`
+	ModelProbeUpdatedAt *time.Time `json:"model_probe_updated_at"`
+	RoutePriority       int        `json:"route_priority"`
+	RoutePriorityManual bool       `json:"route_priority_manual"`
+	Weight              int        `json:"weight"`
+	IsEnabled           bool       `json:"is_enabled"`
+	CircuitState        string     `json:"circuit_state"`
+	ConsecutiveFailures int        `json:"consecutive_failures"`
+	ActiveConcurrency   int        `json:"active_concurrency"`
+	RequestCount        int        `json:"request_count"`
+	SuccessCount        int        `json:"success_count"`
+	FailureCount        int        `json:"failure_count"`
+	AvgLatencyMS        *float64   `json:"avg_latency_ms"`
+	EWMALatencyMS       *float64   `json:"ewma_latency_ms"`
+	LastLatencyMS       *float64   `json:"last_latency_ms"`
+	SuccessRate         float64    `json:"success_rate"`
+	LastStatusCode      *int       `json:"last_status_code"`
+	LastError           *string    `json:"last_error"`
+	LastUsedAt          *time.Time `json:"last_used_at"`
+	LastSuccessAt       *time.Time `json:"last_success_at"`
+	LastFailureAt       *time.Time `json:"last_failure_at"`
+	CircuitOpenUntil    *time.Time `json:"circuit_open_until"`
 }

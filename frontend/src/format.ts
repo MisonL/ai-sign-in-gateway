@@ -7,11 +7,32 @@ export function formatBalance(balance: number | null | undefined, unit?: string 
     maximumFractionDigits: 2,
   }).format(balance)
 
-  const normalizedUnit = (unit ?? '$').trim() || '$'
+  const normalizedUnit = normalizeBalanceUnit(unit)
   if (['$', '¥', '€', '£'].includes(normalizedUnit)) {
     return `${normalizedUnit}${value}`
   }
   return `${value} ${normalizedUnit}`
+}
+
+export function normalizeBalanceUnit(unit?: string | null, fallback = '$'): string {
+  const raw = (unit ?? fallback).trim()
+  if (!raw) {
+    return fallback
+  }
+  const compact = raw.replace(/[\s_.-]+/g, '').toLowerCase()
+  if (['$', '＄', 'usd', 'us$', '$usd', 'usd$', 'dollar', 'dollars', 'usdollar', 'usdollars', '美元', '美金'].includes(compact)) {
+    return '$'
+  }
+  if (['cny', 'rmb', 'yuan', 'renminbi', '人民币', '元'].includes(compact)) {
+    return '¥'
+  }
+  if (['eur', 'euro', 'euros', '欧元'].includes(compact)) {
+    return '€'
+  }
+  if (['gbp', 'pound', 'pounds', '英镑'].includes(compact)) {
+    return '£'
+  }
+  return raw
 }
 
 export function balanceTone(balance: number | null | undefined): 'positive' | 'negative' | 'zero' | 'empty' {

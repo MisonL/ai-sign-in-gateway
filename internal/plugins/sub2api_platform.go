@@ -127,7 +127,7 @@ func (p *Sub2API) FetchAccountStatus(ctx context.Context, site models.Site, time
 	}
 	balance := pathFloat(profile, "data.balance")
 	currency := pathString(profile, "data.currency", "$")
-	balanceUnit := strings.TrimSpace(currency)
+	balanceUnit := normalizeBalanceUnit(currency)
 	packageQuota := p.fetchPackageQuota(ctx, site, &auth, profile, timeoutSeconds)
 	if packageQuota.Remaining != nil {
 		balance = packageQuota.Remaining
@@ -241,7 +241,7 @@ func (p *Sub2API) Checkin(ctx context.Context, site models.Site, timeoutSeconds 
 		Success:         success,
 		Message:         message,
 		Balance:         balance,
-		BalanceUnit:     ptrIfNonEmpty(pathString(payload, "data.currency", "")),
+		BalanceUnit:     ptrIfNonEmpty(normalizeBalanceUnit(pathString(payload, "data.currency", ""))),
 		ResponseExcerpt: &excerpt,
 	}, nil
 }
@@ -334,6 +334,9 @@ func (p *Sub2API) syncAPIKeys(ctx context.Context, site models.Site, auth *sub2a
 			"route_type": routeType,
 			"api_type":   routeType,
 		}
+		if supportedModels := apiKeySupportedModelsFromItem(item); len(supportedModels) > 0 {
+			entry["supported_models"] = supportedModels
+		}
 		apiKeys = append(apiKeys, entry)
 	}
 	credentialsUpdate["api_keys"] = apiKeys
@@ -406,14 +409,14 @@ func sub2apiQuotaFromProgressPayload(payload map[string]any) packageQuotaSnapsho
 				continue
 			}
 			fullLabel := strings.TrimSpace(label + " " + window.label)
-			display := formatPackageQuotaDisplay(fullLabel, remaining, limit, used, "USD")
+			display := formatPackageQuotaDisplay(fullLabel, remaining, limit, used, "$")
 			displays = appendUniqueNonEmpty(displays, display)
 			quota := packageQuotaSnapshot{
 				Display:   display,
 				Remaining: remaining,
 				Total:     limit,
 				Used:      used,
-				Unit:      "USD",
+				Unit:      "$",
 			}
 			if window.rank > bestRank {
 				best = quota
@@ -463,14 +466,14 @@ func sub2apiQuotaFromSummaryPayload(payload map[string]any) packageQuotaSnapshot
 				continue
 			}
 			remaining := *total - *used
-			display := formatPackageQuotaDisplay(label+" "+window.label, &remaining, total, used, "USD")
+			display := formatPackageQuotaDisplay(label+" "+window.label, &remaining, total, used, "$")
 			displays = appendUniqueNonEmpty(displays, display)
 			quota := packageQuotaSnapshot{
 				Display:   display,
 				Remaining: &remaining,
 				Total:     total,
 				Used:      used,
-				Unit:      "USD",
+				Unit:      "$",
 			}
 			if window.rank > bestRank {
 				best = quota
@@ -516,11 +519,11 @@ func sub2apiQuotaFromKeysPayload(payload map[string]any) packageQuotaSnapshot {
 			name = "API Key"
 		}
 		quota := packageQuotaSnapshot{
-			Display:   formatPackageQuotaDisplay(name+" Key 额度", &remaining, total, used, "USD"),
+			Display:   formatPackageQuotaDisplay(name+" Key 额度", &remaining, total, used, "$"),
 			Remaining: &remaining,
 			Total:     total,
 			Used:      used,
-			Unit:      "USD",
+			Unit:      "$",
 		}
 		if !best.hasQuota() || best.Remaining == nil || remaining > *best.Remaining {
 			best = quota
@@ -736,6 +739,65 @@ func routeTypeFromAPIKeyItem(item map[string]any, site models.Site) string {
 		}
 	}
 	return "codex"
+}
+
+func apiKeySupportedModelsFromItem(item map[string]any) []string {
+	for _, key := range []string{
+		"supported_models",
+		"models",
+		"model_ids",
+		"model_names",
+		"allowed_models",
+		"allow_models",
+		"available_models",
+	} {
+		if models := stringListValue(firstExistingValue(item, key)); len(models) > 0 {
+			return models
+		}
+	}
+	return nil
+}
+
+func stringListValue(value any) []string {
+	switch typed := value.(type) {
+	case nil:
+		return nil
+	case []string:
+		return normalizePluginStringList(typed)
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, fmt.Sprint(item))
+		}
+		return normalizePluginStringList(out)
+	case string:
+		return normalizePluginStringList(strings.FieldsFunc(typed, func(r rune) bool {
+			return strings.ContainsRune(",，\n\r\t", r)
+		}))
+	default:
+		return normalizePluginStringList([]string{fmt.Sprint(typed)})
+	}
+}
+
+func normalizePluginStringList(values []string) []string {
+	out := []string{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || value == "<nil>" {
+			continue
+		}
+		seen := false
+		for _, existing := range out {
+			if existing == value {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func normalizeAPIKeyRouteType(value string) string {

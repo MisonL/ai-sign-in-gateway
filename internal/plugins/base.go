@@ -5,6 +5,7 @@ import (
 
 	"ai-sign-in-gateway/internal/models"
 	"ai-sign-in-gateway/internal/schemas"
+	"ai-sign-in-gateway/internal/services"
 )
 
 type AccountStatus struct {
@@ -76,4 +77,12 @@ func apiKeyUpdateCount(credentials models.JSONMap) int {
 
 func Field(name, label, fieldType, placeholder string, required bool, helpText string) schemas.FieldDescriptor {
 	return schemas.FieldDescriptor{Name: name, Label: label, Type: fieldType, Placeholder: placeholder, Required: required, HelpText: helpText}
+}
+
+func normalizeBalanceUnit(unit string) string {
+	return services.NormalizeBalanceUnit(unit)
+}
+
+func balanceUnitIsSymbol(unit string) bool {
+	return services.BalanceUnitIsSymbol(unit)
 }

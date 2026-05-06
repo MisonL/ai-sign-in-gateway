@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"io/fs"
@@ -50,6 +51,16 @@ type ShellConfig struct {
 	DataDir            string `json:"data_dir"`
 }
 
+type startupOptions struct {
+	Host         string
+	Port         int
+	BackendPort  int
+	FrontendPort int
+	ConfigDir    string
+	OpenBrowser  *bool
+	Desktop      *bool
+}
+
 func main() {
 	if err := run(); err != nil {
 		log.Fatalf("%s 启动失败: %v", appName, err)
@@ -57,6 +68,15 @@ func main() {
 }
 
 func run() error {
+	opts, err := parseStartupOptions(os.Args[1:], os.Stdout)
+	if errors.Is(err, flag.ErrHelp) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	applyStartupOptions(opts)
+
 	if targetURL := desktopWindowURL(); targetURL != "" {
 		return runDesktopWindow(targetURL)
 	}
@@ -240,6 +260,121 @@ func run() error {
 	return err
 }
 
+func parseStartupOptions(args []string, output io.Writer) (startupOptions, error) {
+	var opts startupOptions
+	var shortPort int
+	var openBrowser bool
+	var noBrowser bool
+	var desktop bool
+	var noDesktop bool
+
+	fs := flag.NewFlagSet(appName, flag.ContinueOnError)
+	if output == nil {
+		output = io.Discard
+	}
+	fs.SetOutput(output)
+	fs.StringVar(&opts.Host, "host", "", "监听地址，例如 127.0.0.1 或 0.0.0.0")
+	fs.IntVar(&opts.Port, "port", 0, "快速设置服务/API/网关端口")
+	fs.IntVar(&shortPort, "p", 0, "快速设置服务/API/网关端口，等同 --port")
+	fs.IntVar(&opts.BackendPort, "backend-port", 0, "桌面模式后端/API/网关端口，优先级高于 --port")
+	fs.IntVar(&opts.FrontendPort, "frontend-port", 0, "桌面模式前端窗口入口端口")
+	fs.StringVar(&opts.ConfigDir, "config-dir", "", "用户配置和数据库目录")
+	fs.BoolVar(&openBrowser, "browser", false, "启动后打开浏览器或桌面窗口")
+	fs.BoolVar(&noBrowser, "no-browser", false, "启动后不打开浏览器或桌面窗口")
+	fs.BoolVar(&desktop, "desktop", false, "启用桌面 WebView/托盘")
+	fs.BoolVar(&noDesktop, "no-desktop", false, "禁用桌面 WebView/托盘，仅作为本地 Web 服务运行")
+	fs.Usage = func() {
+		fmt.Fprintf(output, "%s 单文件快速运行:\n\n", appName)
+		fmt.Fprintf(output, "  %s --port 9000\n", appName)
+		fmt.Fprintf(output, "  %s --host 0.0.0.0 --port 9000 --no-browser\n", appName)
+		fmt.Fprintf(output, "  %s --frontend-port 3722 --backend-port 8973\n\n", appName)
+		fmt.Fprintln(output, "可用参数:")
+		fs.PrintDefaults()
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return startupOptions{}, err
+	}
+	if opts.Port > 0 && shortPort > 0 && opts.Port != shortPort {
+		return startupOptions{}, fmt.Errorf("--port 和 -p 不能同时设置为不同端口")
+	}
+	if opts.Port == 0 {
+		opts.Port = shortPort
+	}
+	if opts.BackendPort == 0 {
+		opts.BackendPort = opts.Port
+	}
+	for label, port := range map[string]int{
+		"--port":          opts.Port,
+		"--backend-port":  opts.BackendPort,
+		"--frontend-port": opts.FrontendPort,
+	} {
+		if port != 0 && !validPort(port) {
+			return startupOptions{}, fmt.Errorf("%s 端口无效: %d", label, port)
+		}
+	}
+	if openBrowser && noBrowser {
+		return startupOptions{}, fmt.Errorf("--browser 和 --no-browser 不能同时使用")
+	}
+	if desktop && noDesktop {
+		return startupOptions{}, fmt.Errorf("--desktop 和 --no-desktop 不能同时使用")
+	}
+	switch {
+	case openBrowser:
+		value := true
+		opts.OpenBrowser = &value
+	case noBrowser:
+		value := false
+		opts.OpenBrowser = &value
+	}
+	switch {
+	case desktop:
+		value := true
+		opts.Desktop = &value
+	case noDesktop:
+		value := false
+		opts.Desktop = &value
+	}
+	return opts, nil
+}
+
+func applyStartupOptions(opts startupOptions) {
+	setEnvIfNotEmpty("AI_SIGN_IN_GATEWAY_HOST", opts.Host)
+	setEnvIfNotEmpty("AI_SIGN_IN_GATEWAY_CONFIG_DIR", opts.ConfigDir)
+	if opts.BackendPort > 0 {
+		setEnvInt("AI_SIGN_IN_GATEWAY_BACKEND_PORT", opts.BackendPort)
+		setEnvInt("AI_SIGN_IN_GATEWAY_PORT", opts.BackendPort)
+	}
+	if opts.FrontendPort > 0 {
+		setEnvInt("AI_SIGN_IN_GATEWAY_FRONTEND_PORT", opts.FrontendPort)
+	}
+	if opts.OpenBrowser != nil {
+		setEnvBool("AI_SIGN_IN_GATEWAY_OPEN_BROWSER", *opts.OpenBrowser)
+	}
+	if opts.Desktop != nil {
+		setEnvBool("AI_SIGN_IN_GATEWAY_DESKTOP", *opts.Desktop)
+	}
+}
+
+func validPort(port int) bool {
+	return port > 0 && port <= 65535
+}
+
+func setEnvIfNotEmpty(key, value string) {
+	value = strings.TrimSpace(value)
+	if value != "" {
+		_ = os.Setenv(key, value)
+	}
+}
+
+func setEnvInt(key string, value int) {
+	_ = os.Setenv(key, strconv.Itoa(value))
+}
+
+func setEnvBool(key string, value bool) {
+	_ = os.Setenv(key, strconv.FormatBool(value))
+}
+
 func desktopFrontendHandler(api http.Handler, backendURL string) http.Handler {
 	target, err := url.Parse(backendURL)
 	if err != nil {
@@ -247,7 +382,7 @@ func desktopFrontendHandler(api http.Handler, backendURL string) http.Handler {
 	}
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	return funcHandler(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api" {
+		if shellAPIPath(r.URL.Path) {
 			proxy.ServeHTTP(w, r)
 			return
 		}
@@ -268,7 +403,7 @@ func (fn funcHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func shellHandler(api http.Handler) http.Handler {
 	if embedded, ok := embeddedFrontend(); ok {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api" {
+			if shellAPIPath(r.URL.Path) {
 				api.ServeHTTP(w, r)
 				return
 			}
@@ -277,12 +412,19 @@ func shellHandler(api http.Handler) http.Handler {
 	}
 	dist := findFrontendDist()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api" {
+		if shellAPIPath(r.URL.Path) {
 			api.ServeHTTP(w, r)
 			return
 		}
 		serveFrontend(dist, w, r)
 	})
+}
+
+func shellAPIPath(path string) bool {
+	return path == "/api" ||
+		strings.HasPrefix(path, "/api/") ||
+		path == "/v1" ||
+		strings.HasPrefix(path, "/v1/")
 }
 
 func findFrontendDist() string {

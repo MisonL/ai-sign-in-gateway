@@ -1,25 +1,27 @@
 <script setup lang="ts">
 import {
-  ApiOutlined,
   ClearOutlined,
-  DeleteOutlined,
-  FileImageOutlined,
+  DownOutlined,
   LockOutlined,
   PaperClipOutlined,
-  PictureOutlined,
   SendOutlined,
   UnlockOutlined,
-  UserOutlined,
 } from '@ant-design/icons-vue'
-import { computed, nextTick, onMounted, reactive, ref, type ComponentPublicInstance } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, type ComponentPublicInstance } from 'vue'
 import { ApiError, getSites, listToolModels, testChat } from '../api'
 import ShellLayout from '../components/ShellLayout.vue'
-import { formatGroupNames } from '../format'
+import sessionPicArtwork from '../assets/design/session-pic.png'
 import { useToast } from '../toast'
 import type { ChatImageReference, ChatRequestMessage, ChatResult, ModelListItem, Site } from '../types'
 
 type MessageRole = 'system' | 'user' | 'assistant'
 type MessageStatus = 'idle' | 'sending' | 'done' | 'error'
+type ChatMode = 'chat' | 'image'
+
+interface ChatActivity {
+  label: string
+  active: boolean
+}
 
 interface ChatMessage {
   id: string
@@ -32,6 +34,8 @@ interface ChatMessage {
   error?: string
   references?: ChatImageReference[]
   images?: ChatImageReference[]
+  mode?: ChatMode
+  activity?: ChatActivity
 }
 
 const form = reactive({
@@ -56,6 +60,10 @@ const fileInput = ref<HTMLInputElement | null>(null)
 const scrollBody = ref<HTMLElement | null>(null)
 const imageRatioLocked = ref(false)
 const imageAspectRatio = ref(1)
+const detectedImageRatio = ref('1:1')
+const lockedImageRatio = ref('')
+const activityTimers = new Map<string, number>()
+let siteModelLoadRequest = 0
 
 const selectedSite = computed(() =>
   sites.value.find((item) => String(item.id) === selectedSiteId.value) ?? null,
@@ -91,15 +99,15 @@ const selectedModelMeta = computed(() => {
 })
 const modelLoadAlertType = computed(() => (modelLoadError.value ? 'error' : 'info'))
 
-const imageSizeOptions = [
-  { label: '1024 x 1024', value: '1024x1024' },
-  { label: '1024 x 1536', value: '1024x1536' },
-  { label: '1536 x 1024', value: '1536x1024' },
+const imageRatioPresets = [
+  { label: '1:1', width: 1, height: 1 },
+  { label: '3:4', width: 3, height: 4 },
+  { label: '4:3', width: 4, height: 3 },
+  { label: '16:9', width: 16, height: 9 },
+  { label: '9:16', width: 9, height: 16 },
 ]
-const imagePresetValue = computed(() =>
-  imageSizeOptions.some((option) => option.value === form.image_size) ? form.image_size : undefined,
-)
 const imageRatioTooltip = computed(() => (imageRatioLocked.value ? `已锁定 ${form.image_width}:${form.image_height}` : '锁定当前宽高比'))
+const activeImageRatio = computed(() => (imageRatioLocked.value ? lockedImageRatio.value : detectedImageRatio.value))
 
 function newID(prefix = 'msg') {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -132,9 +140,9 @@ function shortFingerprint(value: string) {
 function clampImageDimension(value: unknown) {
   const parsed = Number(value)
   if (!Number.isFinite(parsed)) {
-    return 1024
+    return 100
   }
-  return Math.min(4096, Math.max(64, Math.round(parsed)))
+  return Math.min(4096, Math.max(100, Math.round(parsed)))
 }
 
 function syncImageSizeFromDimensions() {
@@ -143,17 +151,38 @@ function syncImageSizeFromDimensions() {
   form.image_size = `${form.image_width}x${form.image_height}`
 }
 
-function applyImagePreset(value: unknown) {
-  if (typeof value !== 'string') {
-    return
+function gcd(a: number, b: number): number {
+  a = Math.abs(Math.round(a))
+  b = Math.abs(Math.round(b))
+  while (b) {
+    const next = a % b
+    a = b
+    b = next
   }
-  const match = /^(\d+)x(\d+)$/.exec(value)
-  if (!match) {
-    return
-  }
-  form.image_width = clampImageDimension(match[1])
-  form.image_height = clampImageDimension(match[2])
-  imageAspectRatio.value = form.image_width / form.image_height
+  return a || 1
+}
+
+function normalizedRatioLabel(width: number, height: number) {
+  width = clampImageDimension(width)
+  height = clampImageDimension(height)
+  const divisor = gcd(width, height)
+  return `${Math.round(width / divisor)}:${Math.round(height / divisor)}`
+}
+
+function detectImageRatio() {
+  const label = normalizedRatioLabel(form.image_width, form.image_height)
+  const preset = imageRatioPresets.find((item) => item.label === label)
+  detectedImageRatio.value = preset ? preset.label : ''
+}
+
+function applyImageRatioPreset(preset: (typeof imageRatioPresets)[number]) {
+  const ratioUnit = 100
+  form.image_width = clampImageDimension(preset.width * ratioUnit)
+  form.image_height = clampImageDimension(preset.height * ratioUnit)
+  imageAspectRatio.value = preset.width / preset.height
+  imageRatioLocked.value = true
+  lockedImageRatio.value = preset.label
+  detectedImageRatio.value = preset.label
   syncImageSizeFromDimensions()
 }
 
@@ -161,8 +190,12 @@ function toggleImageRatioLock() {
   if (!imageRatioLocked.value) {
     syncImageSizeFromDimensions()
     imageAspectRatio.value = form.image_width / form.image_height
+    lockedImageRatio.value = detectedImageRatio.value
+  } else {
+    lockedImageRatio.value = ''
   }
   imageRatioLocked.value = !imageRatioLocked.value
+  detectImageRatio()
 }
 
 function handleImageWidthChange(value: unknown) {
@@ -171,6 +204,10 @@ function handleImageWidthChange(value: unknown) {
     form.image_height = clampImageDimension(form.image_width / imageAspectRatio.value)
   }
   syncImageSizeFromDimensions()
+  detectImageRatio()
+  if (imageRatioLocked.value) {
+    lockedImageRatio.value = detectedImageRatio.value
+  }
 }
 
 function handleImageHeightChange(value: unknown) {
@@ -179,6 +216,10 @@ function handleImageHeightChange(value: unknown) {
     form.image_width = clampImageDimension(form.image_height * imageAspectRatio.value)
   }
   syncImageSizeFromDimensions()
+  detectImageRatio()
+  if (imageRatioLocked.value) {
+    lockedImageRatio.value = detectedImageRatio.value
+  }
 }
 
 function chooseDefaultModel(items: ModelListItem[]) {
@@ -192,16 +233,22 @@ function chooseDefaultModel(items: ModelListItem[]) {
 }
 
 async function applySelectedSite() {
+  const requestID = ++siteModelLoadRequest
+  const site = selectedSite.value
   modelItems.value = []
   form.model_key = undefined
   modelLoadMessage.value = ''
   modelLoadError.value = false
-  if (!selectedSite.value) {
+  if (!site) {
+    modelsLoading.value = false
     return
   }
   modelsLoading.value = true
   try {
-    const result = await listToolModels(Number(selectedSite.value.id))
+    const result = await listToolModels(Number(site.id))
+    if (requestID !== siteModelLoadRequest || String(site.id) !== selectedSiteId.value) {
+      return
+    }
     modelItems.value = result.items ?? []
     modelLoadMessage.value = modelListMessage(result.message, result.status_code)
     const preferred = chooseDefaultModel(modelItems.value)
@@ -211,11 +258,16 @@ async function applySelectedSite() {
       toast.error(modelLoadMessage.value || '模型列表加载失败')
     }
   } catch (err) {
+    if (requestID !== siteModelLoadRequest) {
+      return
+    }
     modelLoadError.value = true
     modelLoadMessage.value = modelListExceptionMessage(err)
     toast.error(modelLoadMessage.value)
   } finally {
-    modelsLoading.value = false
+    if (requestID === siteModelLoadRequest) {
+      modelsLoading.value = false
+    }
   }
 }
 
@@ -234,10 +286,6 @@ function modelListExceptionMessage(err: unknown) {
   return err instanceof Error ? err.message : '模型列表加载失败'
 }
 
-function handleModelChange() {
-  form.input = ''
-}
-
 function setScrollBody(element: Element | ComponentPublicInstance | null) {
   scrollBody.value = element instanceof HTMLElement ? element : null
 }
@@ -249,10 +297,6 @@ async function scrollToBottom() {
   }
 }
 
-function messageTime(value: string) {
-  return new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(value))
-}
-
 function readableLatency(value: number | null | undefined) {
   return value === null || value === undefined ? '' : `${Math.round(value)} ms`
 }
@@ -262,6 +306,10 @@ function imageSource(image: ChatImageReference) {
 }
 
 function triggerImagePicker() {
+  if (activeMode.value !== 'image') {
+    toast.error('当前模型不支持图片输入，请选择图片生成模型后再添加参考图。')
+    return
+  }
   fileInput.value?.click()
 }
 
@@ -276,6 +324,11 @@ function fileToDataURL(file: File) {
 
 function addReferenceImages(event: Event) {
   const input = event.target as HTMLInputElement
+  if (activeMode.value !== 'image') {
+    input.value = ''
+    toast.error('当前模型不支持图片输入，请选择图片生成模型后再添加参考图。')
+    return
+  }
   const files = Array.from(input.files ?? [])
   input.value = ''
   const imageFiles = files.filter((file) => file.type.startsWith('image/'))
@@ -300,6 +353,7 @@ function removeReferenceImage(index: number) {
 }
 
 function clearConversation() {
+  stopAllActivityTimers()
   messages.value = []
   referenceImages.value = []
 }
@@ -324,6 +378,45 @@ function resultImages(result: ChatResult): ChatImageReference[] {
     .filter((item) => item.url)
 }
 
+function activitySteps(mode: ChatMode, refs: ChatImageReference[]) {
+  if (mode === 'image') {
+    return refs.length ? ['Read', 'Edit', 'Generate'] : ['Thinking', 'Generate']
+  }
+  return refs.length ? ['Read', 'Thinking', 'Respond'] : ['Thinking', 'Respond']
+}
+
+function stopActivityTimer(messageID: string) {
+  const timer = activityTimers.get(messageID)
+  if (timer !== undefined) {
+    window.clearInterval(timer)
+    activityTimers.delete(messageID)
+  }
+}
+
+function stopAllActivityTimers() {
+  activityTimers.forEach((timer) => window.clearInterval(timer))
+  activityTimers.clear()
+}
+
+function startMessageActivity(message: ChatMessage, steps: string[]) {
+  stopActivityTimer(message.id)
+  const labels = steps.length ? steps : ['Thinking']
+  let index = 0
+  message.activity = { label: labels[index], active: true }
+  if (labels.length <= 1) {
+    return
+  }
+  activityTimers.set(message.id, window.setInterval(() => {
+    index = (index + 1) % labels.length
+    message.activity = { label: labels[index], active: true }
+  }, 1800))
+}
+
+function finishMessageActivity(message: ChatMessage, label: string) {
+  stopActivityTimer(message.id)
+  message.activity = { label, active: false }
+}
+
 async function sendMessage() {
   const content = form.input.trim()
   if (!content && !referenceImages.value.length) {
@@ -335,6 +428,13 @@ async function sendMessage() {
     toast.error('请先选择站点和模型。')
     return
   }
+  const siteID = Number(selectedSiteId.value)
+  const requestMode: ChatMode = model.mode === 'image' ? 'image' : 'chat'
+  if (requestMode !== 'image' && referenceImages.value.length) {
+    toast.error('当前模型不支持图片输入，请移除参考图或切换到图片生成模型。')
+    return
+  }
+  const imageSize = form.image_size
   const refs = referenceImages.value.map((item) => ({ ...item }))
   const userMessage: ChatMessage = {
     id: newID('user'),
@@ -344,38 +444,40 @@ async function sendMessage() {
     createdAt: new Date().toISOString(),
     status: 'done',
   }
-  const assistantMessage: ChatMessage = {
+  const assistantMessage = reactive<ChatMessage>({
     id: newID('assistant'),
     role: 'assistant',
-    content: activeMode.value === 'image' ? '正在生成图片...' : '正在思考...',
+    content: requestMode === 'image' ? '正在生成图片...' : '正在思考...',
     createdAt: new Date().toISOString(),
     status: 'sending',
-  }
+    mode: requestMode,
+  })
 
   messages.value.push(userMessage, assistantMessage)
+  const requestMessages = requestMode === 'chat' ? toRequestMessages() : undefined
+  startMessageActivity(assistantMessage, activitySteps(requestMode, refs))
   form.input = ''
   referenceImages.value = []
   await scrollToBottom()
   loading.value = true
 
   try {
-    const requestMessages = toRequestMessages()
     const result = await testChat({
-      site_id: Number(selectedSiteId.value),
+      site_id: siteID,
       route_type: model.route_type,
       key_fingerprint: model.key_fingerprint,
       model: model.id,
       mode: 'auto',
       prompt: content,
-      messages: activeMode.value === 'chat' ? requestMessages : undefined,
+      messages: requestMessages,
       reference_images: refs,
-      image_size: activeMode.value === 'image' ? form.image_size : undefined,
+      image_size: requestMode === 'image' ? imageSize : undefined,
     })
     assistantMessage.status = result.ok ? 'done' : 'error'
     assistantMessage.statusCode = result.status_code
     assistantMessage.latencyMs = result.latency_ms
     assistantMessage.error = result.ok ? undefined : result.message
-    if (activeMode.value === 'image') {
+    if (requestMode === 'image') {
       assistantMessage.images = resultImages(result)
       assistantMessage.content = assistantMessage.images.length
         ? (result.revised_prompt ? `已生成图片。优化提示词：${result.revised_prompt}` : '已生成图片。')
@@ -383,11 +485,13 @@ async function sendMessage() {
     } else {
       assistantMessage.content = result.output || result.message || '接口未返回可读文本。'
     }
+    finishMessageActivity(assistantMessage, result.ok ? 'Done' : 'Error')
     toast.success(result.ok ? '请求完成。' : result.message)
   } catch (err) {
     assistantMessage.status = 'error'
     assistantMessage.content = err instanceof Error ? err.message : '请求失败'
     assistantMessage.error = assistantMessage.content
+    finishMessageActivity(assistantMessage, 'Error')
     toast.error(assistantMessage.content)
   } finally {
     loading.value = false
@@ -412,477 +516,477 @@ async function loadSites() {
   }
 }
 
-onMounted(loadSites)
+onMounted(() => {
+  void loadSites()
+})
+
+onBeforeUnmount(() => {
+  stopAllActivityTimers()
+})
 </script>
 
 <template>
-  <ShellLayout>
-    <div class="page-stack page-stack--fit chat-workbench">
-      <a-card :bordered="false" class="admin-card admin-card--fill chat-card">
-        <template #title>
-          <div class="chat-card-title">
-            <span>AI 对话</span>
-            <a-tag :color="activeMode === 'image' ? 'purple' : 'blue'">{{ activeMode === 'image' ? '图片生成' : '多轮对话' }}</a-tag>
+  <ShellLayout class="session-layout-shell">
+    <div class="chat-workbench">
+      <main class="session-main">
+        <div :ref="setScrollBody" class="session-history">
+          <div v-if="visibleMessages.length" class="session-message-list">
+            <article
+              v-for="message in visibleMessages"
+              :key="message.id"
+              class="session-message"
+              :class="[`session-message--${message.role}`, `session-message--${message.status}`]"
+            >
+              <div v-if="message.role === 'assistant' && message.activity" class="session-message__thought">
+                Thought for {{ readableLatency(message.latencyMs) || '...' }} ›
+              </div>
+
+              <div class="session-message__bubble">
+                <p v-if="message.content" class="session-message__text">{{ message.content }}</p>
+
+                <div v-if="message.references?.length" class="session-reference-strip">
+                  <div v-for="image in message.references" :key="image.url" class="session-reference-card">
+                    <img :src="imageSource(image)" :alt="image.name" />
+                  </div>
+                </div>
+
+                <div v-if="message.images?.length" class="session-generated-grid">
+                  <a v-for="image in message.images" :key="image.url" :href="imageSource(image)" target="_blank" rel="noreferrer">
+                    <img :src="imageSource(image)" :alt="image.name" />
+                  </a>
+                </div>
+
+                <div v-if="message.error" class="session-message__error">{{ message.error }}</div>
+              </div>
+            </article>
           </div>
-        </template>
-        <template #extra>
-          <a-space wrap>
-            <a-button size="small" :disabled="loading" @click="clearConversation">
-              <template #icon><ClearOutlined /></template>
-              清空
-            </a-button>
-          </a-space>
-        </template>
 
-        <div class="chat-layout">
-          <aside class="chat-sidebar">
-            <div class="chat-sidebar__section">
-              <div class="chat-sidebar__label">路由与模型</div>
-              <a-select
-                v-model:value="selectedSiteId"
-                :options="siteOptions"
-                allow-clear
-                show-search
-                option-filter-prop="label"
-                placeholder="选择已保存站点"
-                @change="applySelectedSite"
-              />
-              <div v-if="selectedSite" class="chat-site-meta">
-                <ApiOutlined />
-                <span>{{ formatGroupNames(selectedSite.group_name) || '未分组' }}</span>
-              </div>
-              <a-select
-                v-model:value="form.model_key"
-                :options="modelOptions"
-                :loading="modelsLoading"
-                :disabled="!selectedSite || modelsLoading"
-                allow-clear
-                show-search
-                option-filter-prop="label"
-                placeholder="选择模型"
-                @change="handleModelChange"
-              />
-              <div v-if="selectedModelMeta" class="chat-site-meta">
-                <ApiOutlined />
-                <span>{{ selectedModelMeta }}</span>
-              </div>
-              <a-alert
-                v-if="modelLoadMessage && (!selectedModelMeta || modelLoadError)"
-                :type="modelLoadAlertType"
-                show-icon
-                :message="modelLoadMessage"
-              />
-              <template v-if="activeMode === 'image'">
-                <a-select
-                  :value="imagePresetValue"
-                  :options="imageSizeOptions"
-                  placeholder="预设尺寸"
-                  @change="applyImagePreset"
-                />
-                <div class="image-size-editor">
-                  <a-input-number
-                    :value="form.image_width"
-                    :min="64"
-                    :max="4096"
-                    :step="1"
-                    addon-before="宽"
-                    @change="handleImageWidthChange"
-                  />
-                  <span class="image-size-editor__separator">x</span>
-                  <a-input-number
-                    :value="form.image_height"
-                    :min="64"
-                    :max="4096"
-                    :step="1"
-                    addon-before="高"
-                    @change="handleImageHeightChange"
-                  />
-                  <a-tooltip :title="imageRatioTooltip">
-                    <a-button
-                      class="image-size-editor__lock"
-                      :type="imageRatioLocked ? 'primary' : 'default'"
-                      @click="toggleImageRatioLock"
-                    >
-                      <template #icon>
-                        <LockOutlined v-if="imageRatioLocked" />
-                        <UnlockOutlined v-else />
-                      </template>
-                    </a-button>
-                  </a-tooltip>
-                </div>
-              </template>
+          <div v-else class="session-empty">
+            <img :src="sessionPicArtwork" alt="" class="session-empty__art" />
+            <div class="session-empty__copy">
+              <h1>选择站点与模型后开始使用</h1>
+              <p>文本对话与图片生成能力将根据所选模型自动启用。</p>
             </div>
-          </aside>
-
-          <section class="chat-main">
-            <div :ref="setScrollBody" class="chat-history">
-              <div v-if="visibleMessages.length" class="chat-message-list">
-                <article
-                  v-for="message in visibleMessages"
-                  :key="message.id"
-                  class="chat-message"
-                  :class="[`chat-message--${message.role}`, `chat-message--${message.status}`]"
-                >
-                  <div class="chat-avatar">
-                    <UserOutlined v-if="message.role === 'user'" />
-                    <PictureOutlined v-else-if="message.images?.length" />
-                    <ApiOutlined v-else />
-                  </div>
-                  <div class="chat-bubble">
-                    <div class="chat-bubble__meta">
-                      <strong>{{ message.role === 'user' ? '你' : 'AI' }}</strong>
-                      <span>{{ messageTime(message.createdAt) }}</span>
-                      <span v-if="readableLatency(message.latencyMs)">{{ readableLatency(message.latencyMs) }}</span>
-                      <a-tag v-if="message.status === 'error'" color="error">失败</a-tag>
-                    </div>
-                    <p v-if="message.content" class="chat-bubble__text">{{ message.content }}</p>
-                    <div v-if="message.references?.length" class="chat-reference-strip">
-                      <div v-for="image in message.references" :key="image.url" class="chat-reference-thumb">
-                        <img :src="imageSource(image)" :alt="image.name" />
-                        <span>{{ image.name }}</span>
-                      </div>
-                    </div>
-                    <div v-if="message.images?.length" class="chat-generated-grid">
-                      <a :href="imageSource(image)" target="_blank" rel="noreferrer" v-for="image in message.images" :key="image.url">
-                        <img :src="imageSource(image)" :alt="image.name" />
-                      </a>
-                    </div>
-                    <div v-if="message.error" class="chat-error">{{ message.error }}</div>
-                  </div>
-                </article>
-              </div>
-              <a-empty v-else description="开始一段新的对话。" />
-            </div>
-
-            <div class="chat-composer">
-              <div v-if="referenceImages.length" class="chat-attachments">
-                <div v-for="(image, index) in referenceImages" :key="image.url" class="chat-attachment">
-                  <img :src="imageSource(image)" :alt="image.name" />
-                  <span>{{ image.name }}</span>
-                  <button type="button" @click="removeReferenceImage(index)">
-                    <DeleteOutlined />
-                  </button>
-                </div>
-              </div>
-
-              <input
-                ref="fileInput"
-                class="chat-file-input"
-                type="file"
-                accept="image/*"
-                multiple
-                hidden
-                tabindex="-1"
-                @change="addReferenceImages"
-              />
-              <div class="chat-input-row">
-                <a-button class="chat-tool-button" :disabled="loading" @click="triggerImagePicker">
-                  <template #icon><PaperClipOutlined /></template>
-                </a-button>
-                <a-textarea
-                  v-model:value="form.input"
-                  class="chat-input"
-                  :auto-size="{ minRows: 1, maxRows: 6 }"
-                  :placeholder="sendPlaceholder"
-                  @keydown="handleEditorKeydown"
-                />
-                <a-button type="primary" class="chat-send-button" :loading="loading" @click="sendMessage">
-                  <template #icon><SendOutlined /></template>
-                  发送
-                </a-button>
-              </div>
-              <div class="chat-composer__hint">
-                <FileImageOutlined />
-                <span>{{ activeMode === 'image' ? '当前模型将请求图片接口；参考图会作为编辑/生成依据传给支持的上游。' : '当前模型将请求对话接口；参考图会作为视觉输入传给支持多模态的模型。' }}</span>
-              </div>
-            </div>
-          </section>
+          </div>
         </div>
-      </a-card>
+
+        <footer class="session-composer">
+          <a-alert v-if="modelLoadMessage && (!selectedModelMeta || modelLoadError)" class="session-composer__alert" :type="modelLoadAlertType" show-icon :message="modelLoadMessage" />
+
+          <div class="session-composer__controls">
+            <a-select
+              v-model:value="selectedSiteId"
+              class="session-toolbar__select"
+              :options="siteOptions"
+              allow-clear
+              show-search
+              option-filter-prop="label"
+              placeholder="选择站点"
+              @change="applySelectedSite"
+            >
+              <template #suffixIcon><DownOutlined /></template>
+            </a-select>
+
+            <a-select
+              v-model:value="form.model_key"
+              class="session-toolbar__select session-toolbar__select--model"
+              :options="modelOptions"
+              :loading="modelsLoading"
+              :disabled="!selectedSite || modelsLoading"
+              allow-clear
+              show-search
+              option-filter-prop="label"
+              placeholder="选择模型"
+            >
+              <template #suffixIcon><DownOutlined /></template>
+            </a-select>
+
+            <div v-if="activeMode === 'image'" class="image-size-editor session-composer__image-size">
+              <div class="image-ratio-presets" aria-label="图片比例快捷设置">
+                <button
+                  v-for="preset in imageRatioPresets"
+                  :key="preset.label"
+                  type="button"
+                  class="image-ratio-preset"
+                  :class="{ 'is-active': activeImageRatio === preset.label, 'is-detected': !imageRatioLocked && detectedImageRatio === preset.label, 'is-locked': imageRatioLocked && lockedImageRatio === preset.label }"
+                  @click="applyImageRatioPreset(preset)"
+                >
+                  <span class="image-ratio-preset__box" :style="{ aspectRatio: `${preset.width} / ${preset.height}` }"></span>
+                  <span>{{ preset.label }}</span>
+                </button>
+              </div>
+              <a-input-number :value="form.image_width" :min="100" :max="4096" :step="1" addon-before="宽" @change="handleImageWidthChange" />
+              <a-input-number :value="form.image_height" :min="100" :max="4096" :step="1" addon-before="高" @change="handleImageHeightChange" />
+              <a-tooltip :title="imageRatioTooltip">
+                <a-button class="image-size-editor__lock" :type="imageRatioLocked ? 'primary' : 'default'" @click="toggleImageRatioLock">
+                  <template #icon>
+                    <LockOutlined v-if="imageRatioLocked" />
+                    <UnlockOutlined v-else />
+                  </template>
+                </a-button>
+              </a-tooltip>
+            </div>
+
+            <button type="button" class="session-clear-button" :disabled="!visibleMessages.length && !referenceImages.length" @click="clearConversation">
+              <ClearOutlined />
+              清空会话
+            </button>
+          </div>
+
+          <div v-if="referenceImages.length" class="session-attachments">
+            <div v-for="(image, index) in referenceImages" :key="image.url" class="session-attachment">
+              <img :src="imageSource(image)" :alt="image.name" />
+              <span>{{ image.name }}</span>
+              <button type="button" @click="removeReferenceImage(index)">×</button>
+            </div>
+          </div>
+
+          <input id="chat-reference-images" ref="fileInput" class="chat-file-input" type="file" name="chat_reference_images" accept="image/*" multiple hidden tabindex="-1" @change="addReferenceImages" />
+
+          <div class="session-composer__frame">
+            <button type="button" class="session-tool-button" :disabled="loading" @click="triggerImagePicker">
+              <PaperClipOutlined />
+            </button>
+
+            <a-textarea id="chat-message-input" v-model:value="form.input" class="session-composer__input" name="chat_message_input" :rows="3" :placeholder="sendPlaceholder" @keydown="handleEditorKeydown" />
+
+            <div class="session-composer__side">
+              <button type="button" class="session-send-button" :disabled="loading" @click="sendMessage">
+                <SendOutlined />
+                <span>{{ loading ? '发送中' : '发送请求' }}</span>
+              </button>
+              <span class="session-footnote">{{ referenceImages.length }}/6 张参考图</span>
+            </div>
+          </div>
+        </footer>
+      </main>
     </div>
   </ShellLayout>
 </template>
 
 <style scoped>
+.session-layout-shell :deep(.app-header) {
+  display: none !important;
+}
+
+.session-layout-shell :deep(.app-content) {
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+
 .chat-workbench {
-  height: 100%;
-  min-height: 0;
-  grid-template-rows: minmax(0, 1fr);
-}
-
-.chat-card {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-}
-
-.chat-card :deep(.ant-card-body) {
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 auto;
-  min-height: 0;
-  padding: 0;
-}
-
-.chat-card-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.chat-layout {
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
-  flex: 1 1 auto;
+  grid-template-columns: minmax(0, 1fr);
+  height: 100vh;
   min-height: 0;
-  height: 100%;
   overflow: hidden;
+  color: #0a3472;
+  background:
+    radial-gradient(circle at 73% 22%, rgba(255, 255, 255, 0.78) 0 74px, transparent 210px),
+    linear-gradient(180deg, #edf5ff 0%, #eaf3ff 42%, #e4efff 100%);
 }
 
-.chat-sidebar {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
+.session-toolbar__select {
+  width: clamp(220px, 24vw, 420px);
   min-width: 0;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 16px;
-  border-right: 1px solid var(--border-muted);
-  background: var(--bg-subtle);
 }
 
-.chat-sidebar__section {
-  display: grid;
-  gap: 10px;
+.session-toolbar__select--model {
+  width: clamp(240px, 28vw, 480px);
 }
 
-.chat-sidebar__label {
-  color: #344054;
-  font-size: 12px;
-  font-weight: 800;
+.session-clear-button {
+  flex: 0 0 auto;
 }
 
-.chat-site-meta,
-.chat-composer__hint {
-  color: var(--text-muted);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.chat-site-meta {
+.session-clear-button {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-}
-
-.image-size-editor {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) 38px;
+  justify-content: center;
   gap: 8px;
-  align-items: center;
-}
-
-.image-size-editor :deep(.ant-input-number-group-wrapper) {
-  width: 100%;
-  min-width: 0;
-}
-
-.image-size-editor :deep(.ant-input-number) {
-  width: 100%;
-}
-
-.image-size-editor :deep(.ant-input-number-group-addon) {
-  padding-inline: 8px;
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.image-size-editor__separator {
-  color: var(--text-faint);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.image-size-editor__lock {
-  width: 38px;
   height: 32px;
-  padding: 0;
+  padding: 0 14px;
+  border: 1px solid rgba(134, 172, 230, 0.32);
+  border-radius: 10px;
+  background: rgba(246, 251, 255, 0.66);
+  color: #2e528f;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.82);
+  cursor: pointer;
 }
 
-.chat-main {
+.session-clear-button:disabled,
+.session-send-button:disabled,
+.session-tool-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.session-main {
+  position: relative;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
   min-width: 0;
   min-height: 0;
-  height: 100%;
   overflow: hidden;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.28) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.28) 1px, transparent 1px),
+    radial-gradient(circle at 52% 40%, rgba(255, 255, 255, 0.6), transparent 28%),
+    linear-gradient(180deg, rgba(243, 249, 255, 0.78), rgba(226, 239, 255, 0.72));
+  background-size: 72px 72px, 72px 72px, auto, auto;
 }
 
-.chat-history {
+.session-history {
   min-height: 0;
   overflow-y: auto;
-  padding: 18px;
-  background: #f7f9fd;
+  padding: 40px 32px 24px;
+  scrollbar-gutter: stable;
 }
 
-.chat-message-list {
-  display: grid;
-  gap: 16px;
-}
-
-.chat-message {
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  gap: 10px;
-  align-items: flex-start;
-}
-
-.chat-message--user {
-  grid-template-columns: minmax(0, 1fr) 34px;
-}
-
-.chat-message--user .chat-avatar {
-  grid-column: 2;
-  background: #14213d;
-  color: #fff;
-}
-
-.chat-message--user .chat-bubble {
-  grid-column: 1;
-  grid-row: 1;
-  justify-self: end;
-  background: #eaf1ff;
-}
-
-.chat-avatar {
+.session-empty {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
-  border-radius: var(--radius-container);
-  background: #fff;
-  color: var(--accent);
-  border: 1px solid var(--border-soft);
+  align-content: center;
+  min-height: 100%;
+  padding-bottom: 118px;
+  text-align: center;
 }
 
-.chat-bubble {
-  max-width: min(760px, 100%);
-  padding: 12px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-container);
-  background: #fff;
-  box-shadow: var(--shadow-card);
+.session-empty__art {
+  display: block;
+  width: min(496px, 48vw);
+  height: auto;
+  margin: 0 auto 26px;
+  filter: drop-shadow(0 22px 34px rgba(73, 129, 216, 0.14));
 }
 
-.chat-bubble__meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 10px;
-  align-items: center;
-  margin-bottom: 6px;
-  color: var(--text-faint);
-  font-size: 12px;
+.session-empty__copy h1 {
+  margin: 0 0 14px;
+  color: #0d3679;
+  font-size: clamp(26px, 2.2vw, 34px);
+  font-weight: 850;
+  line-height: 1.18;
+  letter-spacing: -0.03em;
 }
 
-.chat-bubble__text {
+.session-empty__copy p {
   margin: 0;
+  color: #4b6697;
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.session-message-list {
+  display: grid;
+  gap: 38px;
+  width: min(920px, 100%);
+  margin: 0 auto;
+}
+
+.session-message {
+  display: grid;
+  gap: 14px;
+  justify-items: start;
+}
+
+.session-message--user {
+  justify-items: end;
+}
+
+.session-message__thought {
+  color: #8b95a8;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.session-message__bubble {
+  max-width: min(720px, 78%);
+  padding: 14px 18px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.84);
+  color: #12244a;
+  box-shadow: 0 10px 30px rgba(80, 116, 170, 0.08);
+}
+
+.session-message--user .session-message__bubble {
+  border-radius: 18px;
+  background: rgba(242, 242, 242, 0.96);
+  box-shadow: none;
+}
+
+.session-message__text {
+  margin: 0;
+  color: #0f172a;
+  font-size: 16px;
+  line-height: 1.65;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  line-height: 1.65;
 }
 
-.chat-reference-strip,
-.chat-attachments {
+.session-message__error {
+  margin-top: 8px;
+  color: #dc2626;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.session-reference-strip,
+.session-attachments {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 10px;
+  gap: 10px;
 }
 
-.chat-reference-thumb,
-.chat-attachment {
+.session-reference-card img {
+  display: block;
+  width: 180px;
+  height: 132px;
+  object-fit: cover;
+  border-radius: 16px;
+}
+
+.session-generated-grid {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  width: min(640px, 100%);
+}
+
+.session-generated-grid img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  border-radius: 24px;
+}
+
+.session-composer {
+  position: relative;
+  z-index: 3;
+  padding: 0 24px 24px;
+}
+
+.session-composer__controls {
+  display: flex;
   align-items: center;
   gap: 8px;
-  width: 180px;
-  padding: 6px;
-  border: 1px solid var(--border-muted);
-  border-radius: var(--radius-control);
-  background: rgba(255, 255, 255, 0.78);
+  width: min(1180px, calc(100vw - 48px));
+  margin: 0 auto 8px;
 }
 
-.chat-reference-thumb img,
-.chat-attachment img {
+.session-composer__alert {
+  width: min(1180px, calc(100vw - 48px));
+  margin: 0 auto 8px;
+}
+
+.session-composer__frame {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 12px;
+  width: min(1180px, calc(100vw - 48px));
+  min-height: 86px;
+  margin: 0 auto;
+  padding: 12px 14px;
+  border: 1px solid rgba(159, 185, 226, 0.34);
+  border-radius: 16px;
+  background: rgba(247, 251, 255, 0.9);
+  box-shadow:
+    0 18px 44px rgba(71, 108, 168, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(18px);
+}
+
+.session-composer__side {
+  display: grid;
+  align-content: space-between;
+  justify-items: end;
+  gap: 10px;
+}
+
+.session-tool-button,
+.session-send-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  cursor: pointer;
+}
+
+.session-tool-button {
+  width: 42px;
+  height: 42px;
+  border: 1px solid rgba(177, 199, 233, 0.48);
+  border-radius: 10px;
+  background: rgba(247, 251, 255, 0.9);
+  color: #2077ff;
+  font-size: 20px;
+  box-shadow: 0 8px 20px rgba(81, 124, 190, 0.08);
+}
+
+.session-send-button {
+  gap: 8px;
+  min-width: 112px;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #186bff 0%, #2f83ff 48%, #63d1ff 100%);
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 14px 30px rgba(40, 117, 247, 0.28);
+}
+
+.session-footnote {
+  color: #7d91b4;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.session-attachments {
+  width: min(1180px, calc(100vw - 48px));
+  margin: 0 auto 8px;
+}
+
+.session-composer__image-size {
+  flex: 0 1 466px;
+  min-width: 360px;
+}
+
+.session-attachment {
+  position: relative;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  width: 190px;
+  padding: 8px;
+  border: 1px solid rgba(159, 185, 226, 0.34);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.86);
+}
+
+.session-attachment img {
   width: 44px;
   height: 44px;
   object-fit: cover;
-  border-radius: 8px;
+  border-radius: 10px;
 }
 
-.chat-reference-thumb span,
-.chat-attachment span {
+.session-attachment span {
   min-width: 0;
   overflow: hidden;
-  color: var(--text-muted);
+  color: #3b527b;
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.chat-generated-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 260px));
-  gap: 10px;
-  margin-top: 10px;
-}
-
-.chat-generated-grid img {
-  display: block;
-  width: 100%;
-  aspect-ratio: 1 / 1;
-  object-fit: cover;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-container);
-}
-
-.chat-error {
-  margin-top: 8px;
-  color: var(--danger);
-  font-size: 12px;
-}
-
-.chat-composer {
-  display: grid;
-  gap: 10px;
-  padding: 12px;
-  border-top: 1px solid var(--border-muted);
-  background: #fff;
-}
-
-.chat-input-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 8px;
-  align-items: end;
-}
-
-.chat-tool-button,
-.chat-send-button {
-  height: 38px;
-}
-
-.chat-input :deep(textarea) {
-  resize: none;
-}
-
-.chat-attachment {
-  position: relative;
-  margin-top: 0;
-}
-
-.chat-attachment button {
+.session-attachment button {
   position: absolute;
   top: -7px;
   right: -7px;
@@ -891,11 +995,73 @@ onMounted(loadSites)
   width: 22px;
   height: 22px;
   padding: 0;
-  border: 1px solid var(--border-soft);
+  border: 1px solid rgba(190, 74, 74, 0.16);
   border-radius: 999px;
-  background: #fff;
-  color: var(--danger);
+  background: #ffffff;
+  color: #dc2626;
   cursor: pointer;
+}
+
+.image-size-editor {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) 132px 132px 34px;
+  gap: 8px;
+  align-items: center;
+}
+
+.image-ratio-presets {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  min-width: 0;
+}
+
+.image-ratio-preset {
+  display: grid;
+  grid-template-rows: 26px auto;
+  place-items: center;
+  gap: 3px;
+  min-width: 42px;
+  padding: 4px 6px;
+  border: 1px solid rgba(137, 174, 232, 0.34);
+  border-radius: 10px;
+  background: rgba(246, 251, 255, 0.78);
+  color: #3b527b;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.image-ratio-preset.is-active {
+  border-color: rgba(37, 99, 235, 0.46);
+  background: rgba(232, 241, 255, 0.92);
+  color: #1d4ed8;
+}
+
+.image-ratio-preset.is-detected:not(.is-locked) {
+  border-style: dashed;
+  background: rgba(246, 251, 255, 0.92);
+}
+
+.image-ratio-preset.is-locked {
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.12);
+}
+
+.image-ratio-preset__box {
+  display: block;
+  max-width: 28px;
+  max-height: 24px;
+  min-width: 10px;
+  min-height: 10px;
+  width: 24px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(191, 219, 254, 0.38));
+}
+
+.image-size-editor__lock {
+  width: 34px;
+  height: 32px;
 }
 
 .chat-file-input {
@@ -908,30 +1074,196 @@ onMounted(loadSites)
   white-space: nowrap;
 }
 
-.chat-composer__hint {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+.chat-workbench :deep(.ant-select-selector) {
+  height: 32px !important;
+  padding: 0 11px !important;
+  border: 1px solid rgba(137, 174, 232, 0.34) !important;
+  border-radius: 10px !important;
+  background: rgba(246, 251, 255, 0.68) !important;
+  color: #25477f !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.88),
+    0 10px 24px rgba(74, 116, 183, 0.04) !important;
 }
 
-@media (max-width: 980px) {
-  .chat-layout {
+.chat-workbench :deep(.ant-select-selection-search-input),
+.chat-workbench :deep(.ant-select-selection-item),
+.chat-workbench :deep(.ant-select-selection-placeholder) {
+  height: 30px !important;
+  line-height: 30px !important;
+  color: #284b84 !important;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.chat-workbench :deep(.ant-select-selection-item) {
+  padding-inline-end: 22px !important;
+}
+
+.chat-workbench :deep(.ant-select-selection-placeholder) {
+  color: #8ca0c0 !important;
+}
+
+.chat-workbench :deep(.ant-select-arrow),
+.chat-workbench :deep(.ant-select-clear),
+.chat-workbench :deep(.ant-select-prefix) {
+  color: #355892 !important;
+  font-size: 13px;
+}
+
+.chat-workbench :deep(.ant-input-number),
+.chat-workbench :deep(.ant-input-number-group-addon) {
+  border-color: rgba(137, 174, 232, 0.34) !important;
+  background: rgba(246, 251, 255, 0.78) !important;
+  color: #284b84 !important;
+}
+
+.chat-workbench :deep(.ant-input-number),
+.chat-workbench :deep(.ant-input-number-input),
+.chat-workbench :deep(.ant-input-number-group-addon) {
+  height: 32px !important;
+  font-size: 13px;
+}
+
+.chat-workbench :deep(.ant-input-number-input) {
+  line-height: 30px !important;
+}
+
+.session-composer__input :deep(textarea) {
+  min-height: 62px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: #203a67 !important;
+  box-shadow: none !important;
+  resize: none;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.55;
+}
+
+.session-composer__input :deep(textarea::placeholder) {
+  color: #8ea0bf !important;
+}
+
+.chat-workbench :deep(.ant-select-focused .ant-select-selector),
+.chat-workbench :deep(.ant-input-focused),
+.chat-workbench :deep(.ant-input-number-focused) {
+  border-color: rgba(39, 119, 255, 0.48) !important;
+  box-shadow: 0 0 0 3px rgba(39, 119, 255, 0.1) !important;
+}
+
+.chat-workbench :deep(.ant-alert) {
+  border-color: rgba(137, 174, 232, 0.3);
+  background: rgba(255, 255, 255, 0.78);
+}
+
+@media (max-width: 1180px) {
+  .chat-workbench {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .session-toolbar__select {
+    width: clamp(200px, 24vw, 340px);
+  }
+
+  .session-toolbar__select--model {
+    width: clamp(220px, 28vw, 380px);
+  }
+
+  .session-composer__controls,
+  .session-composer__frame,
+  .session-attachments {
+    width: min(100%, calc(100vw - 40px));
+  }
+
+  .session-composer__alert {
+    width: min(100%, calc(100vw - 40px));
+  }
+
+  .session-composer__controls {
+    flex-wrap: wrap;
+  }
+
+  .session-composer__image-size {
+    min-width: 560px;
+  }
+}
+
+@media (max-width: 900px) {
+  .chat-workbench {
     grid-template-columns: 1fr;
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
   }
 
-  .chat-sidebar {
-    border-right: 0;
-    border-bottom: 1px solid var(--border-muted);
-  }
-}
-
-@media (max-width: 640px) {
-  .chat-input-row {
-    grid-template-columns: auto minmax(0, 1fr);
+  .session-toolbar__select,
+  .session-toolbar__select--model,
+  .session-clear-button {
+    width: 100%;
   }
 
-  .chat-send-button {
+  .session-main {
+    min-height: 680px;
+  }
+
+  .session-history {
+    padding: 18px 16px 28px;
+  }
+
+  .session-empty {
+    padding-bottom: 40px;
+  }
+
+  .session-empty__art {
+    width: min(360px, 86vw);
+  }
+
+  .session-composer {
+    padding: 0 14px 18px;
+  }
+
+  .session-composer__frame {
+    grid-template-columns: 48px minmax(0, 1fr);
+    width: 100%;
+    min-height: 118px;
+    padding: 14px;
+  }
+
+  .session-composer__side {
     grid-column: 1 / -1;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+
+  .session-tool-button {
+    width: 42px;
+    height: 42px;
+  }
+
+  .session-send-button {
+    min-width: 112px;
+  }
+
+  .session-attachments {
+    width: 100%;
+  }
+
+  .session-composer__controls {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .session-composer__image-size {
+    grid-template-columns: 1fr;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .image-ratio-presets {
+    flex-wrap: wrap;
   }
 }
 </style>

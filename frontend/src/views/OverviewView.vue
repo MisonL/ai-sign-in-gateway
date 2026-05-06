@@ -17,58 +17,38 @@ const metrics = computed<Array<{
   key: string
   title: string
   value: number
-  suffix: string
   tone: MetricTone
-  caption: string
 }>>(() => {
   if (!data.value) {
     return []
   }
   const d = data.value
-  const total = d.today_success + d.today_failed
-  const ratio = total > 0 ? Math.round((d.today_success / total) * 1000) / 10 : 0
   return [
     {
       key: 'sites',
       title: '站点总数',
       value: d.site_count,
-      suffix: '个站点',
       tone: 'primary',
-      caption: `已启用 ${d.enabled_site_count} 个`,
     },
     {
       key: 'enabled',
       title: '启用站点',
       value: d.enabled_site_count,
-      suffix: '参与计划任务',
       tone: 'info',
-      caption: `占总数 ${
-        d.site_count > 0 ? Math.round((d.enabled_site_count / d.site_count) * 100) : 0
-      }%`,
     },
     {
       key: 'success',
       title: '今日成功',
       value: d.today_success,
-      suffix: '执行成功',
       tone: 'success',
-      caption: total > 0 ? `当日成功率 ${ratio}%` : '今日尚未执行',
     },
     {
       key: 'failed',
       title: '今日失败',
       value: d.today_failed,
-      suffix: '待处理异常',
       tone: 'warning',
-      caption: d.today_failed > 0 ? '查看待处理列表' : '今日没有异常',
     },
   ]
-})
-
-const todaySuccessRate = computed(() => {
-  if (!data.value) return 0
-  const total = data.value.today_success + data.value.today_failed
-  return total > 0 ? Math.round((data.value.today_success / total) * 1000) / 10 : 0
 })
 
 function formatTime(value: string | null) {
@@ -92,15 +72,9 @@ onMounted(loadData)
 
 <template>
   <ShellLayout>
-    <div class="page-stack page-stack--dashboard">
-      <div class="page-toolbar page-toolbar--actions">
-        <div class="overview-strap" v-if="data">
-          <span>最新同步 <strong>{{ formatTime(data.latest_sync) }}</strong></span>
-          <span class="overview-strap__sep">·</span>
-          <span>下次计划 <strong>{{ formatTime(data.next_run_at) }}</strong></span>
-          <span class="overview-strap__sep">·</span>
-          <span>当日成功率 <strong>{{ todaySuccessRate }}%</strong></span>
-        </div>
+    <div class="page-stack page-stack--dashboard overview-screen">
+      <div class="page-toolbar page-toolbar--actions overview-actions">
+        <div aria-hidden="true"></div>
         <a-button :loading="loading" @click="loadData">
           <template #icon>
             <ReloadOutlined />
@@ -121,11 +95,10 @@ onMounted(loadData)
           <div class="overview-metric-card__value">
             <a-statistic :value="metric.value" :value-style="{ fontSize: 'inherit', color: 'inherit', fontWeight: 700 }" />
           </div>
-          <div class="overview-metric-card__caption">{{ metric.caption }}</div>
         </a-card>
       </div>
 
-      <a-row v-if="data" :gutter="[16, 16]" class="page-grid-fill">
+      <a-row v-if="data" :gutter="[16, 16]" class="page-grid-fill overview-main-grid">
         <a-col :xs="24" :xl="14">
           <a-card :bordered="false" class="admin-card admin-card--fill overview-list-card" title="最近任务">
             <template #extra>最新同步：{{ formatTime(data.latest_sync) }}</template>
@@ -184,28 +157,8 @@ onMounted(loadData)
 </template>
 
 <style scoped>
-.overview-strap {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px 10px;
-  font-size: 12px;
-  color: var(--text-muted);
-  padding: 0;
-  background: transparent;
-  border: 0;
-  box-shadow: none;
-}
-
-.overview-strap strong {
-  margin-left: 4px;
-  color: var(--text-main);
-  font-weight: 600;
-  font-feature-settings: 'tnum';
-}
-
-.overview-strap__sep {
-  color: var(--text-faint);
+.overview-screen {
+  position: relative;
 }
 
 .overview-metrics {
@@ -217,23 +170,26 @@ onMounted(loadData)
 .overview-metric-card.ant-card {
   position: relative;
   overflow: hidden;
-  border: 1px solid var(--border-muted) !important;
-  border-radius: var(--radius-container) !important;
-  box-shadow: var(--shadow-card) !important;
+  border: 1px solid rgba(148, 163, 184, 0.28) !important;
+  border-radius: 22px !important;
+  box-shadow:
+    0 16px 34px rgba(30, 41, 59, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9) !important;
   transition: transform 0.18s ease, box-shadow 0.18s ease;
 }
 
 .overview-metric-card.ant-card:hover {
   transform: translateY(-2px);
-  box-shadow: var(--shadow-card-hover) !important;
+  box-shadow:
+    0 20px 38px rgba(30, 41, 59, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9) !important;
 }
 
 .overview-metric-card.ant-card::before {
   content: '';
   position: absolute;
-  inset: 0 auto 0 0;
-  width: 4px;
-  background: linear-gradient(180deg, rgba(79, 124, 255, 0.45), rgba(79, 124, 255, 0.08));
+  inset: 0;
+  background: radial-gradient(circle at right top, rgba(37, 99, 235, 0.08), transparent 42%);
 }
 
 .overview-metric-card.ant-card::after {
@@ -249,62 +205,38 @@ onMounted(loadData)
 }
 
 .overview-metric-card--primary.ant-card {
-  background: linear-gradient(155deg, rgba(233, 239, 255, 0.85) 0%, rgba(255, 255, 255, 0.95) 60%);
-}
-.overview-metric-card--primary.ant-card::before {
-  background: linear-gradient(180deg, rgba(79, 124, 255, 0.6), rgba(79, 124, 255, 0.12));
-}
-.overview-metric-card--primary.ant-card::after {
-  background: radial-gradient(circle, rgba(79, 124, 255, 0.18) 0%, rgba(79, 124, 255, 0) 70%);
+  background: linear-gradient(180deg, #ffffff, #f8fbff) !important;
 }
 
 .overview-metric-card--info.ant-card {
-  background: linear-gradient(155deg, rgba(230, 241, 255, 0.85) 0%, rgba(255, 255, 255, 0.95) 60%);
-}
-.overview-metric-card--info.ant-card::before {
-  background: linear-gradient(180deg, rgba(94, 163, 255, 0.55), rgba(94, 163, 255, 0.12));
-}
-.overview-metric-card--info.ant-card::after {
-  background: radial-gradient(circle, rgba(94, 163, 255, 0.18) 0%, rgba(94, 163, 255, 0) 70%);
+  background: linear-gradient(180deg, #ffffff, #f8fbff) !important;
 }
 
 .overview-metric-card--success.ant-card {
-  background: linear-gradient(155deg, rgba(231, 245, 236, 0.9) 0%, rgba(255, 255, 255, 0.95) 60%);
-}
-.overview-metric-card--success.ant-card::before {
-  background: linear-gradient(180deg, rgba(52, 168, 83, 0.55), rgba(52, 168, 83, 0.12));
-}
-.overview-metric-card--success.ant-card::after {
-  background: radial-gradient(circle, rgba(52, 168, 83, 0.16) 0%, rgba(52, 168, 83, 0) 70%);
+  background: linear-gradient(180deg, #ffffff, #f8fbff) !important;
 }
 
 .overview-metric-card--warning.ant-card {
-  background: linear-gradient(155deg, rgba(255, 245, 224, 0.9) 0%, rgba(255, 255, 255, 0.95) 60%);
-}
-.overview-metric-card--warning.ant-card::before {
-  background: linear-gradient(180deg, rgba(245, 158, 11, 0.55), rgba(245, 158, 11, 0.12));
-}
-.overview-metric-card--warning.ant-card::after {
-  background: radial-gradient(circle, rgba(245, 158, 11, 0.18) 0%, rgba(245, 158, 11, 0) 70%);
+  background: linear-gradient(180deg, #ffffff, #f8fbff) !important;
 }
 
 .overview-metric-card :deep(.ant-card-body) {
   display: grid;
-  gap: 6px;
-  padding: 18px 18px 16px 22px;
+  gap: 8px;
+  padding: 18px 18px 16px;
   position: relative;
   z-index: 1;
 }
 
 .overview-metric-card__title {
-  color: var(--text-muted);
+  color: #64748b;
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.02em;
 }
 
 .overview-metric-card__value {
-  color: var(--text-main);
+  color: #172033;
   font-size: clamp(1.6rem, 1.8vw, 2rem);
   font-weight: 700;
   line-height: 1.1;
@@ -317,22 +249,32 @@ onMounted(loadData)
   line-height: inherit;
 }
 
-.overview-metric-card__caption {
-  color: var(--text-faint);
-  font-size: 12px;
-}
-
-.overview-list-card .stack-list {
-  display: grid;
-  gap: 8px;
+.overview-main-grid {
+  align-items: stretch;
 }
 
 .overview-list-card :deep(.ant-card-head) {
   padding: 0 18px;
+  border-bottom-color: rgba(148, 163, 184, 0.22);
 }
 
 .overview-list-card :deep(.ant-card-body) {
   padding: 6px 6px 12px;
+}
+
+.overview-list-card.ant-card {
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.28) !important;
+  border-radius: 22px !important;
+  background: linear-gradient(180deg, #ffffff, #f8fbff) !important;
+  box-shadow:
+    0 16px 34px rgba(30, 41, 59, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9) !important;
+}
+
+.overview-list-card :deep(.ant-card-head-title),
+.overview-list-card :deep(.ant-card-extra) {
+  color: #172033;
 }
 
 .overview-list-scroll {
@@ -359,34 +301,34 @@ onMounted(loadData)
 }
 
 .overview-feed__row + .overview-feed__row {
-  border-top: 1px solid var(--border-muted);
+  border-top: 1px solid rgba(148, 163, 184, 0.16);
 }
 
 .overview-feed__row:hover {
-  background: linear-gradient(180deg, rgba(79, 124, 255, 0.06), rgba(79, 124, 255, 0));
+  background: linear-gradient(180deg, rgba(79, 124, 255, 0.12), rgba(79, 124, 255, 0));
 }
 
 .overview-feed__dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--text-faint);
-  box-shadow: 0 0 0 3px rgba(133, 147, 170, 0.15);
+  background: rgba(190, 209, 236, 0.72);
+  box-shadow: 0 0 0 3px rgba(133, 147, 170, 0.12);
   margin-left: 3px;
 }
 
 .overview-feed__row--success .overview-feed__dot {
-  background: var(--success);
+  background: #4ce59c;
   box-shadow: 0 0 0 3px rgba(52, 168, 83, 0.18);
 }
 
 .overview-feed__row--failed .overview-feed__dot {
-  background: var(--danger);
+  background: #ff8d71;
   box-shadow: 0 0 0 3px rgba(227, 91, 91, 0.2);
 }
 
 .overview-feed__row--attention .overview-feed__dot {
-  background: var(--warning);
+  background: #ffb34d;
   box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.22);
 }
 
@@ -411,7 +353,7 @@ onMounted(loadData)
 .overview-feed__title strong {
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-main);
+  color: #172033;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -421,7 +363,7 @@ onMounted(loadData)
 .overview-feed__text {
   margin: 0;
   font-size: 12px;
-  color: var(--text-muted);
+  color: #64748b;
   line-height: 1.5;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -432,21 +374,78 @@ onMounted(loadData)
 
 .overview-feed__time {
   font-size: 11px;
-  color: var(--text-faint);
+  color: #64748b;
   font-feature-settings: 'tnum';
   white-space: nowrap;
   padding: 4px 8px;
   border-radius: var(--radius-pill);
-  background: var(--bg-muted);
+  background: #f1f5f9;
 }
 
 .overview-feed__row:hover .overview-feed__time {
-  background: rgba(79, 124, 255, 0.08);
-  color: var(--accent-strong);
+  background: rgba(37, 99, 235, 0.08);
+  color: #1d4ed8;
 }
 
 .overview-feed__row--attention:hover .overview-feed__time {
-  background: rgba(245, 158, 11, 0.14);
-  color: #b86b00;
+  background: rgba(245, 158, 11, 0.18);
+  color: #b45309;
+}
+
+/* 全站固定明色主题：覆盖概览页旧样式。 */
+.overview-screen {
+  color: #172033;
+}
+
+.overview-metric-card__value,
+.overview-list-card :deep(.ant-card-head-title),
+.overview-list-card :deep(.ant-card-extra),
+.overview-feed__title strong {
+  color: #172033;
+}
+
+.overview-metric-card__title,
+.overview-feed__text,
+.overview-feed__time {
+  color: #64748b;
+}
+
+.overview-metric-card.ant-card,
+.overview-list-card.ant-card {
+  border-color: rgba(148, 163, 184, 0.28) !important;
+  background: linear-gradient(180deg, #ffffff, #f8fbff) !important;
+  box-shadow:
+    0 16px 34px rgba(30, 41, 59, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9) !important;
+}
+
+.overview-metric-card.ant-card:hover {
+  box-shadow:
+    0 20px 38px rgba(30, 41, 59, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9) !important;
+}
+
+.overview-metric-card--primary.ant-card,
+.overview-metric-card--info.ant-card,
+.overview-metric-card--success.ant-card,
+.overview-metric-card--warning.ant-card {
+  background: linear-gradient(180deg, #ffffff, #f8fbff) !important;
+}
+
+.overview-list-card :deep(.ant-card-head) {
+  border-bottom-color: rgba(148, 163, 184, 0.22);
+}
+
+.overview-feed__row + .overview-feed__row {
+  border-top-color: rgba(148, 163, 184, 0.16);
+}
+
+.overview-feed__time {
+  background: #f1f5f9;
+}
+
+.overview-feed__row:hover .overview-feed__time {
+  background: rgba(37, 99, 235, 0.08);
+  color: #1d4ed8;
 }
 </style>

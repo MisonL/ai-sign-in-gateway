@@ -102,7 +102,7 @@ func (p *HTTPStation) FetchAccountStatus(ctx context.Context, site models.Site, 
 		return AccountStatus{}, err
 	}
 	balance := floatPtr(pathFloat(payload, stringValue(site.PluginConfig, "status_balance_path", "")))
-	balanceUnit := stringPtr(pathString(payload, stringValue(site.PluginConfig, "status_balance_unit_path", ""), stringValue(site.PluginConfig, "default_balance_unit", "$")))
+	balanceUnit := stringPtr(normalizeBalanceUnit(pathString(payload, stringValue(site.PluginConfig, "status_balance_unit_path", ""), stringValue(site.PluginConfig, "default_balance_unit", "$"))))
 	account := stringPtr(pathString(payload, stringValue(site.PluginConfig, "status_account_path", ""), stringValue(site.Credentials, "account", "")))
 	inviteLink, inviteCode := extractInviteInfo(payload, site)
 	if fetchedLink, fetchedCode, err := fetchInviteInfo(ctx, site, func(ctx context.Context, spec inviteRequestSpec) (map[string]any, error) {
@@ -137,7 +137,7 @@ func (p *HTTPStation) Checkin(ctx context.Context, site models.Site, timeoutSeco
 		return CheckinResult{}, err
 	}
 	balance := floatPtr(pathFloat(payload, stringValue(site.PluginConfig, "checkin_balance_path", "")))
-	balanceUnit := stringPtr(pathString(payload, stringValue(site.PluginConfig, "checkin_balance_unit_path", ""), stringValue(site.PluginConfig, "default_balance_unit", "$")))
+	balanceUnit := stringPtr(normalizeBalanceUnit(pathString(payload, stringValue(site.PluginConfig, "checkin_balance_unit_path", ""), stringValue(site.PluginConfig, "default_balance_unit", "$"))))
 	excerpt := shorten(raw, 500)
 	return CheckinResult{
 		Success:            pathBool(payload, stringValue(site.PluginConfig, "checkin_success_path", "")),
@@ -431,7 +431,7 @@ func quotaUsageFromPayload(site models.Site, payload map[string]any) (remaining,
 	remaining = normalizeQuotaAmount(site, remaining)
 	total = normalizeQuotaAmount(site, total)
 	used = normalizeQuotaAmount(site, used)
-	unit = firstPathString(payload, "data.quota_unit", "data.currency", "data.unit", "data.balance_unit", "unit", "quota.unit")
+	unit = normalizeBalanceUnit(firstPathString(payload, "data.quota_unit", "data.currency", "data.unit", "data.balance_unit", "unit", "quota.unit"))
 	return remaining, total, used, unit
 }
 
@@ -499,17 +499,27 @@ func formatPackageQuotaDisplay(label string, remaining, total, used *float64, un
 	if strings.TrimSpace(label) != "" {
 		parts = append(parts, strings.TrimSpace(label))
 	}
+	unit = normalizeBalanceUnit(unit)
 	if remaining != nil && total != nil {
-		parts = append(parts, fmt.Sprintf("余量 %.2f / %.2f", *remaining, *total))
+		parts = append(parts, fmt.Sprintf("余量 %s / %s", formatQuotaAmount(*remaining, unit), formatQuotaAmount(*total, unit)))
 	} else if remaining != nil {
-		parts = append(parts, fmt.Sprintf("余量 %.2f", *remaining))
+		parts = append(parts, fmt.Sprintf("余量 %s", formatQuotaAmount(*remaining, unit)))
 	} else if used != nil && total != nil {
-		parts = append(parts, fmt.Sprintf("已用 %.2f / %.2f", *used, *total))
-	}
-	if unit != "" && len(parts) > 0 {
-		parts[len(parts)-1] = parts[len(parts)-1] + " " + unit
+		parts = append(parts, fmt.Sprintf("已用 %s / %s", formatQuotaAmount(*used, unit), formatQuotaAmount(*total, unit)))
 	}
 	return strings.Join(parts, " · ")
+}
+
+func formatQuotaAmount(value float64, unit string) string {
+	text := fmt.Sprintf("%.2f", value)
+	unit = normalizeBalanceUnit(unit)
+	if unit == "" {
+		return text
+	}
+	if balanceUnitIsSymbol(unit) {
+		return unit + text
+	}
+	return text + " " + unit
 }
 
 func packageDisplayFromPayload(payload map[string]any) string {

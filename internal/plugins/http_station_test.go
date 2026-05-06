@@ -75,6 +75,9 @@ func TestHTTPStationStatusAndCheckin(t *testing.T) {
 	if !status.LoggedIn || status.Balance == nil || *status.Balance != 12.5 {
 		t.Fatalf("unexpected status: %+v", status)
 	}
+	if status.BalanceUnit == nil || *status.BalanceUnit != "$" {
+		t.Fatalf("BalanceUnit = %v", status.BalanceUnit)
+	}
 	if status.AccountName == nil || *status.AccountName != "admin@example.com" {
 		t.Fatalf("unexpected account name: %+v", status.AccountName)
 	}
@@ -85,6 +88,9 @@ func TestHTTPStationStatusAndCheckin(t *testing.T) {
 	}
 	if !result.Success || result.Balance == nil || *result.Balance != 13.5 {
 		t.Fatalf("unexpected checkin result: %+v", result)
+	}
+	if result.BalanceUnit == nil || *result.BalanceUnit != "$" {
+		t.Fatalf("checkin BalanceUnit = %v", result.BalanceUnit)
 	}
 }
 

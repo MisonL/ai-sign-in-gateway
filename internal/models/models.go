@@ -87,8 +87,15 @@ type GatewayRouteState struct {
 	SiteBaseURLSnapshot string     `gorm:"size:255;default:''" json:"site_base_url_snapshot"`
 	SiteAPIURLSnapshot  string     `gorm:"type:text;default:'[]'" json:"site_api_url_snapshot"`
 	LastRequestBaseURL  string     `gorm:"size:255;default:''" json:"last_request_base_url"`
+	LastBalance         *float64   `json:"last_balance,omitempty"`
+	BalanceUnit         string     `gorm:"size:30;default:''" json:"balance_unit"`
+	BalanceProbeURL     string     `gorm:"size:255;default:''" json:"balance_probe_url"`
 	RouteType           string     `gorm:"size:20;default:codex" json:"route_type"`
 	RouteTypeManual     bool       `gorm:"default:false" json:"route_type_manual"`
+	SupportedModels     string     `gorm:"type:text;default:'[]'" json:"supported_models"`
+	ModelProbeStatus    string     `gorm:"size:30;default:''" json:"model_probe_status"`
+	ModelProbeMessage   string     `gorm:"type:text;default:''" json:"model_probe_message"`
+	ModelProbeUpdatedAt *time.Time `json:"model_probe_updated_at,omitempty"`
 	GroupName           string     `gorm:"size:100;default:''" json:"group_name"`
 	RoutePriority       int        `gorm:"default:100;index" json:"route_priority"`
 	RoutePriorityManual bool       `gorm:"default:false" json:"route_priority_manual"`
@@ -122,6 +129,9 @@ type GatewayRequestLog struct {
 	KeyFingerprint     string    `gorm:"size:64;index" json:"key_fingerprint"`
 	KeyName            string    `gorm:"size:120;default:''" json:"key_name"`
 	GroupName          string    `gorm:"size:100;default:''" json:"group_name"`
+	Model              string    `gorm:"size:120;default:'';index" json:"model"`
+	RequestedModel     string    `gorm:"size:120;default:'';index" json:"requested_model"`
+	ActualModel        string    `gorm:"size:120;default:'';index" json:"actual_model"`
 	TargetPath         string    `gorm:"size:255;default:''" json:"target_path"`
 	Method             string    `gorm:"size:10;default:GET" json:"method"`
 	RouteStrategy      string    `gorm:"size:30;default:round_robin" json:"route_strategy"`

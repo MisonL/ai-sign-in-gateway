@@ -48,6 +48,8 @@ func NewRouter(db *gorm.DB, cfg config.Config) http.Handler {
 	r.HandleFunc("/api/gateway/v1", app.GatewayProxy)
 	r.HandleFunc("/api/gateway/*", app.GatewayProxy)
 	r.HandleFunc("/api/gateway", app.GatewayProxy)
+	r.HandleFunc("/v1/*", app.GatewayProxy)
+	r.HandleFunc("/v1", app.GatewayProxy)
 	return r
 }
 

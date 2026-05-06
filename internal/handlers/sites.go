@@ -62,14 +62,27 @@ func (a *App) SiteRoutes(r chi.Router) {
 }
 
 func (a *App) ListSites(w http.ResponseWriter, r *http.Request) {
+	if _, err := services.SyncGatewayRoutes(a.DB); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	var sites []models.Site
 	if err := a.DB.Order("updated_at desc, name asc").Find(&sites).Error; err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	siteIDs := make([]uint, 0, len(sites))
+	for _, site := range sites {
+		siteIDs = append(siteIDs, site.ID)
+	}
+	modelsBySite, err := services.GatewaySupportedModelsBySite(a.DB, siteIDs, false)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	out := make([]schemas.SiteResponse, 0, len(sites))
 	for _, site := range sites {
-		out = append(out, siteListResponse(site))
+		out = append(out, siteResponseWithSupportedModels(site, false, modelsBySite[site.ID]))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -179,11 +192,20 @@ func (a *App) RefreshOneSiteAPIKeys(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) GetSite(w http.ResponseWriter, r *http.Request) {
+	if _, err := services.SyncGatewayRoutes(a.DB); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	site, ok := a.getSite(w, chi.URLParam(r, "siteID"))
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, siteResponse(site))
+	modelsBySite, err := services.GatewaySupportedModelsBySite(a.DB, []uint{site.ID}, false)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, siteResponseWithSupportedModels(site, true, modelsBySite[site.ID]))
 }
 
 func (a *App) CreateSite(w http.ResponseWriter, r *http.Request) {
@@ -195,7 +217,7 @@ func (a *App) CreateSite(w http.ResponseWriter, r *http.Request) {
 	site := models.Site{
 		Name: payload.Name, BaseURL: payload.BaseURL, PluginKey: payload.PluginKey,
 		GroupName: payload.GroupName, IsEnabled: payload.IsEnabled, Notes: payload.Notes,
-		Credentials: nonNilJSON(payload.Credentials), PluginConfig: nonNilJSON(payload.PluginConfig),
+		Credentials: nonNilJSON(payload.Credentials), PluginConfig: stripSiteSupportedModels(payload.PluginConfig),
 	}
 	if strings.TrimSpace(site.Name) == "" || strings.TrimSpace(site.BaseURL) == "" || strings.TrimSpace(site.PluginKey) == "" {
 		writeError(w, http.StatusBadRequest, "站点名称、地址和插件不能为空")
@@ -213,7 +235,16 @@ func (a *App) CreateSite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.syncSiteInviteInfoAsync(site)
-	writeJSON(w, http.StatusCreated, siteResponse(site))
+	if _, err := services.SyncGatewayRoutes(a.DB); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	modelsBySite, err := services.GatewaySupportedModelsBySite(a.DB, []uint{site.ID}, false)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, siteResponseWithSupportedModels(site, true, modelsBySite[site.ID]))
 }
 
 func (a *App) UpdateSite(w http.ResponseWriter, r *http.Request) {
@@ -233,7 +264,7 @@ func (a *App) UpdateSite(w http.ResponseWriter, r *http.Request) {
 	site.IsEnabled = payload.IsEnabled
 	site.Notes = payload.Notes
 	site.Credentials = nonNilJSON(payload.Credentials)
-	site.PluginConfig = nonNilJSON(payload.PluginConfig)
+	site.PluginConfig = stripSiteSupportedModels(payload.PluginConfig)
 	if plugin, err := a.PluginManager.Get(site.PluginKey); err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
@@ -241,12 +272,29 @@ func (a *App) UpdateSite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := a.DB.Save(&site).Error; err != nil {
+	if err := a.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(&site).Error; err != nil {
+			return err
+		}
+		if !site.IsEnabled {
+			return tx.Where("site_id = ?", site.ID).Delete(&models.GatewayRouteState{}).Error
+		}
+		return nil
+	}); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	a.syncSiteInviteInfoAsync(site)
-	writeJSON(w, http.StatusOK, siteResponse(site))
+	if _, err := services.SyncGatewayRoutes(a.DB); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	modelsBySite, err := services.GatewaySupportedModelsBySite(a.DB, []uint{site.ID}, false)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, siteResponseWithSupportedModels(site, true, modelsBySite[site.ID]))
 }
 
 func (a *App) DeleteSite(w http.ResponseWriter, r *http.Request) {
@@ -272,11 +320,24 @@ func (a *App) ToggleSite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	site.IsEnabled = !site.IsEnabled
-	if err := a.DB.Save(&site).Error; err != nil {
+	if err := a.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(&site).Error; err != nil {
+			return err
+		}
+		if !site.IsEnabled {
+			return tx.Where("site_id = ?", site.ID).Delete(&models.GatewayRouteState{}).Error
+		}
+		return nil
+	}); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, siteResponse(site))
+	modelsBySite, err := services.GatewaySupportedModelsBySite(a.DB, []uint{site.ID}, false)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, siteResponseWithSupportedModels(site, true, modelsBySite[site.ID]))
 }
 
 func (a *App) ListSiteGroups(w http.ResponseWriter, r *http.Request) {
@@ -671,7 +732,7 @@ func (a *App) refreshOneSite(ctx context.Context, site models.Site, timeout int)
 			updates["last_balance"] = result.Remaining
 			if strings.TrimSpace(result.Unit) != "" {
 				site.PluginConfig = mergeJSON(site.PluginConfig, models.JSONMap{
-					"balance_unit": strings.TrimSpace(result.Unit),
+					"balance_unit": services.NormalizeBalanceUnit(result.Unit),
 				})
 				updates["plugin_config"] = site.PluginConfig
 			}
@@ -692,7 +753,7 @@ func (a *App) refreshOneSite(ctx context.Context, site models.Site, timeout int)
 			updates["last_balance"] = result.Balance
 			pluginConfigUpdates := nonNilJSON(result.UpdatedPluginConfig)
 			if result.BalanceUnit != nil && strings.TrimSpace(*result.BalanceUnit) != "" {
-				pluginConfigUpdates["balance_unit"] = strings.TrimSpace(*result.BalanceUnit)
+				pluginConfigUpdates["balance_unit"] = services.NormalizeBalanceUnit(*result.BalanceUnit)
 			}
 			if result.PackageDisplay != nil && strings.TrimSpace(*result.PackageDisplay) != "" {
 				pluginConfigUpdates["package_display"] = strings.TrimSpace(*result.PackageDisplay)
@@ -804,6 +865,11 @@ func (a *App) refreshOneSiteInvite(ctx context.Context, site models.Site, timeou
 	if strings.TrimSpace(message) == "" {
 		message = "邀请信息已刷新。"
 	}
+	packageUnit := status.PackageUnit
+	if packageUnit != nil && strings.TrimSpace(*packageUnit) != "" {
+		unit := services.NormalizeBalanceUnit(*packageUnit)
+		packageUnit = &unit
+	}
 	return schemas.SiteInviteRefreshResponse{
 		SiteID:              site.ID,
 		OK:                  status.InviteLink != nil || status.InviteCode != nil,
@@ -813,7 +879,7 @@ func (a *App) refreshOneSiteInvite(ctx context.Context, site models.Site, timeou
 		PackageRemaining:    status.PackageRemaining,
 		PackageTotal:        status.PackageTotal,
 		PackageUsed:         status.PackageUsed,
-		PackageUnit:         status.PackageUnit,
+		PackageUnit:         packageUnit,
 		PackageDisplay:      status.PackageDisplay,
 		UpdatedCredentials:  updatedCredentials,
 		UpdatedPluginConfig: pluginConfigUpdates,
@@ -864,6 +930,7 @@ func (a *App) refreshOneSiteAPIKeys(ctx context.Context, site models.Site, timeo
 			empty.UpdatedCredentials = credentialUpdates
 			return empty
 		}
+		_, _ = services.SyncGatewayRoutes(a.DB)
 	}
 
 	updatedCount := siteAPIKeyCount(credentialUpdates)
@@ -1277,7 +1344,7 @@ func (a *App) applySub2APIBalanceFallback(ctx context.Context, site models.Site,
 	if status.PackageRemaining != nil {
 		status.Balance = status.PackageRemaining
 		if status.BalanceUnit == nil && status.PackageUnit != nil && strings.TrimSpace(*status.PackageUnit) != "" {
-			unit := strings.TrimSpace(*status.PackageUnit)
+			unit := services.NormalizeBalanceUnit(*status.PackageUnit)
 			status.BalanceUnit = &unit
 		}
 		return
@@ -1288,7 +1355,7 @@ func (a *App) applySub2APIBalanceFallback(ctx context.Context, site models.Site,
 	}
 	status.Balance = result.Remaining
 	if strings.TrimSpace(result.Unit) != "" {
-		unit := strings.TrimSpace(result.Unit)
+		unit := services.NormalizeBalanceUnit(result.Unit)
 		status.BalanceUnit = &unit
 	}
 	if strings.TrimSpace(status.Message) != "" {
@@ -1343,7 +1410,7 @@ func (a *App) siteHealth(w http.ResponseWriter, ctx context.Context, site models
 		}).Error
 		var balanceUnit *string
 		if strings.TrimSpace(result.Unit) != "" {
-			unit := strings.TrimSpace(result.Unit)
+			unit := services.NormalizeBalanceUnit(result.Unit)
 			balanceUnit = &unit
 		}
 		account := strings.TrimSpace(jsonMapString(site.Credentials, "account"))
@@ -1386,7 +1453,7 @@ func (a *App) siteHealth(w http.ResponseWriter, ctx context.Context, site models
 	a.applySub2APIBalanceFallback(ctx, site, timeout, &status)
 	pluginConfigUpdates := nonNilJSON(status.UpdatedPluginConfig)
 	if status.BalanceUnit != nil && strings.TrimSpace(*status.BalanceUnit) != "" {
-		pluginConfigUpdates["balance_unit"] = strings.TrimSpace(*status.BalanceUnit)
+		pluginConfigUpdates["balance_unit"] = services.NormalizeBalanceUnit(*status.BalanceUnit)
 	}
 	if status.PackageDisplay != nil && strings.TrimSpace(*status.PackageDisplay) != "" {
 		pluginConfigUpdates["package_display"] = strings.TrimSpace(*status.PackageDisplay)
@@ -1421,16 +1488,26 @@ func (a *App) siteHealth(w http.ResponseWriter, ctx context.Context, site models
 		}
 		_ = a.DB.Model(&site).Updates(updates).Error
 	}
+	balanceUnit := status.BalanceUnit
+	if balanceUnit != nil && strings.TrimSpace(*balanceUnit) != "" {
+		unit := services.NormalizeBalanceUnit(*balanceUnit)
+		balanceUnit = &unit
+	}
+	packageUnit := status.PackageUnit
+	if packageUnit != nil && strings.TrimSpace(*packageUnit) != "" {
+		unit := services.NormalizeBalanceUnit(*packageUnit)
+		packageUnit = &unit
+	}
 	writeJSON(w, http.StatusOK, schemas.SiteHealthResponse{
 		SiteID:              site.ID,
 		LoggedIn:            status.LoggedIn,
 		Message:             status.Message,
 		Balance:             status.Balance,
-		BalanceUnit:         status.BalanceUnit,
+		BalanceUnit:         balanceUnit,
 		PackageRemaining:    status.PackageRemaining,
 		PackageTotal:        status.PackageTotal,
 		PackageUsed:         status.PackageUsed,
-		PackageUnit:         status.PackageUnit,
+		PackageUnit:         packageUnit,
 		PackageDisplay:      status.PackageDisplay,
 		AccountName:         status.AccountName,
 		InviteLink:          status.InviteLink,

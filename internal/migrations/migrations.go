@@ -45,6 +45,9 @@ func addMissingColumns(db *gorm.DB) error {
 		{table: "gateway_request_logs", column: "completion_tokens", statement: "ALTER TABLE gateway_request_logs ADD COLUMN completion_tokens INTEGER"},
 		{table: "gateway_request_logs", column: "total_tokens", statement: "ALTER TABLE gateway_request_logs ADD COLUMN total_tokens INTEGER"},
 		{table: "gateway_request_logs", column: "usage_cost", statement: "ALTER TABLE gateway_request_logs ADD COLUMN usage_cost FLOAT"},
+		{table: "gateway_request_logs", column: "model", statement: "ALTER TABLE gateway_request_logs ADD COLUMN model TEXT NOT NULL DEFAULT ''"},
+		{table: "gateway_request_logs", column: "requested_model", statement: "ALTER TABLE gateway_request_logs ADD COLUMN requested_model TEXT NOT NULL DEFAULT ''"},
+		{table: "gateway_request_logs", column: "actual_model", statement: "ALTER TABLE gateway_request_logs ADD COLUMN actual_model TEXT NOT NULL DEFAULT ''"},
 		{table: "gateway_route_states", column: "ewma_latency_ms", statement: "ALTER TABLE gateway_route_states ADD COLUMN ewma_latency_ms FLOAT"},
 		{table: "system_settings", column: "desktop_keep_running", statement: "ALTER TABLE system_settings ADD COLUMN desktop_keep_running BOOLEAN NOT NULL DEFAULT 0"},
 		{table: "system_settings", column: "database_backup_enabled", statement: "ALTER TABLE system_settings ADD COLUMN database_backup_enabled BOOLEAN NOT NULL DEFAULT 0"},
@@ -62,8 +65,15 @@ func addMissingColumns(db *gorm.DB) error {
 		{table: "gateway_route_states", column: "site_base_url_snapshot", statement: "ALTER TABLE gateway_route_states ADD COLUMN site_base_url_snapshot TEXT NOT NULL DEFAULT ''"},
 		{table: "gateway_route_states", column: "site_api_url_snapshot", statement: "ALTER TABLE gateway_route_states ADD COLUMN site_api_url_snapshot TEXT NOT NULL DEFAULT '[]'"},
 		{table: "gateway_route_states", column: "last_request_base_url", statement: "ALTER TABLE gateway_route_states ADD COLUMN last_request_base_url TEXT NOT NULL DEFAULT ''"},
+		{table: "gateway_route_states", column: "last_balance", statement: "ALTER TABLE gateway_route_states ADD COLUMN last_balance FLOAT"},
+		{table: "gateway_route_states", column: "balance_unit", statement: "ALTER TABLE gateway_route_states ADD COLUMN balance_unit TEXT NOT NULL DEFAULT ''"},
+		{table: "gateway_route_states", column: "balance_probe_url", statement: "ALTER TABLE gateway_route_states ADD COLUMN balance_probe_url TEXT NOT NULL DEFAULT ''"},
 		{table: "gateway_route_states", column: "route_type", statement: "ALTER TABLE gateway_route_states ADD COLUMN route_type TEXT NOT NULL DEFAULT 'codex'"},
 		{table: "gateway_route_states", column: "route_type_manual", statement: "ALTER TABLE gateway_route_states ADD COLUMN route_type_manual BOOLEAN NOT NULL DEFAULT 0"},
+		{table: "gateway_route_states", column: "supported_models", statement: "ALTER TABLE gateway_route_states ADD COLUMN supported_models TEXT NOT NULL DEFAULT '[]'"},
+		{table: "gateway_route_states", column: "model_probe_status", statement: "ALTER TABLE gateway_route_states ADD COLUMN model_probe_status TEXT NOT NULL DEFAULT ''"},
+		{table: "gateway_route_states", column: "model_probe_message", statement: "ALTER TABLE gateway_route_states ADD COLUMN model_probe_message TEXT NOT NULL DEFAULT ''"},
+		{table: "gateway_route_states", column: "model_probe_updated_at", statement: "ALTER TABLE gateway_route_states ADD COLUMN model_probe_updated_at DATETIME"},
 		{table: "gateway_route_states", column: "route_priority_manual", statement: "ALTER TABLE gateway_route_states ADD COLUMN route_priority_manual BOOLEAN NOT NULL DEFAULT 0"},
 	}
 	for _, patch := range patches {
@@ -97,6 +107,9 @@ func ensureIndexes(db *gorm.DB) error {
 		"CREATE INDEX IF NOT EXISTS ix_gateway_request_logs_success ON gateway_request_logs (success)",
 		"CREATE INDEX IF NOT EXISTS ix_gateway_request_logs_is_stream ON gateway_request_logs (is_stream)",
 		"CREATE INDEX IF NOT EXISTS ix_gateway_request_logs_route_state_id ON gateway_request_logs (route_state_id)",
+		"CREATE INDEX IF NOT EXISTS ix_gateway_request_logs_model ON gateway_request_logs (model)",
+		"CREATE INDEX IF NOT EXISTS ix_gateway_request_logs_requested_model ON gateway_request_logs (requested_model)",
+		"CREATE INDEX IF NOT EXISTS ix_gateway_request_logs_actual_model ON gateway_request_logs (actual_model)",
 	}
 	for _, statement := range statements {
 		if err := db.Exec(statement).Error; err != nil {

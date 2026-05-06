@@ -349,8 +349,8 @@ onBeforeUnmount(() => {
   width: 40px;
   height: 40px;
   border-radius: 8px;
-  background: #1c2a39;
-  color: #f8fafc;
+  background: linear-gradient(145deg, #eff6ff, #dbeafe);
+  color: #1d4ed8;
   font-weight: 800;
   letter-spacing: 0.08em;
 }

@@ -96,6 +96,63 @@ func TestSub2APIStatusPrefersAccessTokenBeforeRefreshOrPassword(t *testing.T) {
 	}
 }
 
+func TestSub2APIStatusSyncsAPIKeySupportedModels(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/auth/me":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"email":   "user@example.com",
+					"balance": 8.5,
+				},
+			})
+		case "/api/v1/keys":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"items": []map[string]any{
+						{"id": "1", "name": "gpt 5.5", "key": "sk-55", "status": "active", "models": []any{"gpt-5.5"}},
+						{"id": "2", "name": "gpt 5.4", "key": "sk-54", "status": "active", "supported_models": "gpt-5.4"},
+					},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	plugin := NewSub2API()
+	status, err := plugin.FetchAccountStatus(context.Background(), models.Site{
+		BaseURL:   server.URL,
+		PluginKey: "sub2api-platform",
+		Credentials: models.JSONMap{
+			"access_token": "valid-access-token",
+		},
+		PluginConfig: models.JSONMap{
+			"api_keys_url": "/api/v1/keys",
+		},
+	}, 5)
+	if err != nil {
+		t.Fatalf("FetchAccountStatus returned error: %v", err)
+	}
+	rawKeys, ok := status.UpdatedCredentials["api_keys"].([]map[string]any)
+	if !ok {
+		t.Fatalf("api_keys type = %T", status.UpdatedCredentials["api_keys"])
+	}
+	if len(rawKeys) != 2 {
+		t.Fatalf("api_keys len = %d", len(rawKeys))
+	}
+	firstModels, ok := rawKeys[0]["supported_models"].([]string)
+	if !ok || strings.Join(firstModels, ",") != "gpt-5.5" {
+		t.Fatalf("first supported_models = %#v", rawKeys[0]["supported_models"])
+	}
+	secondModels, ok := rawKeys[1]["supported_models"].([]string)
+	if !ok || strings.Join(secondModels, ",") != "gpt-5.4" {
+		t.Fatalf("second supported_models = %#v", rawKeys[1]["supported_models"])
+	}
+}
+
 func TestSub2APIStatusPersistsRefreshedTokens(t *testing.T) {
 	refreshCalls := 0
 	loginCalls := 0
@@ -313,7 +370,7 @@ func TestSub2APIStatusReadsSubscriptionProgress(t *testing.T) {
 	if status.PackageUsed == nil || *status.PackageUsed != 1 {
 		t.Fatalf("PackageUsed = %v", status.PackageUsed)
 	}
-	if status.PackageUnit == nil || *status.PackageUnit != "USD" {
+	if status.PackageUnit == nil || *status.PackageUnit != "$" {
 		t.Fatalf("PackageUnit = %v", status.PackageUnit)
 	}
 	if status.PackageDisplay == nil || !strings.Contains(*status.PackageDisplay, "Pro 月度套餐") {
@@ -441,7 +498,7 @@ func TestSub2APIStatusUsesPackageRemainingAsBalanceWhenProfileBalanceMissing(t *
 	if status.Balance == nil || *status.Balance != 1.1 {
 		t.Fatalf("Balance = %v", status.Balance)
 	}
-	if status.BalanceUnit == nil || *status.BalanceUnit != "USD" {
+	if status.BalanceUnit == nil || *status.BalanceUnit != "$" {
 		t.Fatalf("BalanceUnit = %v", status.BalanceUnit)
 	}
 	if status.PackageDisplay == nil || !strings.Contains(*status.PackageDisplay, "OpenToken-1.5R日卡 日度套餐") {

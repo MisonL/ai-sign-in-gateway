@@ -1,7 +1,10 @@
 package main
 
 import (
+	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"testing"
 )
@@ -44,5 +47,94 @@ func TestDefaultPortOwnerReportsCurrentProgramAndFreePort(t *testing.T) {
 
 	if got := defaultPortOwner("127.0.0.1", port, port+1); got != "未占用" {
 		t.Fatalf("defaultPortOwner free port = %q for port %s", got, strconv.Itoa(port))
+	}
+}
+
+func TestParseStartupOptionsPortShortcuts(t *testing.T) {
+	opts, err := parseStartupOptions([]string{"--port", "9000", "--host", "0.0.0.0", "--no-browser", "--no-desktop"}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.Host != "0.0.0.0" || opts.Port != 9000 || opts.BackendPort != 9000 {
+		t.Fatalf("unexpected port options: %+v", opts)
+	}
+	if opts.OpenBrowser == nil || *opts.OpenBrowser {
+		t.Fatalf("expected no-browser option, got %+v", opts.OpenBrowser)
+	}
+	if opts.Desktop == nil || *opts.Desktop {
+		t.Fatalf("expected no-desktop option, got %+v", opts.Desktop)
+	}
+
+	opts, err = parseStartupOptions([]string{"-p", "9010"}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.Port != 9010 || opts.BackendPort != 9010 {
+		t.Fatalf("short port not applied: %+v", opts)
+	}
+}
+
+func TestParseStartupOptionsDesktopPorts(t *testing.T) {
+	opts, err := parseStartupOptions([]string{"--frontend-port", "3722", "--backend-port", "8973", "--config-dir", "/tmp/aigw"}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.FrontendPort != 3722 || opts.BackendPort != 8973 || opts.ConfigDir != "/tmp/aigw" {
+		t.Fatalf("unexpected desktop options: %+v", opts)
+	}
+}
+
+func TestParseStartupOptionsRejectsConflicts(t *testing.T) {
+	tests := [][]string{
+		{"--port", "9000", "-p", "9001"},
+		{"--browser", "--no-browser"},
+		{"--desktop", "--no-desktop"},
+		{"--port", "70000"},
+	}
+	for _, args := range tests {
+		if _, err := parseStartupOptions(args, io.Discard); err == nil {
+			t.Fatalf("expected error for args %v", args)
+		}
+	}
+}
+
+func TestShellAPIPathIncludesGatewayRootV1(t *testing.T) {
+	tests := map[string]bool{
+		"/api":                 true,
+		"/api/gateway/v1":      true,
+		"/v1":                  true,
+		"/v1/models":           true,
+		"/v1/chat/completions": true,
+		"/":                    false,
+		"/settings":            false,
+		"/assets/index.js":     false,
+	}
+	for path, want := range tests {
+		if got := shellAPIPath(path); got != want {
+			t.Fatalf("shellAPIPath(%q) = %v, want %v", path, got, want)
+		}
+	}
+}
+
+func TestShellHandlerPassesGatewayRootV1ToAPI(t *testing.T) {
+	called := false
+	api := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		if r.URL.Path != "/v1/models" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	shellHandler(api).ServeHTTP(rec, req)
+
+	if !called {
+		t.Fatal("api handler was not called")
+	}
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("status=%d content-type=%q body=%s", rec.Code, rec.Header().Get("Content-Type"), rec.Body.String())
 	}
 }

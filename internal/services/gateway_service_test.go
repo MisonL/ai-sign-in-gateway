@@ -2,10 +2,13 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -69,6 +72,38 @@ func TestGatewaySyncAndProxy(t *testing.T) {
 	}
 }
 
+func TestSyncGatewayRoutesDeletesDisabledSiteRoutes(t *testing.T) {
+	db := newGatewayTestDB(t)
+	createGatewaySite(t, db, "enabled", "https://enabled.example", "enabled-key")
+	createGatewaySite(t, db, "disabled", "https://disabled.example", "disabled-key")
+
+	if count, err := SyncGatewayRoutes(db); err != nil || count != 2 {
+		t.Fatalf("initial SyncGatewayRoutes count=%d err=%v", count, err)
+	}
+
+	if err := db.Model(&models.Site{}).Where("name = ?", "disabled").Update("is_enabled", false).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count, err := SyncGatewayRoutes(db); err != nil || count != 1 {
+		t.Fatalf("second SyncGatewayRoutes count=%d err=%v", count, err)
+	}
+
+	var states []models.GatewayRouteState
+	if err := db.Find(&states).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(states) != 1 {
+		t.Fatalf("route states len = %d", len(states))
+	}
+	var site models.Site
+	if err := db.First(&site, states[0].SiteID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if site.Name != "enabled" {
+		t.Fatalf("remaining route site = %q", site.Name)
+	}
+}
+
 func TestGatewayRoundRobinAndRetry(t *testing.T) {
 	ResetGatewayCountersForTest()
 	firstCalls := 0
@@ -122,7 +157,185 @@ func TestGatewayRoundRobinAndRetry(t *testing.T) {
 	}
 }
 
-func TestGatewayTriesWholeRoutePoolDespiteMaxAttempts(t *testing.T) {
+func TestUpdateRouteFailureOpensImmediatelyForUpstream429Quota(t *testing.T) {
+	db := newGatewayTestDB(t)
+	createGatewaySite(t, db, "limited", "https://limited.example", "limited-key")
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+
+	var state models.GatewayRouteState
+	if err := db.First(&state).Error; err != nil {
+		t.Fatal(err)
+	}
+	status := http.StatusTooManyRequests
+	before := time.Now().UTC()
+	UpdateRouteFailure(db, &state, `{"error":{"code":"DAILY_LIMIT_EXCEEDED","message":"daily limit exceeded"}}`, 42, &status, GatewayPolicy{
+		FailureThreshold: 9,
+		CooldownSeconds:  10,
+	})
+
+	if state.CircuitState != "open" {
+		t.Fatalf("circuit state = %q", state.CircuitState)
+	}
+	if state.ConsecutiveFailures != 1 {
+		t.Fatalf("consecutive failures = %d", state.ConsecutiveFailures)
+	}
+	if state.CircuitOpenUntil == nil || state.CircuitOpenUntil.Sub(before) < 23*time.Hour {
+		t.Fatalf("circuit open until = %v", state.CircuitOpenUntil)
+	}
+}
+
+func TestUpdateRouteFailureOpensImmediatelyForUpstreamConcurrencyLimit(t *testing.T) {
+	db := newGatewayTestDB(t)
+	createGatewaySite(t, db, "busy", "https://busy.example", "busy-key")
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+
+	var state models.GatewayRouteState
+	if err := db.First(&state).Error; err != nil {
+		t.Fatal(err)
+	}
+	status := http.StatusTooManyRequests
+	before := time.Now().UTC()
+	UpdateRouteFailure(db, &state, `token text request concurrency limit reached (8)`, 42, &status, GatewayPolicy{
+		FailureThreshold: 9,
+		CooldownSeconds:  10,
+	})
+
+	if state.CircuitState != "open" {
+		t.Fatalf("circuit state = %q", state.CircuitState)
+	}
+	if state.CircuitOpenUntil == nil || state.CircuitOpenUntil.Sub(before) < 50*time.Second {
+		t.Fatalf("circuit open until = %v", state.CircuitOpenUntil)
+	}
+}
+
+func TestGatewaySkipsRouteAfterUpstream429Limit(t *testing.T) {
+	ResetGatewayCountersForTest()
+
+	limitedCalls := 0
+	limited := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		limitedCalls++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"code":"DAILY_LIMIT_EXCEEDED","message":"daily limit exceeded"}}`))
+	}))
+	defer limited.Close()
+
+	healthyCalls := 0
+	healthy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		healthyCalls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"route":"healthy"}`))
+	}))
+	defer healthy.Close()
+
+	db := newGatewayTestDB(t)
+	createGatewaySite(t, db, "aaa-limited", limited.URL, "limited-key")
+	createGatewaySite(t, db, "zzz-healthy", healthy.URL, "healthy-key")
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+
+	policy := GatewayPolicy{
+		RouteStrategy:    "priority",
+		RequestTimeout:   5,
+		FailureThreshold: 9,
+		CooldownSeconds:  10,
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/v1/models", nil)
+	result, err := ProxyGatewayRequest(req.Context(), db, req, "models", "", "", policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.StatusCode != http.StatusOK || !strings.Contains(string(result.Body), `"route":"healthy"`) {
+		t.Fatalf("unexpected proxy result: status=%d body=%s", result.StatusCode, result.Body)
+	}
+	if limitedCalls != 1 || healthyCalls != 1 {
+		t.Fatalf("expected one limited hit and one fallback, limited=%d healthy=%d", limitedCalls, healthyCalls)
+	}
+
+	var limitedState models.GatewayRouteState
+	if err := db.Joins("JOIN sites ON sites.id = gateway_route_states.site_id").
+		Where("sites.name = ?", "aaa-limited").
+		First(&limitedState).Error; err != nil {
+		t.Fatal(err)
+	}
+	if limitedState.CircuitState != "open" {
+		t.Fatalf("limited route circuit = %q", limitedState.CircuitState)
+	}
+
+	secondReq := httptest.NewRequest(http.MethodGet, "/api/gateway/v1/models", nil)
+	secondResult, err := ProxyGatewayRequest(secondReq.Context(), db, secondReq, "models", "", "", policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondResult.StatusCode != http.StatusOK || !strings.Contains(string(secondResult.Body), `"route":"healthy"`) {
+		t.Fatalf("unexpected second result: status=%d body=%s", secondResult.StatusCode, secondResult.Body)
+	}
+	if limitedCalls != 1 || healthyCalls != 2 {
+		t.Fatalf("limited route should be skipped after circuit opens, limited=%d healthy=%d", limitedCalls, healthyCalls)
+	}
+}
+
+func TestGatewayFallsBackForQuotaLimitWithNon429Status(t *testing.T) {
+	ResetGatewayCountersForTest()
+
+	limitedCalls := 0
+	limited := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		limitedCalls++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":{"code":"insufficient_user_quota","message":"insufficient user quota"}}`))
+	}))
+	defer limited.Close()
+
+	healthyCalls := 0
+	healthy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		healthyCalls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"route":"healthy"}`))
+	}))
+	defer healthy.Close()
+
+	db := newGatewayTestDB(t)
+	createGatewaySite(t, db, "aaa-limited", limited.URL, "limited-key")
+	createGatewaySite(t, db, "zzz-healthy", healthy.URL, "healthy-key")
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/v1/models", nil)
+	result, err := ProxyGatewayRequest(req.Context(), db, req, "models", "", "", GatewayPolicy{
+		RouteStrategy:    "priority",
+		RequestTimeout:   5,
+		FailureThreshold: 9,
+		CooldownSeconds:  10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.StatusCode != http.StatusOK || !strings.Contains(string(result.Body), `"route":"healthy"`) {
+		t.Fatalf("unexpected proxy result: status=%d body=%s", result.StatusCode, result.Body)
+	}
+	if limitedCalls != 1 || healthyCalls != 1 {
+		t.Fatalf("expected fallback for route-specific quota limit, limited=%d healthy=%d", limitedCalls, healthyCalls)
+	}
+
+	var limitedState models.GatewayRouteState
+	if err := db.Joins("JOIN sites ON sites.id = gateway_route_states.site_id").
+		Where("sites.name = ?", "aaa-limited").
+		First(&limitedState).Error; err != nil {
+		t.Fatal(err)
+	}
+	if limitedState.CircuitState != "open" {
+		t.Fatalf("limited route circuit = %q", limitedState.CircuitState)
+	}
+}
+
+func TestGatewayHonorsMaxAttempts(t *testing.T) {
 	ResetGatewayCountersForTest()
 	firstCalls := 0
 	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -151,11 +364,12 @@ func TestGatewayTriesWholeRoutePoolDespiteMaxAttempts(t *testing.T) {
 		MaxAttempts:      1,
 		FailureThreshold: 5,
 	})
-	if err != nil {
-		t.Fatal(err)
+	var maxAttempts GatewayMaxAttemptsExceededError
+	if !errors.As(err, &maxAttempts) {
+		t.Fatalf("expected max attempts error, got %T %v", err, err)
 	}
-	if result.StatusCode != http.StatusOK || firstCalls != 1 || secondCalls != 1 {
-		t.Fatalf("expected whole route pool fallback, status=%d first=%d second=%d", result.StatusCode, firstCalls, secondCalls)
+	if maxAttempts.Attempts != 1 || result.StatusCode != http.StatusBadGateway || firstCalls != 1 || secondCalls != 0 {
+		t.Fatalf("expected first route only, attempts=%d status=%d first=%d second=%d", maxAttempts.Attempts, result.StatusCode, firstCalls, secondCalls)
 	}
 }
 
@@ -441,6 +655,74 @@ func TestGatewayConcurrencyTransferLimitOnlyMovesAfterRouteLimit(t *testing.T) {
 	}
 }
 
+func TestGatewayConcurrencyOverflowUsesPriorityWhenEveryRouteIsFull(t *testing.T) {
+	ResetGatewayCountersForTest()
+	firstCalls := 0
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstCalls++
+		_, _ = w.Write([]byte(`{"route":"first"}`))
+	}))
+	defer first.Close()
+	secondCalls := 0
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondCalls++
+		_, _ = w.Write([]byte(`{"route":"second"}`))
+	}))
+	defer second.Close()
+	thirdCalls := 0
+	third := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		thirdCalls++
+		_, _ = w.Write([]byte(`{"route":"third"}`))
+	}))
+	defer third.Close()
+
+	db := newGatewayTestDB(t)
+	createGatewaySite(t, db, "aaa-first", first.URL, "first-key")
+	createGatewaySite(t, db, "mmm-second", second.URL, "second-key")
+	createGatewaySite(t, db, "zzz-third", third.URL, "third-key")
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+	var states []models.GatewayRouteState
+	if err := db.Order("route_priority asc, id asc").Find(&states).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(states) != 3 {
+		t.Fatalf("route count = %d", len(states))
+	}
+	latencies := []float64{300, 200, 10}
+	for idx := range states {
+		states[idx].RoutePriority = idx * 100
+		states[idx].EWMALatencyMS = &latencies[idx]
+		if err := db.Save(&states[idx]).Error; err != nil {
+			t.Fatal(err)
+		}
+		for range 2 {
+			acquireRoute(states[idx].ID)
+			defer releaseRoute(states[idx].ID)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/v1/models", nil)
+	result, err := ProxyGatewayRequest(req.Context(), db, req, "models", "", "", GatewayPolicy{
+		RouteStrategy:               "round_robin",
+		RequestTimeout:              5,
+		RouteConcurrencyLimit:       2,
+		ConcurrencyTransferStrategy: "limit_only",
+		ConcurrencyOverflowStrategy: "latency_first",
+		FailureThreshold:            5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.StatusCode != http.StatusOK || !strings.Contains(string(result.Body), `"route":"first"`) {
+		t.Fatalf("unexpected proxy result: status=%d body=%s", result.StatusCode, result.Body)
+	}
+	if firstCalls != 1 || secondCalls != 0 || thirdCalls != 0 {
+		t.Fatalf("expected overflow to continue from priority route when all are full, first=%d second=%d third=%d", firstCalls, secondCalls, thirdCalls)
+	}
+}
+
 func TestGatewayPriorityStrategyHonorsPriorityBeforeLoad(t *testing.T) {
 	ResetGatewayCountersForTest()
 	highCalls := 0
@@ -669,6 +951,254 @@ func TestGatewayRouteTypeUsesPerAPIKeyMetadata(t *testing.T) {
 	}
 	if byName["claude-plus"] != "claude" {
 		t.Fatalf("claude-plus route type = %q", byName["claude-plus"])
+	}
+}
+
+func TestGatewaySupportedModelsUsePerAPIKeyMetadata(t *testing.T) {
+	gpt55Hits := 0
+	gpt55 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer gpt-55-key" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		gpt55Hits++
+		_, _ = w.Write([]byte(`{"provider":"gpt-5.5"}`))
+	}))
+	defer gpt55.Close()
+
+	db := newGatewayTestDB(t)
+	site := models.Site{
+		Name:      "model-keyed",
+		BaseURL:   gpt55.URL,
+		PluginKey: "sub2api-platform",
+		IsEnabled: true,
+		Credentials: models.JSONMap{
+			"api_keys": []any{
+				map[string]any{"name": "gpt-54", "key": "gpt-54-key", "status": "active", "route_type": "gpt", "supported_models": []any{"gpt-5.4"}},
+				map[string]any{"name": "gpt-55", "key": "gpt-55-key", "status": "active", "route_type": "gpt", "supported_models": "gpt-5.5"},
+			},
+		},
+		PluginConfig: models.JSONMap{
+			"api_format":       "openai",
+			"api_request_urls": []any{gpt55.URL},
+		},
+	}
+	if err := db.Create(&site).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count, err := SyncGatewayRoutes(db); err != nil || count != 2 {
+		t.Fatalf("SyncGatewayRoutes count=%d err=%v", count, err)
+	}
+
+	var states []models.GatewayRouteState
+	if err := db.Where("site_id = ?", site.ID).Order("key_name asc").Find(&states).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(states) != 2 {
+		t.Fatalf("state count=%d", len(states))
+	}
+	byName := map[string]string{}
+	for _, state := range states {
+		byName[state.KeyName] = strings.Join(GatewayRouteSupportedModels(state), ",")
+	}
+	if byName["gpt-54"] != "gpt-5.4" {
+		t.Fatalf("gpt-54 supported models = %q", byName["gpt-54"])
+	}
+	if byName["gpt-55"] != "gpt-5.5" {
+		t.Fatalf("gpt-55 supported models = %q", byName["gpt-55"])
+	}
+
+	reqBody := []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"ping"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/v1/chat/completions", bytes.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	result, err := ProxyGatewayRequest(req.Context(), db, req, "chat/completions", "", "", GatewayPolicy{RequestTimeout: 5, MaxAttempts: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(result.Body), `"provider":"gpt-5.5"`) {
+		t.Fatalf("body = %s", result.Body)
+	}
+	if gpt55Hits != 1 {
+		t.Fatalf("gpt55Hits=%d", gpt55Hits)
+	}
+}
+
+func TestGatewaySupportedModelsIgnoreSiteLevelManualConfig(t *testing.T) {
+	db := newGatewayTestDB(t)
+	site := models.Site{
+		Name:      "site-level-models",
+		BaseURL:   "https://models.example",
+		PluginKey: "api-supplier",
+		IsEnabled: true,
+		Credentials: models.JSONMap{
+			"api_key": "route-key",
+		},
+		PluginConfig: models.JSONMap{
+			"api_format":       "openai",
+			"supported_models": []any{"gpt-4o"},
+		},
+	}
+	if err := db.Create(&site).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count, err := SyncGatewayRoutes(db); err != nil || count != 1 {
+		t.Fatalf("SyncGatewayRoutes count=%d err=%v", count, err)
+	}
+
+	var state models.GatewayRouteState
+	if err := db.First(&state).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(GatewayRouteSupportedModels(state), ","); got != "gpt-5.4,gpt-5.5" {
+		t.Fatalf("supported models = %q", got)
+	}
+}
+
+func TestGatewaySupportedModelsDefaultForCodexRoutes(t *testing.T) {
+	db := newGatewayTestDB(t)
+	createTypedGatewaySite(t, db, "codex-default", "https://codex.example", "codex-key", "openai")
+	if count, err := SyncGatewayRoutes(db); err != nil || count != 1 {
+		t.Fatalf("SyncGatewayRoutes count=%d err=%v", count, err)
+	}
+
+	var state models.GatewayRouteState
+	if err := db.First(&state).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(GatewayRouteSupportedModels(state), ","); got != "gpt-5.4,gpt-5.5" {
+		t.Fatalf("default codex supported models = %q", got)
+	}
+}
+
+func TestGatewayProbeFailureKeepsPreviousSupportedModels(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "temporary", http.StatusBadGateway)
+	}))
+	defer upstream.Close()
+
+	db := newGatewayTestDB(t)
+	createTypedGatewaySite(t, db, "unstable", upstream.URL, "unstable-key", "openai")
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+	var state models.GatewayRouteState
+	if err := db.First(&state).Error; err != nil {
+		t.Fatal(err)
+	}
+	state.SupportedModels = EncodeGatewaySupportedModels([]string{"gpt-5.5"})
+	state.ModelProbeStatus = "success"
+	if err := db.Save(&state).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := ProbeGatewayRoute(context.Background(), db, strconv.FormatUint(uint64(state.ID), 10), 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.OK {
+		t.Fatalf("expected failed probe")
+	}
+
+	var updated models.GatewayRouteState
+	if err := db.First(&updated, state.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(GatewayRouteSupportedModels(updated), ","); got != "gpt-5.5" {
+		t.Fatalf("supported models changed after failed probe: %q", got)
+	}
+	if updated.ModelProbeStatus != "failed" {
+		t.Fatalf("model probe status = %q", updated.ModelProbeStatus)
+	}
+}
+
+func TestGatewayProbeEmptyModelsDefaultsCodexSupportedModels(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	defer upstream.Close()
+
+	db := newGatewayTestDB(t)
+	createTypedGatewaySite(t, db, "empty-models", upstream.URL, "empty-key", "openai")
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+	var state models.GatewayRouteState
+	if err := db.First(&state).Error; err != nil {
+		t.Fatal(err)
+	}
+	state.SupportedModels = "[]"
+	state.ModelProbeStatus = ""
+	if err := db.Save(&state).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := ProbeGatewayRoute(context.Background(), db, strconv.FormatUint(uint64(state.ID), 10), 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.OK {
+		t.Fatalf("expected empty model probe to use defaults: %s", result.Message)
+	}
+	if got := strings.Join(result.Models, ","); got != "gpt-5.4,gpt-5.5" {
+		t.Fatalf("result models = %q", got)
+	}
+
+	var updated models.GatewayRouteState
+	if err := db.First(&updated, state.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(GatewayRouteSupportedModels(updated), ","); got != "gpt-5.4,gpt-5.5" {
+		t.Fatalf("stored supported models = %q", got)
+	}
+	if updated.ModelProbeStatus != "success" {
+		t.Fatalf("model probe status = %q", updated.ModelProbeStatus)
+	}
+}
+
+func TestGatewaySupportedModelsDefaultDoesNotOverwriteExistingState(t *testing.T) {
+	db := newGatewayTestDB(t)
+	createTypedGatewaySite(t, db, "codex-existing", "https://codex.example", "codex-key", "openai")
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+
+	var state models.GatewayRouteState
+	if err := db.First(&state).Error; err != nil {
+		t.Fatal(err)
+	}
+	state.SupportedModels = EncodeGatewaySupportedModels([]string{"gpt-4o"})
+	if err := db.Save(&state).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+
+	var updated models.GatewayRouteState
+	if err := db.First(&updated, state.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(GatewayRouteSupportedModels(updated), ","); got != "gpt-4o" {
+		t.Fatalf("existing supported models overwritten: %q", got)
+	}
+}
+
+func TestGatewaySupportedModelsDefaultSkipsNonCodexRoutes(t *testing.T) {
+	db := newGatewayTestDB(t)
+	createTypedGatewaySite(t, db, "claude-default", "https://claude.example", "claude-key", "anthropic")
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+
+	var state models.GatewayRouteState
+	if err := db.First(&state).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got := GatewayRouteSupportedModels(state); len(got) != 0 {
+		t.Fatalf("non-codex default supported models = %#v", got)
 	}
 }
 
@@ -902,7 +1432,7 @@ func TestGatewayUsageLoggedFromOpenAIResponse(t *testing.T) {
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"chatcmpl-demo","usage":{"prompt_tokens":12,"prompt_tokens_details":{"cached_tokens":4},"completion_tokens":8,"total_tokens":20,"total_cost":0.0042}}`))
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-demo","model":"gpt-5.4","usage":{"prompt_tokens":12,"prompt_tokens_details":{"cached_tokens":4},"completion_tokens":8,"total_tokens":20,"total_cost":0.0042}}`))
 	}))
 	defer upstream.Close()
 
@@ -911,8 +1441,16 @@ func TestGatewayUsageLoggedFromOpenAIResponse(t *testing.T) {
 	if _, err := SyncGatewayRoutes(db); err != nil {
 		t.Fatal(err)
 	}
+	var state models.GatewayRouteState
+	if err := db.First(&state).Error; err != nil {
+		t.Fatal(err)
+	}
+	state.SupportedModels = EncodeGatewaySupportedModels([]string{"gpt-5.5"})
+	if err := db.Save(&state).Error; err != nil {
+		t.Fatal(err)
+	}
 
-	body := strings.NewReader(`{"messages":[]}`)
+	body := strings.NewReader(`{"model":"gpt-5.5","messages":[]}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/gateway/v1/chat/completions", body)
 	req.Header.Set("Content-Type", "application/json")
 	res, err := ProxyGatewayRequestWithOptions(req.Context(), db, req, "chat/completions", ProxyGatewayOptions{}, GatewayPolicy{
@@ -948,6 +1486,12 @@ func TestGatewayUsageLoggedFromOpenAIResponse(t *testing.T) {
 	}
 	if log.UsageCost == nil || *log.UsageCost != 0.0042 {
 		t.Fatalf("usage cost = %v", log.UsageCost)
+	}
+	if log.Model != "gpt-5.5" {
+		t.Fatalf("model = %q", log.Model)
+	}
+	if log.RequestedModel != "gpt-5.5" || log.ActualModel != "gpt-5.4" {
+		t.Fatalf("requested=%q actual=%q", log.RequestedModel, log.ActualModel)
 	}
 }
 
@@ -1075,6 +1619,23 @@ func TestGatewayProxyAutoSelectsRouteTypeFromModel(t *testing.T) {
 	if _, err := SyncGatewayRoutes(db); err != nil {
 		t.Fatal(err)
 	}
+	var states []models.GatewayRouteState
+	if err := db.Order("id asc").Find(&states).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range states {
+		switch state.KeyFingerprint {
+		case fingerprint("claude-key"):
+			state.SupportedModels = EncodeGatewaySupportedModels([]string{"claude-3-7-sonnet"})
+		case fingerprint("gpt-key"):
+			state.SupportedModels = EncodeGatewaySupportedModels([]string{"gpt-4o-mini"})
+		default:
+			t.Fatalf("unexpected key fingerprint: %s", state.KeyFingerprint)
+		}
+		if err := db.Save(&state).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	tests := []struct {
 		name         string
@@ -1112,6 +1673,541 @@ func TestGatewayProxyAutoSelectsRouteTypeFromModel(t *testing.T) {
 	}
 }
 
+func TestGatewayModelPreciseMatchDoesNotRouteToWrongModel(t *testing.T) {
+	ResetGatewayCountersForTest()
+
+	gpt54Hits := 0
+	gpt54 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gpt54Hits++
+		_, _ = w.Write([]byte(`{"provider":"gpt-5.4"}`))
+	}))
+	defer gpt54.Close()
+
+	gpt55Hits := 0
+	gpt55 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gpt55Hits++
+		_, _ = w.Write([]byte(`{"provider":"gpt-5.5"}`))
+	}))
+	defer gpt55.Close()
+
+	db := newGatewayTestDB(t)
+	createTypedGatewaySite(t, db, "gpt-54", gpt54.URL, "gpt-54-key", "openai")
+	createTypedGatewaySite(t, db, "gpt-55", gpt55.URL, "gpt-55-key", "openai")
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+
+	var states []models.GatewayRouteState
+	if err := db.Order("id asc").Find(&states).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(states) != 2 {
+		t.Fatalf("route count = %d", len(states))
+	}
+	for _, state := range states {
+		switch state.KeyFingerprint {
+		case fingerprint("gpt-54-key"):
+			state.SupportedModels = EncodeGatewaySupportedModels([]string{"gpt-5.4"})
+		case fingerprint("gpt-55-key"):
+			state.SupportedModels = EncodeGatewaySupportedModels([]string{"gpt-5.5"})
+		default:
+			t.Fatalf("unexpected key fingerprint: %s", state.KeyFingerprint)
+		}
+		if err := db.Save(&state).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	reqBody := []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"ping"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/v1/chat/completions", bytes.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	result, err := ProxyGatewayRequest(req.Context(), db, req, "chat/completions", "", "", GatewayPolicy{RequestTimeout: 5, MaxAttempts: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(result.Body), `"provider":"gpt-5.5"`) {
+		t.Fatalf("body = %s", result.Body)
+	}
+	if gpt55Hits != 1 || gpt54Hits != 0 {
+		t.Fatalf("gpt55Hits=%d gpt54Hits=%d", gpt55Hits, gpt54Hits)
+	}
+}
+
+func TestGatewayModelFilteringUsesDefaultCodexModelsWhenUnspecified(t *testing.T) {
+	ResetGatewayCountersForTest()
+
+	declaredHits := 0
+	declared := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		declaredHits++
+		_, _ = w.Write([]byte(`{"provider":"declared"}`))
+	}))
+	defer declared.Close()
+
+	unspecifiedHits := 0
+	unspecified := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		unspecifiedHits++
+		_, _ = w.Write([]byte(`{"provider":"default"}`))
+	}))
+	defer unspecified.Close()
+
+	db := newGatewayTestDB(t)
+	createTypedGatewaySite(t, db, "declared", declared.URL, "declared-key", "openai")
+	createTypedGatewaySite(t, db, "unspecified", unspecified.URL, "unspecified-key", "openai")
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+
+	var states []models.GatewayRouteState
+	if err := db.Order("id asc").Find(&states).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range states {
+		if state.KeyFingerprint == fingerprint("declared-key") {
+			state.SupportedModels = EncodeGatewaySupportedModels([]string{"gpt-5.4"})
+			if err := db.Save(&state).Error; err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	reqBody := []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"ping"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/v1/chat/completions", bytes.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	result, err := ProxyGatewayRequest(req.Context(), db, req, "chat/completions", "", "", GatewayPolicy{RequestTimeout: 5, MaxAttempts: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(result.Body), `"provider":"default"`) {
+		t.Fatalf("body = %s", result.Body)
+	}
+	if unspecifiedHits != 1 || declaredHits != 0 {
+		t.Fatalf("unspecifiedHits=%d declaredHits=%d", unspecifiedHits, declaredHits)
+	}
+}
+
+func TestGatewayRetryKeepsPreciseModelFilter(t *testing.T) {
+	ResetGatewayCountersForTest()
+
+	gpt54Hits := 0
+	gpt54 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gpt54Hits++
+		_, _ = w.Write([]byte(`{"provider":"gpt-5.4"}`))
+	}))
+	defer gpt54.Close()
+
+	gpt55Hits := 0
+	gpt55 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gpt55Hits++
+		http.Error(w, "temporary failure", http.StatusBadGateway)
+	}))
+	defer gpt55.Close()
+
+	db := newGatewayTestDB(t)
+	createTypedGatewaySite(t, db, "gpt-54", gpt54.URL, "gpt-54-key", "openai")
+	createTypedGatewaySite(t, db, "gpt-55", gpt55.URL, "gpt-55-key", "openai")
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+
+	var states []models.GatewayRouteState
+	if err := db.Order("id asc").Find(&states).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range states {
+		switch state.KeyFingerprint {
+		case fingerprint("gpt-54-key"):
+			state.SupportedModels = EncodeGatewaySupportedModels([]string{"gpt-5.4"})
+		case fingerprint("gpt-55-key"):
+			state.SupportedModels = EncodeGatewaySupportedModels([]string{"gpt-5.5"})
+		default:
+			t.Fatalf("unexpected key fingerprint: %s", state.KeyFingerprint)
+		}
+		if err := db.Save(&state).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	reqBody := []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"ping"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/v1/chat/completions", bytes.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	_, err := ProxyGatewayRequest(req.Context(), db, req, "chat/completions", "", "", GatewayPolicy{
+		RequestTimeout:   5,
+		MaxAttempts:      0,
+		FailureThreshold: 5,
+	})
+	var allFailed GatewayAllRoutesFailedError
+	if !errors.As(err, &allFailed) {
+		t.Fatalf("expected all routes failed, got %T %v", err, err)
+	}
+	if allFailed.Attempts != 1 || gpt55Hits != 1 || gpt54Hits != 0 {
+		t.Fatalf("attempts=%d gpt55Hits=%d gpt54Hits=%d", allFailed.Attempts, gpt55Hits, gpt54Hits)
+	}
+}
+
+func TestGatewayModelFilteringKeepsOldBehaviorWhenRequestHasNoModel(t *testing.T) {
+	ResetGatewayCountersForTest()
+
+	firstHits := 0
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstHits++
+		_, _ = w.Write([]byte(`{"provider":"first"}`))
+	}))
+	defer first.Close()
+
+	secondHits := 0
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondHits++
+		_, _ = w.Write([]byte(`{"provider":"second"}`))
+	}))
+	defer second.Close()
+
+	db := newGatewayTestDB(t)
+	createTypedGatewaySite(t, db, "first", first.URL, "first-key", "openai")
+	createTypedGatewaySite(t, db, "second", second.URL, "second-key", "openai")
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+
+	reqBody := []byte(`{"messages":[{"role":"user","content":"ping"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/v1/chat/completions", bytes.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	result, err := ProxyGatewayRequest(req.Context(), db, req, "chat/completions", "", "", GatewayPolicy{
+		RouteStrategy:  "priority",
+		RequestTimeout: 5,
+		MaxAttempts:    1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(result.Body), `"provider":"first"`) {
+		t.Fatalf("body = %s", result.Body)
+	}
+	if firstHits != 1 || secondHits != 0 {
+		t.Fatalf("firstHits=%d secondHits=%d", firstHits, secondHits)
+	}
+}
+
+func TestGatewayModelFilteringReturnsClearErrorWhenAllDeclaredButNoMatch(t *testing.T) {
+	ResetGatewayCountersForTest()
+
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("unexpected request to first route")
+	}))
+	defer first.Close()
+
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("unexpected request to second route")
+	}))
+	defer second.Close()
+
+	db := newGatewayTestDB(t)
+	createTypedGatewaySite(t, db, "first", first.URL, "first-key", "openai")
+	createTypedGatewaySite(t, db, "second", second.URL, "second-key", "openai")
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+
+	var states []models.GatewayRouteState
+	if err := db.Order("id asc").Find(&states).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range states {
+		state.SupportedModels = EncodeGatewaySupportedModels([]string{"gpt-5.4"})
+		if err := db.Save(&state).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	reqBody := []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"ping"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/v1/chat/completions", bytes.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	_, err := ProxyGatewayRequest(req.Context(), db, req, "chat/completions", "", "", GatewayPolicy{RequestTimeout: 5, MaxAttempts: 1})
+	var notSupported GatewayModelNotSupportedError
+	if !errors.As(err, &notSupported) {
+		t.Fatalf("expected GatewayModelNotSupportedError, got %T %v", err, err)
+	}
+	if !strings.Contains(err.Error(), `gpt-5.5`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestGatewaySub2APIModelProbeListsOnlyHealthySupportedModels(t *testing.T) {
+	ResetGatewayCountersForTest()
+
+	upstreamHits := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHits++
+		_, _ = w.Write([]byte(`{"unexpected":true}`))
+	}))
+	defer upstream.Close()
+
+	db := newGatewayTestDB(t)
+	createTypedGatewaySite(t, db, "gpt-54", upstream.URL, "gpt-54-key", "openai")
+	createTypedGatewaySite(t, db, "gpt-55", upstream.URL, "gpt-55-key", "openai")
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+
+	var states []models.GatewayRouteState
+	if err := db.Order("id asc").Find(&states).Error; err != nil {
+		t.Fatal(err)
+	}
+	until := time.Now().UTC().Add(time.Hour)
+	for _, state := range states {
+		switch state.KeyFingerprint {
+		case fingerprint("gpt-54-key"):
+			state.SupportedModels = EncodeGatewaySupportedModels([]string{"gpt-5.4"})
+			state.CircuitState = "open"
+			state.CircuitOpenUntil = &until
+		case fingerprint("gpt-55-key"):
+			state.SupportedModels = EncodeGatewaySupportedModels([]string{"gpt-5.5"})
+		default:
+			t.Fatalf("unexpected key fingerprint: %s", state.KeyFingerprint)
+		}
+		if err := db.Save(&state).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/sub2api/v1/models", nil)
+	result, err := ProxyGatewayRequestWithOptions(req.Context(), db, req, "models", ProxyGatewayOptions{ModelProbeStrategy: "sub2api"}, GatewayPolicy{RequestTimeout: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(result.Body)
+	if result.StatusCode != http.StatusOK || !result.Success {
+		t.Fatalf("status=%d success=%v body=%s", result.StatusCode, result.Success, body)
+	}
+	if !strings.Contains(body, `"id":"gpt-5.5"`) {
+		t.Fatalf("body missing healthy model: %s", body)
+	}
+	if strings.Contains(body, `"id":"gpt-5.4"`) {
+		t.Fatalf("body contains open-circuit model: %s", body)
+	}
+	if upstreamHits != 0 {
+		t.Fatalf("sub2api model probe should not call upstream, hits=%d", upstreamHits)
+	}
+}
+
+func TestGatewaySub2APIModelProbeListsAllHealthySupportedModels(t *testing.T) {
+	ResetGatewayCountersForTest()
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("sub2api model probe should not call upstream")
+	}))
+	defer upstream.Close()
+
+	db := newGatewayTestDB(t)
+	createTypedGatewaySite(t, db, "codex", upstream.URL, "codex-key", "openai")
+	createTypedGatewaySite(t, db, "claude", upstream.URL, "claude-key", "anthropic")
+	createTypedGatewaySite(t, db, "gemini", upstream.URL, "gemini-key", "google")
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+
+	var states []models.GatewayRouteState
+	if err := db.Order("id asc").Find(&states).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range states {
+		switch state.KeyFingerprint {
+		case fingerprint("codex-key"):
+			state.SupportedModels = EncodeGatewaySupportedModels([]string{"gpt-4o-mini", "gpt-5.5"})
+		case fingerprint("claude-key"):
+			state.SupportedModels = EncodeGatewaySupportedModels([]string{"claude-3-7-sonnet"})
+		case fingerprint("gemini-key"):
+			state.SupportedModels = EncodeGatewaySupportedModels([]string{"gemini-2.5-pro"})
+		default:
+			t.Fatalf("unexpected key fingerprint: %s", state.KeyFingerprint)
+		}
+		if err := db.Save(&state).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	result, err := ProxyGatewayRequestWithOptions(req.Context(), db, req, "models", ProxyGatewayOptions{ModelProbeStrategy: "sub2api"}, GatewayPolicy{RequestTimeout: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(result.Body)
+	for _, model := range []string{"gpt-4o-mini", "gpt-5.5", "claude-3-7-sonnet", "gemini-2.5-pro"} {
+		if !strings.Contains(body, fmt.Sprintf(`"id":"%s"`, model)) {
+			t.Fatalf("body missing %s: %s", model, body)
+		}
+	}
+}
+
+func TestGatewaySub2APIModelProbeExcludesRoutesWithoutUsableKey(t *testing.T) {
+	ResetGatewayCountersForTest()
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("sub2api model probe should not call upstream")
+	}))
+	defer upstream.Close()
+
+	db := newGatewayTestDB(t)
+	site := models.Site{
+		Name:      "disabled-key-site",
+		BaseURL:   upstream.URL,
+		PluginKey: "api-supplier",
+		IsEnabled: true,
+		Credentials: models.JSONMap{
+			"api_keys": []any{
+				map[string]any{"name": "disabled", "key": "disabled-key", "status": "disabled", "route_type": "gpt", "supported_models": []any{"gpt-5.5"}},
+			},
+		},
+		PluginConfig: models.JSONMap{"api_format": "openai"},
+	}
+	if err := db.Create(&site).Error; err != nil {
+		t.Fatal(err)
+	}
+	state := models.GatewayRouteState{
+		SiteID:              site.ID,
+		KeyFingerprint:      fingerprint("disabled-key"),
+		KeyName:             "disabled",
+		SiteNameSnapshot:    site.Name,
+		SiteBaseURLSnapshot: site.BaseURL,
+		SiteAPIURLSnapshot:  marshalStringSlice(GatewayRequestBaseCandidates(site)),
+		RouteType:           "codex",
+		SupportedModels:     EncodeGatewaySupportedModels([]string{"gpt-5.5"}),
+		IsEnabled:           true,
+		CircuitState:        "closed",
+	}
+	if err := db.Create(&state).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/sub2api/v1/models", nil)
+	result, err := ProxyGatewayRequestWithOptions(req.Context(), db, req, "models", ProxyGatewayOptions{ModelProbeStrategy: "sub2api"}, GatewayPolicy{RequestTimeout: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.StatusCode != http.StatusServiceUnavailable || result.Success {
+		t.Fatalf("status=%d success=%v body=%s", result.StatusCode, result.Success, result.Body)
+	}
+	if strings.Contains(string(result.Body), `"id":"gpt-5.5"`) {
+		t.Fatalf("body contains disabled-key model: %s", result.Body)
+	}
+}
+
+func TestGatewaySub2APIModelProbeReturnsUnavailableWithoutHealthyModels(t *testing.T) {
+	ResetGatewayCountersForTest()
+
+	db := newGatewayTestDB(t)
+	createTypedGatewaySite(t, db, "gpt-54", "https://upstream.example", "gpt-54-key", "openai")
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+
+	var state models.GatewayRouteState
+	if err := db.First(&state).Error; err != nil {
+		t.Fatal(err)
+	}
+	state.SupportedModels = EncodeGatewaySupportedModels([]string{"gpt-5.4"})
+	state.CircuitState = "open"
+	until := time.Now().UTC().Add(time.Hour)
+	state.CircuitOpenUntil = &until
+	if err := db.Save(&state).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/sub2api/v1/models", nil)
+	result, err := ProxyGatewayRequestWithOptions(req.Context(), db, req, "models", ProxyGatewayOptions{ModelProbeStrategy: "sub2api"}, GatewayPolicy{RequestTimeout: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.StatusCode != http.StatusServiceUnavailable || result.Success {
+		t.Fatalf("status=%d success=%v body=%s", result.StatusCode, result.Success, result.Body)
+	}
+	if !strings.Contains(string(result.Body), "gateway_model_health_unavailable") {
+		t.Fatalf("body = %s", result.Body)
+	}
+}
+
+func TestGatewayProbePersistsSupportedModelsForPreciseRouting(t *testing.T) {
+	ResetGatewayCountersForTest()
+
+	gpt54Hits := 0
+	gpt54 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"gpt-5.4"}]}`))
+		case "/v1/chat/completions":
+			gpt54Hits++
+			t.Fatal("unexpected request to gpt-5.4 route")
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer gpt54.Close()
+
+	gpt55Hits := 0
+	gpt55 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"gpt-5.5"}]}`))
+		case "/v1/chat/completions":
+			gpt55Hits++
+			_, _ = w.Write([]byte(`{"provider":"gpt-5.5"}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer gpt55.Close()
+
+	db := newGatewayTestDB(t)
+	createTypedGatewaySite(t, db, "gpt-54", gpt54.URL, "gpt-54-key", "openai")
+	createTypedGatewaySite(t, db, "gpt-55", gpt55.URL, "gpt-55-key", "openai")
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+
+	var states []models.GatewayRouteState
+	if err := db.Order("id asc").Find(&states).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range states {
+		result, err := ProbeGatewayRoute(context.Background(), db, strconv.FormatUint(uint64(state.ID), 10), 5)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !result.OK {
+			t.Fatalf("probe failed for route %d: %s", state.ID, result.Message)
+		}
+	}
+
+	var gpt54State models.GatewayRouteState
+	if err := db.Where("key_fingerprint = ?", fingerprint("gpt-54-key")).First(&gpt54State).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(GatewayRouteSupportedModels(gpt54State), ","); got != "gpt-5.4" {
+		t.Fatalf("gpt-5.4 route supported models = %q", got)
+	}
+
+	var gpt55State models.GatewayRouteState
+	if err := db.Where("key_fingerprint = ?", fingerprint("gpt-55-key")).First(&gpt55State).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(GatewayRouteSupportedModels(gpt55State), ","); got != "gpt-5.5" {
+		t.Fatalf("gpt-5.5 route supported models = %q", got)
+	}
+
+	reqBody := []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"ping"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/v1/chat/completions", bytes.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	result, err := ProxyGatewayRequest(req.Context(), db, req, "chat/completions", "", "", GatewayPolicy{RequestTimeout: 5, MaxAttempts: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(result.Body), `"provider":"gpt-5.5"`) {
+		t.Fatalf("body = %s", result.Body)
+	}
+	if gpt55Hits != 1 || gpt54Hits != 0 {
+		t.Fatalf("gpt55Hits=%d gpt54Hits=%d", gpt55Hits, gpt54Hits)
+	}
+}
+
 func TestGatewayActiveRequestsSnapshot(t *testing.T) {
 	ResetGatewayCountersForTest()
 
@@ -1127,6 +2223,14 @@ func TestGatewayActiveRequestsSnapshot(t *testing.T) {
 	db := newGatewayTestDB(t)
 	createGatewaySite(t, db, "active-up", upstream.URL, "active-key")
 	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+	var state models.GatewayRouteState
+	if err := db.First(&state).Error; err != nil {
+		t.Fatal(err)
+	}
+	state.SupportedModels = EncodeGatewaySupportedModels([]string{"gpt-4o"})
+	if err := db.Save(&state).Error; err != nil {
 		t.Fatal(err)
 	}
 

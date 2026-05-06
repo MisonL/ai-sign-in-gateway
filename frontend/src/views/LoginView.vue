@@ -258,17 +258,26 @@ onMounted(loadInvites)
             </div>
 
             <a-form class="login-form" layout="vertical" @submit.prevent="submit">
-              <a-form-item label="账号">
-                <a-input v-model:value="username" size="large" autocomplete="username" placeholder="请输入邮箱 / 用户名">
+              <a-form-item label="账号" html-for="login-username">
+                <a-input
+                  id="login-username"
+                  v-model:value="username"
+                  name="username"
+                  size="large"
+                  autocomplete="username"
+                  placeholder="请输入邮箱 / 用户名"
+                >
                   <template #prefix>
                     <UserOutlined />
                   </template>
                 </a-input>
               </a-form-item>
 
-              <a-form-item label="密码">
+              <a-form-item label="密码" html-for="login-password">
                 <a-input-password
+                  id="login-password"
                   v-model:value="password"
+                  name="password"
                   size="large"
                   autocomplete="current-password"
                   placeholder="请输入登录密码"
@@ -1210,15 +1219,17 @@ onMounted(loadInvites)
 
 @media (max-width: 880px) {
   .login-screen {
-    height: 100vh;
-    overflow: hidden;
+    height: auto;
+    min-height: 100dvh;
+    overflow-x: hidden;
+    overflow-y: auto;
   }
 
   .login-page {
-    height: 100vh;
-    min-height: 0;
-    padding: 16px;
-    overflow: hidden;
+    height: auto;
+    min-height: 100dvh;
+    padding: 16px 16px calc(16px + env(safe-area-inset-bottom, 0px));
+    overflow: visible;
   }
 
   .login-header,
@@ -1245,7 +1256,7 @@ onMounted(loadInvites)
     gap: 12px;
     min-height: 0;
     margin-top: 14px;
-    overflow: hidden;
+    overflow: visible;
   }
 
   .login-copy h1 {

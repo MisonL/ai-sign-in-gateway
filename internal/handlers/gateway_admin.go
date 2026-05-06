@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"sort"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 
 	"ai-sign-in-gateway/internal/httpx"
 	"ai-sign-in-gateway/internal/models"
+	"ai-sign-in-gateway/internal/schemas"
 	"ai-sign-in-gateway/internal/services"
 	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm"
@@ -76,7 +78,8 @@ func (a *App) GatewayOverview(w http.ResponseWriter, r *http.Request) {
 		avgLatency = round2(latencySum / float64(latencySamples))
 	}
 
-	totalBalance, quantified := totalBalanceForActiveRoutes(a.DB)
+	totalBalance, quantified := totalBalanceForRoutes(a.DB)
+	costSummary := gatewayUsageCostSummary(logs)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"total_routes":                  total,
@@ -90,6 +93,7 @@ func (a *App) GatewayOverview(w http.ResponseWriter, r *http.Request) {
 		"request_count_24h":             len(requestIDs),
 		"success_rate_24h":              successRate,
 		"avg_latency_ms_24h":            avgLatency,
+		"usage_cost_24h":                costSummary,
 		"strategy_breakdown_24h":        strategyBreakdown24h(logs),
 		"route_strategy":                settings.GatewayRouteStrategy,
 		"failure_threshold":             settings.GatewayFailureThreshold,
@@ -107,39 +111,58 @@ func round2(v float64) float64 {
 	return float64(int64(v*100+0.5)) / 100
 }
 
-func totalBalanceForActiveRoutes(db *gormDB) (any, int) {
-	var siteIDs []uint
-	_ = db.Model(&models.GatewayRouteState{}).Where("is_enabled = ?", true).Distinct("site_id").Pluck("site_id", &siteIDs).Error
-	if len(siteIDs) == 0 {
+func totalBalanceForRoutes(db *gormDB) (any, int) {
+	var routes []models.GatewayRouteState
+	if err := db.Where("last_balance IS NOT NULL").Find(&routes).Error; err != nil {
 		return nil, 0
 	}
-	var sites []models.Site
-	if err := db.Where("id IN ?", siteIDs).Find(&sites).Error; err != nil {
-		return nil, 0
-	}
-	total := 0.0
+	totals := map[string]float64{}
 	quantified := 0
-	for _, site := range sites {
-		if site.LastBalance == nil {
+	for _, route := range routes {
+		if route.LastBalance == nil {
 			continue
 		}
+		unit := services.NormalizeBalanceUnit(route.BalanceUnit)
+		if unit == "" {
+			unit = "$"
+		}
 		quantified++
-		total += *site.LastBalance
+		totals[unit] += *route.LastBalance
 	}
 	if quantified == 0 {
 		return nil, 0
 	}
-	if total < 0 {
-		return "-$" + formatFloat(-total), quantified
+	units := make([]string, 0, len(totals))
+	for unit := range totals {
+		units = append(units, unit)
 	}
-	return "$" + formatFloat(total), quantified
+	sort.Slice(units, func(i, j int) bool {
+		return balanceUnitRank(units[i]) < balanceUnitRank(units[j]) ||
+			(balanceUnitRank(units[i]) == balanceUnitRank(units[j]) && units[i] < units[j])
+	})
+	parts := make([]string, 0, len(units))
+	for _, unit := range units {
+		value := totals[unit]
+		if display := balanceDisplayWithUnit(&value, unit); display != nil {
+			parts = append(parts, *display)
+		}
+	}
+	return strings.Join(parts, " / "), quantified
 }
 
-func formatFloat(v float64) string {
-	if v == float64(int64(v)) {
-		return strconv.FormatInt(int64(v), 10)
+func balanceUnitRank(unit string) int {
+	switch services.NormalizeBalanceUnit(unit) {
+	case "$":
+		return 0
+	case "¥":
+		return 1
+	case "€":
+		return 2
+	case "£":
+		return 3
+	default:
+		return 10
 	}
-	return strconv.FormatFloat(round2(v), 'f', -1, 64)
 }
 
 func (a *App) GatewayUsage(w http.ResponseWriter, r *http.Request) {
@@ -200,6 +223,7 @@ type gatewayUsageAgg struct {
 	KeyFingerprint     string
 	GroupName          string
 	RouteType          string
+	Model              string
 	RequestCount       int
 	SuccessCount       int
 	FailureCount       int
@@ -210,9 +234,44 @@ type gatewayUsageAgg struct {
 	TotalTokens        int
 	UsageCost          float64
 	hasUsageCost       bool
+	ComputedInputCost  float64
+	ComputedCachedCost float64
+	ComputedOutputCost float64
+	ComputedTotalCost  float64
+	ComputedCostKnown  bool
+	ComputedCostMixed  bool
 	latencySum         float64
 	latencySamples     int
 	lastUsedAt         time.Time
+}
+
+type gatewayModelPrice struct {
+	InputPerMTok  float64
+	CachedPerMTok float64
+	OutputPerMTok float64
+}
+
+type gatewayUsageCostAgg struct {
+	InputCost        float64
+	CachedCost       float64
+	OutputCost       float64
+	TotalCost        float64
+	UpstreamCost     float64
+	PromptTokens     int
+	CachedTokens     int
+	OutputTokens     int
+	TotalTokens      int
+	KnownRequests    int
+	UnknownRequests  int
+	UpstreamRequests int
+	TopModels        map[string]*gatewayModelCostAgg
+}
+
+type gatewayModelCostAgg struct {
+	Model      string
+	Requests   int
+	TotalCost  float64
+	KnownPrice bool
 }
 
 func (a *App) gatewayUsageResponse(logs []models.GatewayRequestLog, start, end time.Time) map[string]any {
@@ -230,6 +289,7 @@ func (a *App) gatewayUsageResponse(logs []models.GatewayRequestLog, start, end t
 			total.StreamRequestCount++
 		}
 		addGatewayUsageTokens(&total, log)
+		addGatewayUsageCost(&total, log)
 		addGatewayUsageLatency(&total, log)
 
 		state, matched := models.GatewayRouteState{}, false
@@ -269,6 +329,7 @@ func (a *App) gatewayUsageResponse(logs []models.GatewayRequestLog, start, end t
 				KeyFingerprint: log.KeyFingerprint,
 				GroupName:      log.GroupName,
 				RouteType:      state.RouteType,
+				Model:          gatewayLogEffectiveModel(log),
 				RouteLabel:     gatewayLogRouteLabel(log, state, matched, siteName),
 			}
 			if matched {
@@ -294,7 +355,15 @@ func (a *App) gatewayUsageResponse(logs []models.GatewayRequestLog, start, end t
 		if log.IsStream {
 			agg.StreamRequestCount++
 		}
+		if logModel := gatewayLogEffectiveModel(log); logModel != "" {
+			if strings.TrimSpace(agg.Model) == "" {
+				agg.Model = logModel
+			} else if agg.Model != logModel {
+				agg.Model = "mixed"
+			}
+		}
 		addGatewayUsageTokens(agg, log)
+		addGatewayUsageCost(agg, log)
 		addGatewayUsageLatency(agg, log)
 		if log.CreatedAt.After(agg.lastUsedAt) {
 			agg.lastUsedAt = log.CreatedAt
@@ -326,10 +395,6 @@ func addGatewayUsageTokens(agg *gatewayUsageAgg, log models.GatewayRequestLog) {
 	if log.TotalTokens != nil {
 		agg.TotalTokens += *log.TotalTokens
 	}
-	if log.UsageCost != nil {
-		agg.UsageCost += *log.UsageCost
-		agg.hasUsageCost = true
-	}
 }
 
 func addGatewayUsageLatency(agg *gatewayUsageAgg, log models.GatewayRequestLog) {
@@ -337,6 +402,27 @@ func addGatewayUsageLatency(agg *gatewayUsageAgg, log models.GatewayRequestLog) 
 		agg.latencySum += *log.LatencyMS
 		agg.latencySamples++
 	}
+}
+
+func addGatewayUsageCost(agg *gatewayUsageAgg, log models.GatewayRequestLog) {
+	if log.UsageCost != nil {
+		agg.UsageCost += *log.UsageCost
+		agg.hasUsageCost = true
+	}
+	cost, known := gatewayComputedUsageCostForLog(log)
+	agg.ComputedInputCost += cost.InputCost
+	agg.ComputedCachedCost += cost.CachedCost
+	agg.ComputedOutputCost += cost.OutputCost
+	agg.ComputedTotalCost += cost.TotalCost
+	if known {
+		agg.ComputedCostKnown = true
+	} else if gatewayLogHasUsageTokens(log) {
+		agg.ComputedCostMixed = true
+	}
+}
+
+func gatewayLogEffectiveModel(log models.GatewayRequestLog) string {
+	return firstNonEmpty(log.ActualModel, log.RequestedModel, log.Model)
 }
 
 func gatewayUsageAggResponse(agg *gatewayUsageAgg) map[string]any {
@@ -348,7 +434,6 @@ func gatewayUsageAggResponse(agg *gatewayUsageAgg) map[string]any {
 	if agg.hasUsageCost {
 		usageCost = round2(agg.UsageCost)
 	}
-	officialCost := gatewayOfficialUsageCost(agg.PromptTokens, agg.CachedInputTokens, agg.CompletionTokens)
 	successRate := 0.0
 	if agg.RequestCount > 0 {
 		successRate = round2(float64(agg.SuccessCount) / float64(agg.RequestCount) * 100)
@@ -362,6 +447,7 @@ func gatewayUsageAggResponse(agg *gatewayUsageAgg) map[string]any {
 		"key_fingerprint":      agg.KeyFingerprint,
 		"group_name":           agg.GroupName,
 		"route_type":           agg.RouteType,
+		"model":                agg.Model,
 		"request_count":        agg.RequestCount,
 		"success_count":        agg.SuccessCount,
 		"failure_count":        agg.FailureCount,
@@ -372,21 +458,177 @@ func gatewayUsageAggResponse(agg *gatewayUsageAgg) map[string]any {
 		"completion_tokens":    agg.CompletionTokens,
 		"total_tokens":         agg.TotalTokens,
 		"usage_cost":           usageCost,
-		"official_input_cost":  roundCost(float64(agg.PromptTokens) / 1_000_000 * 5),
-		"official_cached_cost": roundCost(float64(agg.CachedInputTokens) / 1_000_000 * 0.5),
-		"official_output_cost": roundCost(float64(agg.CompletionTokens) / 1_000_000 * 30),
-		"official_total_cost":  officialCost,
+		"computed_input_cost":  roundCost(agg.ComputedInputCost),
+		"computed_cached_cost": roundCost(agg.ComputedCachedCost),
+		"computed_output_cost": roundCost(agg.ComputedOutputCost),
+		"computed_total_cost":  roundCost(agg.ComputedTotalCost),
+		"computed_cost_known":  agg.ComputedCostKnown,
+		"computed_cost_mixed":  agg.ComputedCostMixed,
 		"avg_latency_ms":       avgLatency,
 		"last_used_at":         nullableTime(agg.lastUsedAt),
 	}
 }
 
-func gatewayOfficialUsageCost(promptTokens, cachedInputTokens, completionTokens int) float64 {
-	return roundCost(float64(promptTokens)/1_000_000*5 + float64(cachedInputTokens)/1_000_000*0.5 + float64(completionTokens)/1_000_000*30)
-}
-
 func roundCost(value float64) float64 {
 	return float64(int64(value*1_000_000+0.5)) / 1_000_000
+}
+
+func gatewayUsageCostSummary(logs []models.GatewayRequestLog) map[string]any {
+	agg := gatewayUsageCostAgg{TopModels: map[string]*gatewayModelCostAgg{}}
+	for _, log := range logs {
+		addGatewayUsageCostSummary(&agg, log)
+	}
+	topModels := make([]map[string]any, 0, len(agg.TopModels))
+	for _, item := range agg.TopModels {
+		topModels = append(topModels, map[string]any{
+			"model":       item.Model,
+			"requests":    item.Requests,
+			"total_cost":  roundCost(item.TotalCost),
+			"known_price": item.KnownPrice,
+		})
+	}
+	sort.SliceStable(topModels, func(i, j int) bool {
+		left, _ := topModels[i]["total_cost"].(float64)
+		right, _ := topModels[j]["total_cost"].(float64)
+		if left != right {
+			return left > right
+		}
+		leftReq, _ := topModels[i]["requests"].(int)
+		rightReq, _ := topModels[j]["requests"].(int)
+		return leftReq > rightReq
+	})
+	if len(topModels) > 3 {
+		topModels = topModels[:3]
+	}
+	return map[string]any{
+		"input_cost":        roundCost(agg.InputCost),
+		"cached_cost":       roundCost(agg.CachedCost),
+		"output_cost":       roundCost(agg.OutputCost),
+		"total_cost":        roundCost(agg.TotalCost),
+		"upstream_cost":     roundCost(agg.UpstreamCost),
+		"prompt_tokens":     agg.PromptTokens,
+		"cached_tokens":     agg.CachedTokens,
+		"output_tokens":     agg.OutputTokens,
+		"total_tokens":      agg.TotalTokens,
+		"known_requests":    agg.KnownRequests,
+		"unknown_requests":  agg.UnknownRequests,
+		"upstream_requests": agg.UpstreamRequests,
+		"top_models":        topModels,
+		"currency":          "USD",
+		"window_seconds":    24 * 60 * 60,
+	}
+}
+
+func addGatewayUsageCostSummary(agg *gatewayUsageCostAgg, log models.GatewayRequestLog) {
+	if log.PromptTokens != nil {
+		agg.PromptTokens += *log.PromptTokens
+	}
+	if log.CachedInputTokens != nil {
+		agg.CachedTokens += *log.CachedInputTokens
+	}
+	if log.CompletionTokens != nil {
+		agg.OutputTokens += *log.CompletionTokens
+	}
+	if log.TotalTokens != nil {
+		agg.TotalTokens += *log.TotalTokens
+	}
+	if log.UsageCost != nil {
+		agg.UpstreamCost += *log.UsageCost
+		agg.UpstreamRequests++
+	}
+	cost, known := gatewayComputedUsageCostForLog(log)
+	agg.InputCost += cost.InputCost
+	agg.CachedCost += cost.CachedCost
+	agg.OutputCost += cost.OutputCost
+	agg.TotalCost += cost.TotalCost
+	if known {
+		agg.KnownRequests++
+	} else if gatewayLogHasUsageTokens(log) {
+		agg.UnknownRequests++
+	}
+	if !gatewayLogHasUsageTokens(log) && log.UsageCost == nil {
+		return
+	}
+	model := gatewayLogEffectiveModel(log)
+	if model == "" {
+		model = "unknown"
+	}
+	if _, ok := agg.TopModels[model]; !ok {
+		agg.TopModels[model] = &gatewayModelCostAgg{Model: model, KnownPrice: known}
+	}
+	agg.TopModels[model].Requests++
+	agg.TopModels[model].TotalCost += cost.TotalCost
+	agg.TopModels[model].KnownPrice = agg.TopModels[model].KnownPrice || known
+}
+
+type gatewayComputedUsageCost struct {
+	InputCost  float64
+	CachedCost float64
+	OutputCost float64
+	TotalCost  float64
+}
+
+func gatewayComputedUsageCostForLog(log models.GatewayRequestLog) (gatewayComputedUsageCost, bool) {
+	price, ok := gatewayPriceForModel(gatewayLogEffectiveModel(log))
+	if !ok {
+		return gatewayComputedUsageCost{}, false
+	}
+	promptTokens := intPtrValue(log.PromptTokens)
+	cachedTokens := intPtrValue(log.CachedInputTokens)
+	outputTokens := intPtrValue(log.CompletionTokens)
+	billableInputTokens := promptTokens - cachedTokens
+	if billableInputTokens < 0 {
+		billableInputTokens = 0
+	}
+	inputCost := float64(billableInputTokens) / 1_000_000 * price.InputPerMTok
+	cachedCost := float64(cachedTokens) / 1_000_000 * price.CachedPerMTok
+	outputCost := float64(outputTokens) / 1_000_000 * price.OutputPerMTok
+	return gatewayComputedUsageCost{
+		InputCost:  inputCost,
+		CachedCost: cachedCost,
+		OutputCost: outputCost,
+		TotalCost:  inputCost + cachedCost + outputCost,
+	}, true
+}
+
+func gatewayLogHasUsageTokens(log models.GatewayRequestLog) bool {
+	return intPtrValue(log.PromptTokens) > 0 ||
+		intPtrValue(log.CachedInputTokens) > 0 ||
+		intPtrValue(log.CompletionTokens) > 0 ||
+		intPtrValue(log.TotalTokens) > 0
+}
+
+func intPtrValue(value *int) int {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
+func gatewayPriceForModel(model string) (gatewayModelPrice, bool) {
+	model = strings.ToLower(strings.TrimSpace(model))
+	if model == "" {
+		return gatewayModelPrice{}, false
+	}
+	for _, item := range []struct {
+		prefix string
+		price  gatewayModelPrice
+	}{
+		{prefix: "gpt-5.5", price: gatewayModelPrice{InputPerMTok: 5, CachedPerMTok: 0.5, OutputPerMTok: 30}},
+		{prefix: "gpt-5.4-mini", price: gatewayModelPrice{InputPerMTok: 0.75, CachedPerMTok: 0.075, OutputPerMTok: 4.5}},
+		{prefix: "gpt-5.4-nano", price: gatewayModelPrice{InputPerMTok: 0.20, CachedPerMTok: 0.02, OutputPerMTok: 1.25}},
+		{prefix: "gpt-5.4", price: gatewayModelPrice{InputPerMTok: 2.5, CachedPerMTok: 0.25, OutputPerMTok: 15}},
+		{prefix: "gpt-5", price: gatewayModelPrice{InputPerMTok: 1.25, CachedPerMTok: 0.125, OutputPerMTok: 10}},
+		{prefix: "gpt-4.1", price: gatewayModelPrice{InputPerMTok: 2, CachedPerMTok: 0.5, OutputPerMTok: 8}},
+		{prefix: "gpt-4o", price: gatewayModelPrice{InputPerMTok: 2.5, CachedPerMTok: 1.25, OutputPerMTok: 10}},
+		{prefix: "o4-mini", price: gatewayModelPrice{InputPerMTok: 1.1, CachedPerMTok: 0.275, OutputPerMTok: 4.4}},
+		{prefix: "o3", price: gatewayModelPrice{InputPerMTok: 2, CachedPerMTok: 0.5, OutputPerMTok: 8}},
+	} {
+		if strings.HasPrefix(model, item.prefix) {
+			return item.price, true
+		}
+	}
+	return gatewayModelPrice{}, false
 }
 
 func sortGatewayUsageRoutes(routes []map[string]any) {
@@ -720,6 +962,9 @@ func (a *App) gatewayLogResponse(logs []models.GatewayRequestLog) []map[string]a
 			"completion_tokens":    item.CompletionTokens,
 			"total_tokens":         item.TotalTokens,
 			"usage_cost":           item.UsageCost,
+			"model":                item.Model,
+			"requested_model":      firstNonEmpty(item.RequestedModel, item.Model),
+			"actual_model":         firstNonEmpty(item.ActualModel, item.RequestedModel, item.Model),
 			"circuit_state_before": item.CircuitStateBefore,
 			"failure_reason":       item.FailureReason,
 			"is_stream":            item.IsStream,
@@ -860,9 +1105,12 @@ func (a *App) ResetGatewayCircuit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"id": state.ID, "is_enabled": state.IsEnabled, "circuit_state": state.CircuitState})
 }
 func (a *App) UpdateGatewayRouteType(w http.ResponseWriter, r *http.Request) {
-	var payload map[string]string
-	_ = httpx.Decode(r, &payload)
-	routeType := normalizeGatewayRouteType(payload["route_type"])
+	var payload schemas.GatewayRouteStateUpdateRequest
+	if err := httpx.Decode(r, &payload); err != nil {
+		writeError(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	routeType := normalizeGatewayRouteType(payload.RouteType)
 	if routeType == "" {
 		writeError(w, http.StatusBadRequest, "route_type 必须是 claude/codex(gpt)/gemini")
 		return
@@ -874,6 +1122,9 @@ func (a *App) UpdateGatewayRouteType(w http.ResponseWriter, r *http.Request) {
 	}
 	state.RouteType = routeType
 	state.RouteTypeManual = true
+	if payload.SupportedModels != nil {
+		state.SupportedModels = services.EncodeGatewaySupportedModels(*payload.SupportedModels)
+	}
 	if err := a.DB.Save(&state).Error; err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1013,8 +1264,20 @@ func (a *App) ProbeGatewayRouteBalance(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "路由 ID 无效")
 		return
 	}
+	var payload struct {
+		BalanceURL      string `json:"balance_url"`
+		BalanceProbeURL string `json:"balance_probe_url"`
+	}
+	if r.Body != nil && r.Body != http.NoBody {
+		if err := httpx.Decode(r, &payload); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, "请求格式错误")
+			return
+		}
+	}
 	settings, _ := a.systemSettings()
-	result, err := services.ProbeGatewayRouteBalance(r.Context(), a.DB, uint(routeID), settings.GatewayRequestTimeout)
+	result, err := services.ProbeGatewayRouteBalanceWithOptions(r.Context(), a.DB, uint(routeID), settings.GatewayRequestTimeout, services.BalanceProbeOptions{
+		BalanceURL: firstNonEmpty(payload.BalanceProbeURL, payload.BalanceURL),
+	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1052,9 +1315,10 @@ func (a *App) GatewayProxy(w http.ResponseWriter, r *http.Request) {
 		SmartPriorityBias:           settings.GatewaySmartPriorityBias,
 	}
 	opts := services.ProxyGatewayOptions{
-		ResponseWriter: w,
-		Group:          r.URL.Query().Get("group"),
-		RouteType:      normalizeGatewayRouteType(firstNonEmpty(r.URL.Query().Get("type"), r.URL.Query().Get("route_type"))),
+		ResponseWriter:     w,
+		Group:              r.URL.Query().Get("group"),
+		RouteType:          normalizeGatewayRouteType(firstNonEmpty(r.URL.Query().Get("type"), r.URL.Query().Get("route_type"))),
+		ModelProbeStrategy: gatewayModelProbeStrategy(r),
 	}
 	_, err := services.ProxyGatewayRequestWithOptions(r.Context(), a.DB, r, targetPath, opts, policy)
 	if err != nil {
@@ -1062,7 +1326,11 @@ func (a *App) GatewayProxy(w http.ResponseWriter, r *http.Request) {
 		status := http.StatusBadGateway
 		var allRoutesFailed services.GatewayAllRoutesFailedError
 		var nonRetryableUpstream services.GatewayNonRetryableUpstreamError
-		if errors.As(err, &allRoutesFailed) || strings.Contains(err.Error(), "没有可用") {
+		var maxAttemptsExceeded services.GatewayMaxAttemptsExceededError
+		var modelNotSupported services.GatewayModelNotSupportedError
+		if errors.As(err, &modelNotSupported) {
+			status = http.StatusBadRequest
+		} else if errors.As(err, &allRoutesFailed) || errors.As(err, &maxAttemptsExceeded) || strings.Contains(err.Error(), "没有可用") {
 			status = http.StatusServiceUnavailable
 		} else if errors.As(err, &nonRetryableUpstream) {
 			status = http.StatusBadGateway
@@ -1074,15 +1342,56 @@ func (a *App) GatewayProxy(w http.ResponseWriter, r *http.Request) {
 
 func gatewayProxyTargetPath(path string) string {
 	switch {
+	case path == "/api/gateway/sub2api/v1" || path == "/api/gateway/sub2api":
+		return ""
+	case strings.HasPrefix(path, "/api/gateway/sub2api/v1/"):
+		return strings.TrimPrefix(path, "/api/gateway/sub2api/v1/")
+	case strings.HasPrefix(path, "/api/gateway/sub2api/"):
+		return strings.TrimPrefix(path, "/api/gateway/sub2api/")
 	case path == "/api/gateway/v1" || path == "/api/gateway":
 		return ""
 	case strings.HasPrefix(path, "/api/gateway/v1/"):
 		return strings.TrimPrefix(path, "/api/gateway/v1/")
 	case strings.HasPrefix(path, "/api/gateway/"):
 		return strings.TrimPrefix(path, "/api/gateway/")
+	case path == "/v1":
+		return ""
+	case strings.HasPrefix(path, "/v1/"):
+		return strings.TrimPrefix(path, "/v1/")
 	default:
 		return strings.TrimLeft(path, "/")
 	}
+}
+
+func gatewayModelProbeStrategy(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	if strings.HasPrefix(r.URL.Path, "/api/gateway/sub2api") {
+		return "sub2api"
+	}
+	if r.URL.Path == "/v1/models" {
+		return "sub2api"
+	}
+	for _, value := range []string{
+		r.URL.Query().Get("model_probe"),
+		r.URL.Query().Get("models_probe"),
+		r.URL.Query().Get("models_strategy"),
+		r.URL.Query().Get("probe_strategy"),
+		r.Header.Get("X-Gateway-Model-Probe"),
+		r.Header.Get("X-Gateway-Models-Strategy"),
+		r.Header.Get("X-Sub2API-Probe"),
+	} {
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "sub2api", "health", "model_health", "synthetic":
+			return "sub2api"
+		}
+	}
+	ua := strings.ToLower(strings.TrimSpace(r.Header.Get("User-Agent")))
+	if strings.Contains(ua, "sub2api") || strings.Contains(ua, "sub2-api") {
+		return "sub2api"
+	}
+	return ""
 }
 
 func normalizeGatewayConcurrencyTransferStrategy(value string) string {
@@ -1113,8 +1422,10 @@ func gatewayRouteResponse(route services.GatewayRoute) map[string]any {
 		"site_missing":           route.Site.ID == 0,
 		"has_api_key":            route.APIKey != "",
 		"group_name":             state.GroupName,
-		"last_balance":           route.Site.LastBalance,
-		"balance_display":        balanceDisplayWithUnit(route.Site.LastBalance, jsonMapString(route.Site.PluginConfig, "balance_unit")),
+		"last_balance":           services.GatewayRouteBalance(route),
+		"balance_display":        balanceDisplayWithUnit(services.GatewayRouteBalance(route), services.GatewayRouteBalanceUnit(route)),
+		"balance_unit":           services.GatewayRouteBalanceUnit(route),
+		"balance_probe_url":      services.GatewayRouteBalanceProbeURL(route),
 		"package_display":        packageDisplay(route.Site),
 		"checkin_status":         route.Site.LastStatus,
 		"key_name":               state.KeyName,
@@ -1122,6 +1433,10 @@ func gatewayRouteResponse(route services.GatewayRoute) map[string]any {
 		"key_source":             state.KeySource,
 		"route_type":             state.RouteType,
 		"route_type_manual":      state.RouteTypeManual,
+		"supported_models":       services.GatewayRouteSupportedModels(state),
+		"model_probe_status":     state.ModelProbeStatus,
+		"model_probe_message":    state.ModelProbeMessage,
+		"model_probe_updated_at": state.ModelProbeUpdatedAt,
 		"route_priority":         state.RoutePriority,
 		"route_priority_manual":  state.RoutePriorityManual,
 		"weight":                 state.Weight,
@@ -1151,7 +1466,7 @@ func gatewayRouteResponse(route services.GatewayRoute) map[string]any {
 
 func gatewayProbeResponse(result services.GatewayProbeResult) map[string]any {
 	state := result.Route.State
-	return map[string]any{"id": state.ID, "site_id": state.SiteID, "site_name": services.GatewayRouteSiteLabel(result.Route), "request_base_url": result.Route.RequestBaseURL, "key_name": state.KeyName, "key_fingerprint": state.KeyFingerprint, "ok": result.OK, "status_code": result.StatusCode, "latency_ms": result.LatencyMS, "message": result.Message, "models": result.Models, "last_status_code": state.LastStatusCode, "last_error": state.LastError, "last_latency_ms": state.LastLatencyMS, "last_success_at": state.LastSuccessAt, "last_failure_at": state.LastFailureAt, "checked_at": result.CheckedAt}
+	return map[string]any{"id": state.ID, "site_id": state.SiteID, "site_name": services.GatewayRouteSiteLabel(result.Route), "request_base_url": result.Route.RequestBaseURL, "key_name": state.KeyName, "key_fingerprint": state.KeyFingerprint, "ok": result.OK, "status_code": result.StatusCode, "latency_ms": result.LatencyMS, "message": result.Message, "models": result.Models, "supported_models": services.GatewayRouteSupportedModels(state), "model_probe_status": state.ModelProbeStatus, "model_probe_message": state.ModelProbeMessage, "model_probe_updated_at": state.ModelProbeUpdatedAt, "last_status_code": state.LastStatusCode, "last_error": state.LastError, "last_latency_ms": state.LastLatencyMS, "last_success_at": state.LastSuccessAt, "last_failure_at": state.LastFailureAt, "checked_at": result.CheckedAt}
 }
 
 func normalizeGatewayRouteType(value string) string {

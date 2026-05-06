@@ -12,7 +12,6 @@ import {
   getGatewayRouteLogs,
   getGatewayUsage,
   probeGatewayRoute,
-  probeGatewayRoutes,
   getGatewayRoutes,
   getGatewaySettings,
   getSiteGroups,
@@ -29,9 +28,9 @@ import ShellLayout from '../components/ShellLayout.vue'
 import StatusPill from '../components/StatusPill.vue'
 import { useDebouncedTask } from '../composables/useDebouncedTask'
 import { useTableScrollHeights } from '../composables/useTableScrollHeights'
-import { balanceTone, formatBalance, formatGroupNames, normalizeGroupNames, parseGroupNames } from '../format'
+import { balanceTone, formatBalance, formatGroupNames, normalizeBalanceUnit, normalizeGroupNames, parseGroupNames } from '../format'
 import { useToast } from '../toast'
-import type { GatewayActiveRequest, GatewayLog, GatewayOverview, GatewayRoute, GatewayRouteDiagnosis, GatewayRouteProbeResult, GatewaySettingsData, GatewayStrategyStat, GatewayUsage, GatewayUsageRoute, SiteGroup, SiteSummary } from '../types'
+import type { BalanceProbeResult, GatewayActiveRequest, GatewayLog, GatewayOverview, GatewayRoute, GatewayRouteDiagnosis, GatewayRouteProbeResult, GatewaySettingsData, GatewayStrategyStat, GatewayUsage, GatewayUsageRoute, SiteGroup, SiteSummary } from '../types'
 
 const props = withDefaults(
   defineProps<{
@@ -66,6 +65,7 @@ const addUpstreamForm = reactive<{
   api_format: ApiFormatOption
   group_name: string
   preferred_model: string
+  supported_models: string[]
 }>({
   name: '',
   base_url: '',
@@ -73,7 +73,12 @@ const addUpstreamForm = reactive<{
   api_format: 'openai',
   group_name: '',
   preferred_model: '',
+  supported_models: [],
 })
+const routeModelsDialogOpen = ref(false)
+const routeModelsDialogSaving = ref(false)
+const routeModelsDialogRoute = ref<GatewayRoute | null>(null)
+const routeModelsDialogValue = ref<string[]>([])
 
 function resetAddUpstreamForm() {
   addUpstreamForm.name = ''
@@ -83,6 +88,7 @@ function resetAddUpstreamForm() {
   addUpstreamForm.group_name = ''
   addUpstreamGroupNames.value = []
   addUpstreamForm.preferred_model = ''
+  addUpstreamForm.supported_models = []
 }
 
 async function submitAddUpstream() {
@@ -104,6 +110,7 @@ async function submitAddUpstream() {
       base_url: baseUrl,
       plugin_key: 'api-supplier',
       group_name: normalizeGroupNames(addUpstreamGroupNames.value.length ? addUpstreamGroupNames.value : addUpstreamForm.group_name),
+      supported_models: normalizeModelList(addUpstreamForm.supported_models),
       is_enabled: true,
       notes: '',
       credentials: {
@@ -149,17 +156,23 @@ const includeDisabled = ref(true)
 let autoRefreshTimer: number | null = null
 let lastAutoRefreshAt = 0
 const gatewayTablePageSize = 20
-const gatewayRouteAutoRefreshMs = 10_000
-const gatewayMonitorAutoRefreshMs = 2_000
+const gatewayRouteAutoRefreshMs = 60_000
+const gatewayMonitorAutoRefreshMs = 60_000
 const selectedGroups = ref<string[]>([])
 const addUpstreamGroupNames = ref<string[]>([])
 const selectedRouteTypes = ref<Array<GatewayRoute['route_type']>>([])
-const selectedCircuitStates = ref<Array<'closed' | 'open' | 'half_open' | 'paused'>>([])
-const selectedPackageStates = ref<Array<'with_package' | 'without_package'>>([])
-const selectedBalanceStates = ref<Array<'with_balance' | 'without_balance' | 'zero_or_negative'>>([])
 const selectedIssueStates = ref<Array<'with_error' | 'without_error'>>([])
 const probingRouteIds = ref<number[]>([])
 const balanceProbingRouteIds = ref<number[]>([])
+type RouteBatchProgress = { total: number; done: number; success: number; failed: number }
+const probeAllProgress = ref<RouteBatchProgress | null>(null)
+const balanceProbeAllLoading = ref(false)
+const balanceProbeAllProgress = ref<RouteBatchProgress | null>(null)
+const balanceProbeManualOpen = ref(false)
+const balanceProbeManualLoading = ref(false)
+const balanceProbeManualRoute = ref<GatewayRoute | null>(null)
+const balanceProbeManualURL = ref('')
+const balanceProbeManualMessage = ref('')
 const routeSearch = ref('')
 const logSearch = ref('')
 const routeLogSearch = ref('')
@@ -226,7 +239,6 @@ const routeColumns = [
   { title: '优先级', key: 'priority', width: 90, sorter: (a: GatewayRoute, b: GatewayRoute) => a.route_priority - b.route_priority },
   { title: '权重', key: 'weight', width: 80, sorter: (a: GatewayRoute, b: GatewayRoute) => a.weight - b.weight },
   { title: '并发', key: 'concurrency', width: 130, sorter: (a: GatewayRoute, b: GatewayRoute) => a.active_concurrency - b.active_concurrency },
-  { title: '熔断状态', key: 'circuit', width: 120, sorter: (a: GatewayRoute, b: GatewayRoute) => String(a.circuit_state).localeCompare(String(b.circuit_state), 'zh-CN') },
   { title: '成功率', key: 'success_rate', width: 110, sorter: (a: GatewayRoute, b: GatewayRoute) => a.success_rate - b.success_rate },
   { title: '延迟', key: 'latency', width: 138, sorter: (a: GatewayRoute, b: GatewayRoute) => (a.last_latency_ms ?? a.avg_latency_ms ?? Infinity) - (b.last_latency_ms ?? b.avg_latency_ms ?? Infinity) },
   { title: '最后异常', key: 'error', width: 220, sorter: (a: GatewayRoute, b: GatewayRoute) => new Date(routeLastUpdateTime(a) ?? 0).getTime() - new Date(routeLastUpdateTime(b) ?? 0).getTime() },
@@ -251,24 +263,6 @@ const routeTypeFilterOptions: Array<{ label: string; value: GatewayRoute['route_
   { label: 'Gemini', value: 'gemini' },
 ]
 
-const circuitStateOptions: Array<{ label: string; value: 'closed' | 'open' | 'half_open' | 'paused' }> = [
-  { label: '健康', value: 'closed' },
-  { label: '熔断中', value: 'open' },
-  { label: '半开探测', value: 'half_open' },
-  { label: '已停用', value: 'paused' },
-]
-
-const packageStateOptions: Array<{ label: string; value: 'with_package' | 'without_package' }> = [
-  { label: '有套餐', value: 'with_package' },
-  { label: '无套餐', value: 'without_package' },
-]
-
-const balanceStateOptions: Array<{ label: string; value: 'with_balance' | 'without_balance' | 'zero_or_negative' }> = [
-  { label: '有余额', value: 'with_balance' },
-  { label: '无余额信息', value: 'without_balance' },
-  { label: '零/负余额', value: 'zero_or_negative' },
-]
-
 const issueStateOptions: Array<{ label: string; value: 'with_error' | 'without_error' }> = [
   { label: '有异常', value: 'with_error' },
   { label: '无异常', value: 'without_error' },
@@ -278,6 +272,7 @@ const logColumns = [
   { title: '时间', key: 'created_at', width: 180, sorter: (a: GatewayLog, b: GatewayLog) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime() },
   { title: '请求', key: 'request', width: 210, sorter: (a: GatewayLog, b: GatewayLog) => `${a.method} ${a.target_path}`.localeCompare(`${b.method} ${b.target_path}`, 'zh-CN') },
   { title: '路由', key: 'route', width: 300, sorter: (a: GatewayLog, b: GatewayLog) => logRouteLabel(a).localeCompare(logRouteLabel(b), 'zh-CN') },
+  { title: '模型', key: 'model', width: 260, sorter: (a: GatewayLog, b: GatewayLog) => logModelMeta(a).localeCompare(logModelMeta(b), 'zh-CN') },
   { title: '结果', key: 'status', width: 120, sorter: (a: GatewayLog, b: GatewayLog) => Number(a.success) - Number(b.success) },
   { title: '延迟', key: 'latency', width: 100, sorter: (a: GatewayLog, b: GatewayLog) => (a.latency_ms ?? Infinity) - (b.latency_ms ?? Infinity) },
   { title: '尝试', key: 'attempt', width: 90, sorter: (a: GatewayLog, b: GatewayLog) => a.attempt_index - b.attempt_index },
@@ -289,11 +284,11 @@ const usageColumns = [
   { title: '请求', key: 'requests', width: 90, sorter: (a: GatewayUsageRoute, b: GatewayUsageRoute) => a.request_count - b.request_count },
   { title: '成功率', key: 'success_rate', width: 100, sorter: (a: GatewayUsageRoute, b: GatewayUsageRoute) => a.success_rate - b.success_rate },
   { title: '流式', key: 'stream', width: 80, sorter: (a: GatewayUsageRoute, b: GatewayUsageRoute) => a.stream_request_count - b.stream_request_count },
-  { title: 'Prompt', key: 'prompt_tokens', width: 110, sorter: (a: GatewayUsageRoute, b: GatewayUsageRoute) => a.prompt_tokens - b.prompt_tokens },
-  { title: 'Cached', key: 'cached_input_tokens', width: 110, sorter: (a: GatewayUsageRoute, b: GatewayUsageRoute) => a.cached_input_tokens - b.cached_input_tokens },
-  { title: 'Completion', key: 'completion_tokens', width: 130, sorter: (a: GatewayUsageRoute, b: GatewayUsageRoute) => a.completion_tokens - b.completion_tokens },
+  { title: '输入', key: 'prompt_tokens', width: 110, sorter: (a: GatewayUsageRoute, b: GatewayUsageRoute) => a.prompt_tokens - b.prompt_tokens },
+  { title: '缓存输入', key: 'cached_input_tokens', width: 110, sorter: (a: GatewayUsageRoute, b: GatewayUsageRoute) => a.cached_input_tokens - b.cached_input_tokens },
+  { title: '输出', key: 'completion_tokens', width: 130, sorter: (a: GatewayUsageRoute, b: GatewayUsageRoute) => a.completion_tokens - b.completion_tokens },
   { title: '总消耗', key: 'total_tokens', width: 120, sorter: (a: GatewayUsageRoute, b: GatewayUsageRoute) => a.total_tokens - b.total_tokens },
-  { title: '官方费用', key: 'official_total_cost', width: 120, sorter: (a: GatewayUsageRoute, b: GatewayUsageRoute) => a.official_total_cost - b.official_total_cost },
+  { title: '模型费用', key: 'computed_total_cost', width: 120, sorter: (a: GatewayUsageRoute, b: GatewayUsageRoute) => a.computed_total_cost - b.computed_total_cost },
   { title: '平均延迟', key: 'avg_latency', width: 110, sorter: (a: GatewayUsageRoute, b: GatewayUsageRoute) => (a.avg_latency_ms ?? Infinity) - (b.avg_latency_ms ?? Infinity) },
   { title: '最后使用', key: 'last_used_at', width: 170, sorter: (a: GatewayUsageRoute, b: GatewayUsageRoute) => new Date(a.last_used_at ?? 0).getTime() - new Date(b.last_used_at ?? 0).getTime() },
 ]
@@ -322,26 +317,159 @@ const gatewayFailureRetryModeOptions: Array<{ label: string; value: GatewaySetti
   { label: '所有上游错误', value: 'all', description: '任意非 2xx 上游响应都会继续切换其他路由，适合希望最大化请求成功率的场景。' },
 ]
 
-const metricCards = computed<Array<{ title: string; value: string | number; tone: MetricTone }>>(() => {
+function balanceUnitOrder(unit: string) {
+  const normalized = normalizeBalanceUnit(unit)
+  if (normalized === '$') return 0
+  if (normalized === '¥') return 1
+  if (normalized === '€') return 2
+  if (normalized === '£') return 3
+  return 10
+}
+
+function routeBalanceUnit(route: GatewayRoute) {
+  const display = String(route.balance_display ?? '').trim()
+  if (/^[$¥€£]/.test(display)) {
+    return display[0]
+  }
+  const suffix = display.match(/\s([^\s]+)$/)
+  if (suffix) {
+    return normalizeBalanceUnit(suffix[1])
+  }
+  return normalizeBalanceUnit(route.balance_unit)
+}
+
+const routeBalancesByUnit = computed(() => {
+  const totals = new Map<string, number>()
+  for (const route of routes.value) {
+    if (route.last_balance === null || route.last_balance === undefined || Number.isNaN(route.last_balance)) {
+      continue
+    }
+    const unit = routeBalanceUnit(route)
+    totals.set(unit, (totals.get(unit) ?? 0) + Number(route.last_balance))
+  }
+  return totals
+})
+
+const routeTotalBalanceSummary = computed(() => {
+  if (!routeBalancesByUnit.value.size) {
+    return '暂无'
+  }
+  return [...routeBalancesByUnit.value.entries()]
+    .sort(([left], [right]) => balanceUnitOrder(left) - balanceUnitOrder(right) || left.localeCompare(right, 'zh-CN'))
+    .map(([unit, value]) => formatBalance(value, unit))
+    .join(' / ')
+})
+
+const metricCards = computed<Array<{
+  title: string
+  value: string | number
+  tone: MetricTone
+}>>(() => {
   if (!overview.value) {
     return []
   }
   const ov = overview.value
   return [
-    { title: '总路由数', value: ov.total_routes, tone: 'primary' },
-    { title: '健康路由', value: ov.healthy_routes, tone: 'success' },
-    { title: '熔断中', value: ov.open_circuit_routes, tone: 'warning' },
-    { title: '总额度', value: ov.total_balance_display || '暂无', tone: 'info' },
-    { title: '当前并发', value: ov.active_concurrency, tone: 'primary' },
-    { title: '24h 请求数', value: ov.request_count_24h, tone: 'info' },
-    { title: '24h 成功率', value: `${ov.success_rate_24h}%`, tone: 'success' },
     {
-      title: '24h 平均延迟',
-      value: ov.avg_latency_ms_24h !== null ? `${ov.avg_latency_ms_24h} ms` : '暂无',
+      title: '总额度',
+      value: routeTotalBalanceSummary.value,
       tone: 'primary',
     },
-    { title: '已同步站点', value: ov.quantified_balance_site_count, tone: 'neutral' },
+    {
+      title: '24H 请求',
+      value: formatNumber(ov.request_count_24h),
+      tone: 'info',
+    },
+    {
+      title: '成功率',
+      value: `${ov.success_rate_24h}%`,
+      tone: 'success',
+    },
+    {
+      title: '并发数',
+      value: formatNumber(ov.active_concurrency),
+      tone: 'neutral',
+    },
+    {
+      title: '24H 模型费用',
+      value: formatUSD(ov.usage_cost_24h?.total_cost),
+      tone: ov.usage_cost_24h?.unknown_requests ? 'warning' : 'primary',
+    },
   ]
+})
+
+const routePoolStatusCards = computed<Array<{
+  key: string
+  label: string
+  value: number
+  tone: 'success' | 'warning' | 'danger' | 'neutral'
+  ratio: number
+}>>(() => {
+  if (!overview.value) {
+    return []
+  }
+  const ov = overview.value
+  const total = Math.max(ov.total_routes, 1)
+  return [
+    {
+      key: 'healthy',
+      label: '健康路由',
+      value: ov.healthy_routes,
+      tone: 'success',
+      ratio: ov.healthy_routes / total,
+    },
+    {
+      key: 'half_open',
+      label: '半开探测',
+      value: ov.half_open_routes,
+      tone: 'warning',
+      ratio: ov.half_open_routes / total,
+    },
+    {
+      key: 'open',
+      label: '熔断中',
+      value: ov.open_circuit_routes,
+      tone: 'danger',
+      ratio: ov.open_circuit_routes / total,
+    },
+    {
+      key: 'disabled',
+      label: '停用路由',
+      value: ov.disabled_routes,
+      tone: 'neutral',
+      ratio: ov.disabled_routes / total,
+    },
+  ]
+})
+
+const routePoolPreviewRoutes = computed(() =>
+  routes.value
+    .slice()
+    .sort(
+      (a, b) =>
+        b.active_concurrency - a.active_concurrency ||
+        b.request_count - a.request_count ||
+        Number(Boolean(b.last_error)) - Number(Boolean(a.last_error)) ||
+        a.route_priority - b.route_priority,
+    )
+    .slice(0, 5),
+)
+
+const gatewayStrategyCards = computed(() => {
+  if (!overview.value?.strategy_breakdown_24h?.length) {
+    return []
+  }
+  const sorted = overview.value.strategy_breakdown_24h
+    .slice()
+    .sort((a, b) => b.request_count - a.request_count)
+  const peak = Math.max(...sorted.map((item) => item.request_count), 1)
+  return sorted.slice(0, 4).map((item, index) => ({
+    key: item.route_strategy,
+    title: strategyLabel(item.route_strategy),
+    value: formatNumber(item.request_count),
+    width: `${Math.max(18, (item.request_count / peak) * 100)}%`,
+    tone: (['primary', 'info', 'success', 'warning'] as MetricTone[])[index] ?? 'neutral',
+  }))
 })
 
 function strategyLabel(strategy: GatewayStrategyStat['route_strategy']) {
@@ -381,6 +509,27 @@ function formatNumber(value: number | null | undefined) {
   return Number.isFinite(numeric) ? numeric.toLocaleString('zh-CN') : '0'
 }
 
+function normalizeModelList(values: unknown): string[] {
+  if (Array.isArray(values)) {
+    return values
+      .map((item) => String(item ?? '').trim())
+      .filter((item, index, source) => item && source.indexOf(item) === index)
+  }
+  return String(values ?? '')
+    .split(/[\n\r,，\t]+/)
+    .map((item) => item.trim())
+    .filter((item, index, source) => item && source.indexOf(item) === index)
+}
+
+function supportedModelsPreview(values: unknown, limit = 2) {
+  const normalized = normalizeModelList(values)
+  if (!normalized.length) {
+    return '未声明'
+  }
+  const preview = normalized.slice(0, limit).join(' / ')
+  return normalized.length > limit ? `${preview} 等 ${normalized.length} 个` : preview
+}
+
 function formatUSD(value: number | null | undefined) {
   const numeric = Number(value ?? 0)
   if (!Number.isFinite(numeric)) {
@@ -412,6 +561,7 @@ function usageRouteLabel(route: GatewayUsageRoute) {
 function usageRouteMeta(route: GatewayUsageRoute) {
   return [
     route.route_id ? `Route #${route.route_id}` : 'Route 未知',
+    route.model ? `模型 ${route.model}` : '',
     route.site_id ? `站点 #${route.site_id}` : '',
     route.route_type ? `类型 ${routeTypeLabel(route.route_type)}` : '',
     route.group_name ? `分组 ${formatGroupNames(route.group_name)}` : '',
@@ -424,7 +574,7 @@ const usageSummaryCards = computed<Array<{ title: string; value: string; tone: M
     return []
   }
   return [
-    { title: '官方费用', value: formatUSD(gatewayUsage.value.official_total_cost), tone: 'primary' },
+    { title: '模型费用', value: formatUSD(gatewayUsage.value.computed_total_cost), tone: gatewayUsage.value.computed_cost_mixed ? 'warning' : 'primary' },
     { title: '时间段请求', value: formatNumber(gatewayUsage.value.request_count), tone: 'primary' },
     { title: '成功请求', value: formatNumber(gatewayUsage.value.success_count), tone: 'success' },
     { title: '总 Token', value: formatNumber(gatewayUsage.value.total_tokens), tone: 'info' },
@@ -514,6 +664,8 @@ function routeDetailItems(route: GatewayRoute) {
     { label: '快照', value: routeSnapshotLabel(route) || '未记录' },
     { label: '当前出口', value: route.request_base_url || route.base_url || route.site_base_url_snapshot || '未记录' },
     { label: '出口候选', value: routeRequestBasePreview(route) },
+    { label: '余额接口', value: route.balance_probe_url || '自动探测' },
+    { label: '支持模型', value: supportedModelsPreview(route.supported_models, 3) },
     { label: '站点', value: `#${route.site_id}` },
     { label: 'Key', value: routeKeyLabel(route) },
   ]
@@ -554,14 +706,6 @@ function routeCircuitState(route: GatewayRoute): 'closed' | 'open' | 'half_open'
   return 'closed'
 }
 
-function hasBalance(route: GatewayRoute) {
-  return route.last_balance !== null && route.last_balance !== undefined && !Number.isNaN(route.last_balance)
-}
-
-function hasPackage(route: GatewayRoute) {
-  return Boolean(String(route.package_display ?? '').trim())
-}
-
 function hasIssue(route: GatewayRoute) {
   return Boolean(String(route.last_error ?? '').trim())
 }
@@ -588,6 +732,17 @@ function routeLastUpdateLabel(route: GatewayRoute) {
 
 function asRoute(record: unknown) {
   return record as GatewayRoute
+}
+
+function normalizeGatewayRoute(route: GatewayRoute): GatewayRoute {
+  const balanceUnit = normalizeBalanceUnit(route.balance_unit)
+  return {
+    ...route,
+    balance_unit: balanceUnit,
+    balance_display: route.balance_display || formatBalance(route.last_balance, balanceUnit),
+    package_unit: normalizeBalanceUnit(route.package_unit, ''),
+    supported_models: normalizeModelList(route.supported_models),
+  }
 }
 
 function asLog(record: unknown) {
@@ -636,6 +791,18 @@ function logRouteMeta(log: GatewayLog) {
   return values.join(' · ')
 }
 
+function logRequestedModel(log: GatewayLog) {
+  return String(log.requested_model || log.model || '').trim() || '未声明'
+}
+
+function logActualModel(log: GatewayLog) {
+  return String(log.actual_model || log.requested_model || log.model || '').trim() || '未记录'
+}
+
+function logModelMeta(log: GatewayLog) {
+  return `请求 ${logRequestedModel(log)} · 命中 ${logActualModel(log)}`
+}
+
 function activeRequestRouteLabel(item: GatewayActiveRequest) {
   const label = String(item.route_label ?? '').trim()
   if (label) {
@@ -681,6 +848,8 @@ const activeRouteFeed = computed(() =>
     meta: activeRequestMeta(item),
     elapsedLabel: formatElapsed(item.elapsed_ms),
     routeTypeLabel: activeRequestRouteTypeLabel(item.route_type),
+    requestedModelLabel: String(item.requested_model || '').trim() || '未声明',
+    actualModelLabel: String(item.actual_model || item.requested_model || '').trim() || '待返回',
     groupLabel: formatGroupNames(item.group_name) || '未分组',
     targetLabel: `${item.method} ${item.target_path || '/'}`,
     strategyLabel: strategyLabel(item.route_strategy as GatewayStrategyStat['route_strategy']),
@@ -704,6 +873,8 @@ const recentRouteFeed = computed(() =>
     ].filter(Boolean),
     elapsedLabel: item.latency_ms !== null ? `${item.latency_ms} ms` : '暂无延迟',
     routeTypeLabel: '',
+    requestedModelLabel: logRequestedModel(item),
+    actualModelLabel: logActualModel(item),
     groupLabel: formatGroupNames(item.group_name) || '未分组',
     targetLabel: `${item.method} ${item.target_path || '/'}`,
     strategyLabel: strategyLabel(item.route_strategy as GatewayStrategyStat['route_strategy']),
@@ -717,16 +888,6 @@ const recentRouteFeed = computed(() =>
 )
 
 const routeActivityFeed = computed(() => [...activeRouteFeed.value, ...recentRouteFeed.value].slice(0, 12))
-
-const routeActivitySubtitle = computed(() => {
-  if (activeRouteFeed.value.length) {
-    return `${activeRouteFeed.value.length} 个进行中，最近 ${recentRouteFeed.value.length} 条完成`
-  }
-  if (recentRouteFeed.value.length) {
-    return '当前没有进行中请求，展示最近完成请求'
-  }
-  return '当前没有进行中的网关请求'
-})
 
 function balanceClass(balance: number | null | undefined) {
   const tone = balanceTone(balance)
@@ -830,21 +991,10 @@ const filteredRoutes = computed(() => {
   const keyword = routeSearch.value.trim().toLowerCase()
   const selectedGroupSet = new Set(selectedGroups.value)
   const selectedRouteTypeSet = new Set(selectedRouteTypes.value)
-  const selectedCircuitStateSet = new Set(selectedCircuitStates.value)
-  const selectedPackageStateSet = new Set(selectedPackageStates.value)
-  const selectedBalanceStateSet = new Set(selectedBalanceStates.value)
   const selectedIssueStateSet = new Set(selectedIssueStates.value)
   return routes.value.filter((route) =>
     (!selectedGroupSet.size || parseGroupNames(route.group_name).some((groupName) => selectedGroupSet.has(groupName))) &&
     (!selectedRouteTypeSet.size || selectedRouteTypeSet.has(route.route_type)) &&
-    (!selectedCircuitStateSet.size || selectedCircuitStateSet.has(routeCircuitState(route))) &&
-    (!selectedPackageStateSet.size ||
-      (selectedPackageStateSet.has('with_package') && hasPackage(route)) ||
-      (selectedPackageStateSet.has('without_package') && !hasPackage(route))) &&
-    (!selectedBalanceStateSet.size ||
-      (selectedBalanceStateSet.has('with_balance') && hasBalance(route)) ||
-      (selectedBalanceStateSet.has('without_balance') && !hasBalance(route)) ||
-      (selectedBalanceStateSet.has('zero_or_negative') && hasBalance(route) && Number(route.last_balance) <= 0)) &&
     (!selectedIssueStateSet.size ||
       (selectedIssueStateSet.has('with_error') && hasIssue(route)) ||
       (selectedIssueStateSet.has('without_error') && !hasIssue(route))) &&
@@ -875,6 +1025,9 @@ const filteredLogs = computed(() => {
     includesSearch(
       [
         log.site_name,
+        log.model,
+        log.requested_model,
+        log.actual_model,
         log.route_id,
         log.route_label,
         log.key_name,
@@ -896,6 +1049,9 @@ const filteredRouteLogs = computed(() => {
     includesSearch(
       [
         log.site_name,
+        log.model,
+        log.requested_model,
+        log.actual_model,
         log.route_id,
         log.route_label,
         log.key_name,
@@ -914,9 +1070,6 @@ const filteredRouteLogs = computed(() => {
 const activeRouteFilterCount = computed(() =>
   selectedGroups.value.length +
   selectedRouteTypes.value.length +
-  selectedCircuitStates.value.length +
-  selectedPackageStates.value.length +
-  selectedBalanceStates.value.length +
   selectedIssueStates.value.length +
   (routeSearch.value.trim() ? 1 : 0),
 )
@@ -925,26 +1078,21 @@ function clearRouteFilters() {
   routeSearch.value = ''
   selectedGroups.value = []
   selectedRouteTypes.value = []
-  selectedCircuitStates.value = []
-  selectedPackageStates.value = []
-  selectedBalanceStates.value = []
   selectedIssueStates.value = []
 }
 
 function applySiteSummary(summary: SiteSummary) {
   routes.value = routes.value.map((route) =>
     route.site_id === summary.site_id
-      ? {
+      ? normalizeGatewayRoute({
           ...route,
-          last_balance: summary.last_balance,
-          balance_display: summary.balance_display,
           package_remaining: summary.package_remaining,
           package_total: summary.package_total,
           package_used: summary.package_used,
           package_unit: summary.package_unit,
           package_display: summary.package_display,
           checkin_status: summary.checkin_status,
-        }
+        })
       : route,
   )
 }
@@ -952,28 +1100,86 @@ function applySiteSummary(summary: SiteSummary) {
 function applyProbeResult(result: GatewayRouteProbeResult) {
   routes.value = routes.value.map((route) =>
     route.id === result.id
-      ? {
+      ? normalizeGatewayRoute({
           ...route,
           last_status_code: result.last_status_code,
-          last_error: result.last_error,
-          last_latency_ms: result.last_latency_ms,
-          last_success_at: result.last_success_at,
-          last_failure_at: result.last_failure_at,
-        }
+	          last_error: result.last_error,
+	          last_latency_ms: result.last_latency_ms,
+	          last_success_at: result.last_success_at,
+	          last_failure_at: result.last_failure_at,
+	          supported_models: result.supported_models ?? result.models ?? route.supported_models,
+	          model_probe_status: result.model_probe_status ?? route.model_probe_status,
+	          model_probe_message: result.model_probe_message ?? result.message ?? route.model_probe_message,
+	          model_probe_updated_at: result.model_probe_updated_at ?? result.checked_at ?? route.model_probe_updated_at,
+	        })
       : route,
   )
 }
 
-function applyRouteBalanceResult(result: { site_id: number; route_id: number; last_balance: number | null; remaining: number | null; unit?: string; balance_display?: string | null }) {
+function applyRouteBalanceResult(result: BalanceProbeResult) {
   routes.value = routes.value.map((route) =>
-    route.site_id === result.site_id
-      ? {
+    route.id === result.route_id
+      ? normalizeGatewayRoute({
           ...route,
           last_balance: result.last_balance ?? result.remaining,
           balance_display: result.balance_display || formatBalance(result.last_balance ?? result.remaining, result.unit),
-        }
+          balance_unit: normalizeBalanceUnit(result.unit ?? route.balance_unit),
+          balance_probe_url: result.balance_probe_url ?? route.balance_probe_url,
+        })
       : route,
   )
+}
+
+async function probeRouteBalances(routeIds: number[], options: { silent?: boolean; progress?: { value: RouteBatchProgress | null } } = {}) {
+  const ids = [...new Set(routeIds.filter((id) => Number.isFinite(id) && id > 0))]
+  if (!ids.length) {
+    return { success: 0, failed: 0 }
+  }
+  balanceProbingRouteIds.value = [...new Set([...balanceProbingRouteIds.value, ...ids])]
+  if (options.progress) {
+    options.progress.value = { total: ids.length, done: 0, success: 0, failed: 0 }
+  }
+  let success = 0
+  let failed = 0
+  try {
+    for (const routeId of ids) {
+      try {
+        const result = await probeGatewayRouteBalance(routeId)
+        applyRouteBalanceResult(result)
+        if (result.ok) {
+          success += 1
+        } else {
+          failed += 1
+        }
+      } catch {
+        failed += 1
+      } finally {
+        if (options.progress?.value) {
+          options.progress.value = {
+            ...options.progress.value,
+            done: options.progress.value.done + 1,
+            success,
+            failed,
+          }
+        }
+      }
+    }
+    try {
+      overview.value = await getGatewayOverview()
+    } catch {
+      // 余额已写入路由，概览统计刷新失败不阻断当前操作。
+    }
+    if (!options.silent) {
+      if (failed > 0) {
+        toast.error(`余额探测完成，成功 ${success} 条，失败 ${failed} 条。`)
+      } else {
+        toast.success(`余额探测完成，${success} 条全部读取成功。`)
+      }
+    }
+    return { success, failed }
+  } finally {
+    balanceProbingRouteIds.value = balanceProbingRouteIds.value.filter((id) => !ids.includes(id))
+  }
 }
 
 function isRouteProbing(routeId: number) {
@@ -984,9 +1190,26 @@ function isRouteBalanceProbing(routeId: number) {
   return balanceProbingRouteIds.value.includes(routeId)
 }
 
+const probeAllProgressPercent = computed(() => {
+  const progress = probeAllProgress.value
+  if (!progress || progress.total <= 0) {
+    return 0
+  }
+  return Math.min(100, Math.round((progress.done / progress.total) * 100))
+})
+
+const balanceProbeAllProgressPercent = computed(() => {
+  const progress = balanceProbeAllProgress.value
+  if (!progress || progress.total <= 0) {
+    return 0
+  }
+  return Math.min(100, Math.round((progress.done / progress.total) * 100))
+})
+
 function applyReorderedRoutes(routeData: GatewayRoute[]) {
-  priorityRoutes.value = routeData
-  routes.value = routeData.filter((route) => includeDisabled.value || route.is_enabled)
+  const normalized = routeData.map(normalizeGatewayRoute)
+  priorityRoutes.value = normalized
+  routes.value = normalized.filter((route) => includeDisabled.value || route.is_enabled)
 }
 
 async function openPriorityDialog(route: GatewayRoute) {
@@ -996,7 +1219,7 @@ async function openPriorityDialog(route: GatewayRoute) {
   priorityRoutes.value = routes.value
   priorityDialogLoading.value = true
   try {
-    priorityRoutes.value = await getGatewayRoutes({ includeDisabled: true })
+    priorityRoutes.value = (await getGatewayRoutes({ includeDisabled: true })).map(normalizeGatewayRoute)
     priorityRoute.value = priorityRoutes.value.find((item) => item.id === route.id) ?? route
   } catch (err) {
     toast.error(err instanceof Error ? err.message : '优先级列表加载失败')
@@ -1065,6 +1288,7 @@ const { schedule: scheduleRouteSummaryRefresh } = useDebouncedTask(refreshRouteS
 
 async function handleRefresh() {
   await loadData()
+  await probeRouteBalances(routes.value.map((route) => route.id), { silent: true })
   await refreshRouteSummaries()
 }
 
@@ -1133,8 +1357,9 @@ async function loadData() {
     ])
     overview.value = overviewData
     Object.assign(settingsForm, settingsData)
-    routes.value = routeData
-    priorityRoutes.value = routeData
+    const normalizedRoutes = routeData.map(normalizeGatewayRoute)
+    priorityRoutes.value = normalizedRoutes
+    routes.value = normalizedRoutes
     logs.value = logData
     siteGroups.value = groupData
     gatewayUsage.value = usageData
@@ -1167,10 +1392,10 @@ async function refreshRealtimeData() {
       }) : Promise.resolve(null),
     ])
     overview.value = overviewData
-    routes.value = routeData
+    routes.value = routeData.map(normalizeGatewayRoute)
     gatewayUsage.value = usageData
     if (!priorityDialogOpen.value) {
-      priorityRoutes.value = routeData
+      priorityRoutes.value = routeData.map(normalizeGatewayRoute)
     }
     logs.value = logData
     await loadActiveRequests(true)
@@ -1211,8 +1436,9 @@ async function handleSync() {
   loading.value = true
   try {
     const result = await syncGatewayRoutes()
-    toast.success(`已同步 ${result.route_count} 条网关路由。`)
     await loadData()
+    const balances = await probeRouteBalances(routes.value.map((route) => route.id), { silent: true })
+    toast.success(`已同步 ${result.route_count} 条网关路由，余额读取成功 ${balances.success} 条。`)
   } catch (err) {
     toast.error(err instanceof Error ? err.message : '同步失败')
   } finally {
@@ -1268,13 +1494,18 @@ async function handleResetCircuit(route: GatewayRoute) {
 
 async function handleRouteTypeChange(route: GatewayRoute, routeType: GatewayRoute['route_type']) {
   const previousType = route.route_type
-  routes.value = routes.value.map((item) => (item.id === route.id ? { ...item, route_type: routeType } : item))
+  routes.value = routes.value.map((item) => (item.id === route.id ? normalizeGatewayRoute({ ...item, route_type: routeType }) : item))
   try {
-    const updated = await updateGatewayRouteType(route.id, routeType)
-    routes.value = routes.value.map((item) => (item.id === route.id ? updated : item))
+    const updated = await updateGatewayRouteType(route.id, {
+      route_type: routeType,
+      supported_models: route.supported_models ?? [],
+    })
+    const normalizedUpdated = normalizeGatewayRoute(updated)
+    routes.value = routes.value.map((item) => (item.id === route.id ? normalizedUpdated : item))
+    priorityRoutes.value = priorityRoutes.value.map((item) => (item.id === route.id ? normalizedUpdated : item))
     toast.success(`${loadRouteLabel(route)} 已切换为 ${routeTypeLabel(routeType)}。`)
   } catch (err) {
-    routes.value = routes.value.map((item) => (item.id === route.id ? { ...item, route_type: previousType } : item))
+    routes.value = routes.value.map((item) => (item.id === route.id ? normalizeGatewayRoute({ ...item, route_type: previousType }) : item))
     toast.error(err instanceof Error ? err.message : '类型切换失败')
   }
 }
@@ -1286,6 +1517,34 @@ async function handleRouteTypeSelect(route: GatewayRoute, value: unknown) {
   await handleRouteTypeChange(route, value)
 }
 
+function openRouteModelsDialog(route: GatewayRoute) {
+  routeModelsDialogRoute.value = route
+  routeModelsDialogValue.value = [...normalizeModelList(route.supported_models)]
+  routeModelsDialogOpen.value = true
+}
+
+async function saveRouteModelsDialog() {
+  const route = routeModelsDialogRoute.value
+  if (!route) {
+    return
+  }
+  routeModelsDialogSaving.value = true
+  try {
+    const updated = normalizeGatewayRoute(await updateGatewayRouteType(route.id, {
+      route_type: route.route_type,
+      supported_models: normalizeModelList(routeModelsDialogValue.value),
+    }))
+    routes.value = routes.value.map((item) => (item.id === route.id ? updated : item))
+    priorityRoutes.value = priorityRoutes.value.map((item) => (item.id === route.id ? updated : item))
+    routeModelsDialogOpen.value = false
+    toast.success('路由支持模型已更新。')
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '保存失败')
+  } finally {
+    routeModelsDialogSaving.value = false
+  }
+}
+
 async function handleProbeAll() {
   const routeIds = routes.value.map((route) => route.id)
   if (!routeIds.length) {
@@ -1294,24 +1553,101 @@ async function handleProbeAll() {
   }
 
   probeLoading.value = true
+  probeAllProgress.value = { total: routeIds.length, done: 0, success: 0, failed: 0 }
+  probingRouteIds.value = [...new Set([...probingRouteIds.value, ...routeIds])]
+  const failedResults: GatewayRouteProbeResult[] = []
   try {
-    const results = await probeGatewayRoutes(routeIds)
-    results.forEach(applyProbeResult)
-    const successCount = results.filter((item) => item.ok).length
-    const failed = results.filter((item) => !item.ok)
-    if (!failed.length) {
+    for (const routeId of routeIds) {
+      try {
+        const result = await probeGatewayRoute(routeId)
+        applyProbeResult(result)
+        if (result.ok) {
+          probeAllProgress.value.success += 1
+        } else {
+          probeAllProgress.value.failed += 1
+          failedResults.push(result)
+        }
+      } catch (err) {
+        probeAllProgress.value.failed += 1
+        const route = routes.value.find((item) => item.id === routeId)
+        const message = err instanceof Error ? err.message : '探测请求失败'
+        failedResults.push({
+          id: routeId,
+          site_id: route?.site_id ?? 0,
+          site_name: route ? loadRouteLabel(route) : `Route #${routeId}`,
+          request_base_url: route?.request_base_url,
+          key_name: route?.key_name ?? '',
+          key_fingerprint: route?.key_fingerprint,
+          ok: false,
+          status_code: null,
+          latency_ms: null,
+          message,
+          models: [],
+          supported_models: route?.supported_models ?? [],
+          last_status_code: route?.last_status_code ?? null,
+          last_error: route?.last_error ?? message,
+          last_latency_ms: route?.last_latency_ms ?? null,
+          last_success_at: route?.last_success_at ?? null,
+          last_failure_at: route?.last_failure_at ?? null,
+          checked_at: new Date().toISOString(),
+        })
+      } finally {
+        probeAllProgress.value.done += 1
+        probingRouteIds.value = probingRouteIds.value.filter((item) => item !== routeId)
+      }
+    }
+    const successCount = probeAllProgress.value.success
+    if (!failedResults.length) {
       toast.success(`路由探测完成，${successCount} 条全部可用。`)
       return
     }
-    const sample = failed
+    const sample = failedResults
       .slice(0, 2)
       .map((item) => `${item.site_name}${item.key_name ? ` · ${item.key_name}` : ''}`)
       .join('，')
-    toast.error(`路由探测完成，成功 ${successCount} 条，失败 ${failed.length} 条：${sample}`)
+    toast.error(`路由探测完成，成功 ${successCount} 条，失败 ${failedResults.length} 条：${sample}`)
   } catch (err) {
     toast.error(err instanceof Error ? err.message : '路由探测失败')
   } finally {
     probeLoading.value = false
+    probingRouteIds.value = probingRouteIds.value.filter((item) => !routeIds.includes(item))
+    window.setTimeout(() => {
+      if (!probeLoading.value) {
+        probeAllProgress.value = null
+      }
+    }, 1600)
+  }
+}
+
+async function handleUpdateAllBalances() {
+  const routeIds = routes.value.map((route) => route.id)
+  if (!routeIds.length) {
+    toast.error('当前没有可更新余额的网关路由。')
+    return
+  }
+  if (probeLoading.value) {
+    toast.error('路由探测仍在运行，请稍后再更新余额。')
+    return
+  }
+
+  balanceProbeAllLoading.value = true
+  try {
+    const result = await probeRouteBalances(routeIds, { silent: true, progress: balanceProbeAllProgress })
+    await refreshRouteSummaries()
+    if (result.failed > 0) {
+      toast.error(`余额更新完成，成功 ${result.success} 条，失败 ${result.failed} 条。`)
+      return
+    }
+    toast.success(`余额更新完成，${result.success} 条全部读取成功。`)
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '余额更新失败')
+  } finally {
+    balanceProbeAllLoading.value = false
+    window.setTimeout(() => {
+      if (!balanceProbeAllLoading.value) {
+        balanceProbeAllProgress.value = null
+      }
+    }, 1600)
   }
 }
 
@@ -1342,10 +1678,58 @@ async function handleProbeRouteBalance(route: GatewayRoute) {
       toast.success(`${loadRouteLabel(route)} 余额读取成功：${result.balance_display || formatBalance(result.remaining, result.unit)}（${result.base_url}）`)
     } else {
       toast.error(`${loadRouteLabel(route)} 余额读取失败：${result.message}`)
+      openRouteBalanceProbeManualDialog(route, result.message)
     }
   } catch (err) {
     toast.error(err instanceof Error ? err.message : '余额读取失败')
   } finally {
+    balanceProbingRouteIds.value = balanceProbingRouteIds.value.filter((item) => item !== route.id)
+  }
+}
+
+function openRouteBalanceProbeManualDialog(route: GatewayRoute, message = '') {
+  const latest = routes.value.find((item) => item.id === route.id) ?? route
+  balanceProbeManualRoute.value = latest
+  balanceProbeManualURL.value = latest.balance_probe_url?.trim() || ''
+  balanceProbeManualMessage.value = message
+  balanceProbeManualOpen.value = true
+}
+
+async function submitManualRouteBalanceProbe() {
+  const route = balanceProbeManualRoute.value
+  const balanceProbeURL = balanceProbeManualURL.value.trim()
+  if (!route) {
+    return
+  }
+  if (!balanceProbeURL) {
+    toast.error('请填写余额探测接口地址。')
+    return
+  }
+  if (!/^https?:\/\//i.test(balanceProbeURL) && !balanceProbeURL.startsWith('/')) {
+    toast.error('探测接口地址需要是完整 URL，或以 / 开头的相对路径。')
+    return
+  }
+  balanceProbeManualLoading.value = true
+  balanceProbingRouteIds.value = [...balanceProbingRouteIds.value, route.id]
+  try {
+    const result = await probeGatewayRouteBalance(route.id, { balance_probe_url: balanceProbeURL })
+    applyRouteBalanceResult(result)
+    await refreshRouteSummaries()
+    if (result.ok) {
+      toast.success(`${loadRouteLabel(route)} 余额读取成功：${result.balance_display || formatBalance(result.remaining, result.unit)}。`)
+      balanceProbeManualOpen.value = false
+      balanceProbeManualRoute.value = null
+      balanceProbeManualMessage.value = ''
+      return
+    }
+    balanceProbeManualMessage.value = result.message
+    toast.error(`${loadRouteLabel(route)} 余额读取失败：${result.message}`)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : '余额读取失败'
+    balanceProbeManualMessage.value = message
+    toast.error(message)
+  } finally {
+    balanceProbeManualLoading.value = false
     balanceProbingRouteIds.value = balanceProbingRouteIds.value.filter((item) => item !== route.id)
   }
 }
@@ -1433,33 +1817,62 @@ onBeforeUnmount(() => {
 
 <template>
   <ShellLayout>
-    <div class="page-stack" :class="isRouteManagement ? 'page-stack--fit' : 'page-stack--dashboard'">
+    <div
+      class="page-stack"
+      :class="isRouteManagement ? 'page-stack--fit gateway-route-page' : 'page-stack--dashboard gateway-monitor-page'"
+    >
       <div class="page-toolbar page-toolbar--actions">
-        <div v-if="isGatewayMonitor" class="gateway-access">
-          <code>地址 {{ gatewayRequestUrl }}</code>
-          <a-tooltip placement="bottom" :title="codexGatewayTooltip">
-            <span class="gateway-access__hint">
-              <InfoCircleOutlined />
-              Codex /v1
-            </span>
-          </a-tooltip>
-          <a-button size="small" @click="copyGatewayRequestUrl">
-            <template #icon>
-              <CopyOutlined />
-            </template>
-            复制
-          </a-button>
-          <code>Key {{ maskedGatewayApiKey }}</code>
-          <a-button size="small" :disabled="!settingsForm.gateway_api_key" @click="copyGatewayApiKey">
-            <template #icon>
-              <CopyOutlined />
-            </template>
-            复制
-          </a-button>
+        <div v-if="isGatewayMonitor" class="gateway-monitor-toolbar">
+          <div class="gateway-access">
+            <code>地址 {{ gatewayRequestUrl }}</code>
+            <a-tooltip placement="bottom" :title="codexGatewayTooltip">
+              <span class="gateway-access__hint">
+                <InfoCircleOutlined />
+                Codex /v1
+              </span>
+            </a-tooltip>
+            <a-button size="small" @click="copyGatewayRequestUrl">
+              <template #icon>
+                <CopyOutlined />
+              </template>
+              复制
+            </a-button>
+            <code>Key {{ maskedGatewayApiKey }}</code>
+            <a-button size="small" :disabled="!settingsForm.gateway_api_key" @click="copyGatewayApiKey">
+              <template #icon>
+                <CopyOutlined />
+              </template>
+              复制
+            </a-button>
+          </div>
         </div>
-        <div v-else class="route-management-heading">
-          <strong>路由池</strong>
-          <span>{{ filteredRoutes.length }} / {{ routes.length }}</span>
+        <div v-else class="route-management-toolbar">
+          <div class="route-management-heading">
+            <strong>路由池</strong>
+            <span>{{ filteredRoutes.length }} / {{ routes.length }}</span>
+          </div>
+          <div class="gateway-access gateway-access--route">
+            <code>地址 {{ gatewayRequestUrl }}</code>
+            <a-tooltip placement="bottom" :title="codexGatewayTooltip">
+              <span class="gateway-access__hint">
+                <InfoCircleOutlined />
+                Codex /v1
+              </span>
+            </a-tooltip>
+            <a-button size="small" @click="copyGatewayRequestUrl">
+              <template #icon>
+                <CopyOutlined />
+              </template>
+              复制
+            </a-button>
+            <code>Key {{ maskedGatewayApiKey }}</code>
+            <a-button size="small" :disabled="!settingsForm.gateway_api_key" @click="copyGatewayApiKey">
+              <template #icon>
+                <CopyOutlined />
+              </template>
+              复制
+            </a-button>
+          </div>
         </div>
         <a-space>
           <a-button :loading="loading" @click="handleRefresh">
@@ -1468,13 +1881,36 @@ onBeforeUnmount(() => {
             </template>
             刷新
           </a-button>
-          <a-button v-if="isRouteManagement" :loading="loading" @click="handleSync">
+          <a-button v-if="isRouteManagement" :loading="loading" :disabled="probeLoading || balanceProbeAllLoading" @click="handleSync">
             <template #icon>
               <SyncOutlined />
             </template>
             同步路由
           </a-button>
-          <a-button v-if="isRouteManagement" :loading="probeLoading" @click="handleProbeAll">探测全部</a-button>
+          <div v-if="isRouteManagement" class="route-probe-control">
+            <a-button :loading="probeLoading" :disabled="!routes.length || balanceProbeAllLoading" @click="handleProbeAll">探测全部</a-button>
+            <div v-if="probeAllProgress" class="route-probe-progress">
+              <div class="route-probe-progress__meta">
+                <span>{{ probeAllProgress.done }}/{{ probeAllProgress.total }}</span>
+                <span>{{ probeAllProgress.success }} 成功 · {{ probeAllProgress.failed }} 失败</span>
+              </div>
+              <div class="route-probe-progress__bar" aria-hidden="true">
+                <span :style="{ width: `${probeAllProgressPercent}%` }"></span>
+              </div>
+            </div>
+          </div>
+          <div v-if="isRouteManagement" class="route-probe-control">
+            <a-button :loading="balanceProbeAllLoading" :disabled="!routes.length || probeLoading" @click="handleUpdateAllBalances">更新余额</a-button>
+            <div v-if="balanceProbeAllProgress" class="route-probe-progress route-probe-progress--balance">
+              <div class="route-probe-progress__meta">
+                <span>{{ balanceProbeAllProgress.done }}/{{ balanceProbeAllProgress.total }}</span>
+                <span>{{ balanceProbeAllProgress.success }} 成功 · {{ balanceProbeAllProgress.failed }} 失败</span>
+              </div>
+              <div class="route-probe-progress__bar" aria-hidden="true">
+                <span :style="{ width: `${balanceProbeAllProgressPercent}%` }"></span>
+              </div>
+            </div>
+          </div>
           <a-button v-if="isRouteManagement" danger :disabled="!routes.length" @click="handleDisableAllRoutes">禁用全部</a-button>
           <a-button v-if="isRouteManagement" type="primary" @click="addUpstreamOpen = true">
             <template #icon>
@@ -1509,141 +1945,214 @@ onBeforeUnmount(() => {
         <a-card
           v-if="isGatewayMonitor"
           :bordered="false"
-          class="admin-card gateway-usage-card"
+          class="admin-card gateway-overview-shell"
         >
-          <div class="gateway-usage-card__header">
-            <div>
-              <div class="gateway-usage-card__title">时间段消耗</div>
-              <div class="gateway-usage-card__subtitle">
-                {{ gatewayUsage ? `${formatTime(gatewayUsage.start)} 至 ${formatTime(gatewayUsage.end)}` : '按时间段统计路由使用和 token 消耗' }}
-              </div>
-            </div>
-            <a-space wrap>
-              <input v-model="usageRange.start" class="gateway-usage-input" type="datetime-local" />
-              <span class="gateway-usage-card__sep">至</span>
-              <input v-model="usageRange.end" class="gateway-usage-input" type="datetime-local" />
-              <a-button @click="handleUsageToday">今日</a-button>
-              <a-button type="primary" :loading="usageLoading" @click="handleUsageQuery">查询</a-button>
-            </a-space>
-          </div>
-          <div v-if="usageSummaryCards.length" class="gateway-usage-summary">
-            <div
-              v-for="item in usageSummaryCards"
-              :key="item.title"
-              class="gateway-usage-summary__item"
-              :class="`gateway-usage-summary__item--${item.tone}`"
-            >
-              <span>{{ item.title }}</span>
-              <strong>{{ item.value }}</strong>
-            </div>
-          </div>
-          <a-table
-            :columns="usageColumns"
-            :data-source="gatewayUsage?.routes ?? []"
-            :pagination="{ pageSize: 8, showSizeChanger: false }"
-            :row-key="usageRowKey"
-            size="small"
-            :loading="usageLoading"
-            :scroll="{ x: 1210 }"
-          >
-            <template #bodyCell="{ column, record }">
-              <template v-if="column.key === 'route'">
-                <div class="table-cell-compact">
-                  <div class="table-cell-compact__head">
-                    <strong class="table-cell-compact__title">{{ usageRouteLabel(record as GatewayUsageRoute) }}</strong>
-                    <a-tooltip placement="right" :title="usageRouteMeta(record as GatewayUsageRoute)">
-                      <InfoCircleOutlined class="table-info-icon" />
-                    </a-tooltip>
-                  </div>
+          <div class="gateway-overview-grid">
+            <section class="gateway-panel gateway-panel--usage">
+              <div class="gateway-panel__head">
+                <div>
+                  <div class="gateway-panel__title">时间段消耗</div>
                 </div>
-              </template>
-              <template v-else-if="column.key === 'requests'">
-                {{ formatNumber((record as GatewayUsageRoute).request_count) }}
-              </template>
-              <template v-else-if="column.key === 'success_rate'">
-                {{ (record as GatewayUsageRoute).success_rate }}%
-              </template>
-              <template v-else-if="column.key === 'stream'">
-                {{ formatNumber((record as GatewayUsageRoute).stream_request_count) }}
-              </template>
-              <template v-else-if="column.key === 'prompt_tokens'">
-                {{ formatNumber((record as GatewayUsageRoute).prompt_tokens) }}
-              </template>
-              <template v-else-if="column.key === 'cached_input_tokens'">
-                {{ formatNumber((record as GatewayUsageRoute).cached_input_tokens) }}
-              </template>
-              <template v-else-if="column.key === 'completion_tokens'">
-                {{ formatNumber((record as GatewayUsageRoute).completion_tokens) }}
-              </template>
-              <template v-else-if="column.key === 'total_tokens'">
-                <strong>{{ formatNumber((record as GatewayUsageRoute).total_tokens) }}</strong>
-              </template>
-              <template v-else-if="column.key === 'official_total_cost'">
-                <a-tooltip :title="`Input ${formatUSD((record as GatewayUsageRoute).official_input_cost)} / Cached ${formatUSD((record as GatewayUsageRoute).official_cached_cost)} / Output ${formatUSD((record as GatewayUsageRoute).official_output_cost)}`">
-                  <strong>{{ formatUSD((record as GatewayUsageRoute).official_total_cost) }}</strong>
-                </a-tooltip>
-              </template>
-              <template v-else-if="column.key === 'avg_latency'">
-                {{ (record as GatewayUsageRoute).avg_latency_ms !== null ? `${(record as GatewayUsageRoute).avg_latency_ms} ms` : '暂无' }}
-              </template>
-              <template v-else-if="column.key === 'last_used_at'">
-                {{ formatTime((record as GatewayUsageRoute).last_used_at) }}
-              </template>
-            </template>
-          </a-table>
-
-          <div class="gateway-usage-activity">
-            <div class="gateway-usage-activity__header">
-              <div>
-                <div class="gateway-usage-activity__title">实时调用</div>
-                <div class="gateway-usage-activity__subtitle">
-                  {{ routeActivitySubtitle }}
+                <a-space wrap>
+                  <input v-model="usageRange.start" class="gateway-usage-input" type="datetime-local" />
+                  <span class="gateway-usage-card__sep">至</span>
+                  <input v-model="usageRange.end" class="gateway-usage-input" type="datetime-local" />
+                  <a-button @click="handleUsageToday">今日</a-button>
+                  <a-button type="primary" :loading="usageLoading" @click="handleUsageQuery">查询</a-button>
+                </a-space>
+              </div>
+              <div v-if="usageSummaryCards.length" class="gateway-usage-summary">
+                <div
+                  v-for="item in usageSummaryCards"
+                  :key="item.title"
+                  class="gateway-usage-summary__item"
+                  :class="`gateway-usage-summary__item--${item.tone}`"
+                >
+                  <span>{{ item.title }}</span>
+                  <strong>{{ item.value }}</strong>
                 </div>
               </div>
-              <span class="gateway-active-feed-panel__pulse" :class="{ 'gateway-active-feed-panel__pulse--active': activeRouteFeed.length > 0 }">
-                {{ activeRouteFeed.length > 0 ? 'Live' : 'Idle' }}
-              </span>
-            </div>
-            <div v-if="routeActivityFeed.length" class="gateway-active-feed gateway-active-feed--embedded">
-              <div
-                v-for="item in routeActivityFeed"
-                :key="item.id"
-                class="gateway-active-feed__item"
-                :class="{ 'gateway-active-feed__item--completed': item.kind === 'completed' }"
+              <a-table
+                class="gateway-usage-table"
+                :columns="usageColumns"
+                :data-source="gatewayUsage?.routes ?? []"
+                :pagination="{ pageSize: 6, showSizeChanger: false }"
+                :row-key="usageRowKey"
+                size="small"
+                :loading="usageLoading"
+                :scroll="{ x: 1210 }"
               >
-                <div class="gateway-active-feed__rail">
-                  <span class="gateway-active-feed__dot" />
+                <template #bodyCell="{ column, record }">
+                  <template v-if="column.key === 'route'">
+                    <div class="table-cell-compact">
+                      <div class="table-cell-compact__head">
+                        <strong class="table-cell-compact__title">{{ usageRouteLabel(record as GatewayUsageRoute) }}</strong>
+                        <a-tooltip placement="right" :title="usageRouteMeta(record as GatewayUsageRoute)">
+                          <InfoCircleOutlined class="table-info-icon" />
+                        </a-tooltip>
+                      </div>
+                    </div>
+                  </template>
+                  <template v-else-if="column.key === 'requests'">
+                    {{ formatNumber((record as GatewayUsageRoute).request_count) }}
+                  </template>
+                  <template v-else-if="column.key === 'success_rate'">
+                    {{ (record as GatewayUsageRoute).success_rate }}%
+                  </template>
+                  <template v-else-if="column.key === 'stream'">
+                    {{ formatNumber((record as GatewayUsageRoute).stream_request_count) }}
+                  </template>
+                  <template v-else-if="column.key === 'prompt_tokens'">
+                    {{ formatNumber((record as GatewayUsageRoute).prompt_tokens) }}
+                  </template>
+                  <template v-else-if="column.key === 'cached_input_tokens'">
+                    {{ formatNumber((record as GatewayUsageRoute).cached_input_tokens) }}
+                  </template>
+                  <template v-else-if="column.key === 'completion_tokens'">
+                    {{ formatNumber((record as GatewayUsageRoute).completion_tokens) }}
+                  </template>
+                  <template v-else-if="column.key === 'total_tokens'">
+                    <strong>{{ formatNumber((record as GatewayUsageRoute).total_tokens) }}</strong>
+                  </template>
+                  <template v-else-if="column.key === 'computed_total_cost'">
+                    <a-tooltip :title="`输入 ${formatUSD((record as GatewayUsageRoute).computed_input_cost)} / 缓存 ${formatUSD((record as GatewayUsageRoute).computed_cached_cost)} / 输出 ${formatUSD((record as GatewayUsageRoute).computed_output_cost)}`">
+                      <strong>{{ formatUSD((record as GatewayUsageRoute).computed_total_cost) }}</strong>
+                    </a-tooltip>
+                  </template>
+                  <template v-else-if="column.key === 'avg_latency'">
+                    {{ (record as GatewayUsageRoute).avg_latency_ms !== null ? `${(record as GatewayUsageRoute).avg_latency_ms} ms` : '暂无' }}
+                  </template>
+                  <template v-else-if="column.key === 'last_used_at'">
+                    {{ formatTime((record as GatewayUsageRoute).last_used_at) }}
+                  </template>
+                </template>
+              </a-table>
+            </section>
+
+            <section class="gateway-panel gateway-panel--activity">
+              <div class="gateway-panel__head">
+                <div>
+                  <div class="gateway-panel__title">实时调用</div>
                 </div>
-                <div class="gateway-active-feed__main">
-                  <strong class="gateway-active-feed__route">{{ item.label }}</strong>
-                  <a-space size="small" wrap class="gateway-active-feed__badges">
-                    <a-tag :color="item.primaryBadgeColor">{{ item.primaryBadge }}</a-tag>
-                    <a-tag>{{ item.secondaryBadge }}</a-tag>
-                    <a-tag v-if="item.is_stream" color="blue">流式</a-tag>
-                  </a-space>
-                  <div class="gateway-active-feed__request">
-                    <span>{{ item.targetLabel }}</span>
-                    <span v-if="item.routeTypeLabel">{{ item.routeTypeLabel }}</span>
-                    <span>{{ item.groupLabel }}</span>
-                    <span>{{ item.strategyLabel }}</span>
-                    <span>{{ item.attemptLabel }}</span>
+                <span class="gateway-active-feed-panel__pulse" :class="{ 'gateway-active-feed-panel__pulse--active': activeRouteFeed.length > 0 }">
+                  {{ activeRouteFeed.length > 0 ? '运行中' : '空闲' }}
+                </span>
+              </div>
+              <div v-if="routeActivityFeed.length" class="gateway-active-feed gateway-active-feed--embedded">
+                <div
+                  v-for="item in routeActivityFeed"
+                  :key="item.id"
+                  class="gateway-active-feed__item"
+                  :class="{ 'gateway-active-feed__item--completed': item.kind === 'completed' }"
+                >
+                  <div class="gateway-active-feed__rail">
+                    <span class="gateway-active-feed__dot" />
                   </div>
-                  <div class="gateway-active-feed__meta">
-                    <span v-for="meta in item.meta" :key="meta">{{ meta }}</span>
-                    <span>{{ item.timeLabel }}</span>
+                  <div class="gateway-active-feed__main">
+                    <strong class="gateway-active-feed__route">{{ item.label }}</strong>
+                    <a-space size="small" wrap class="gateway-active-feed__badges">
+                      <a-tag :color="item.primaryBadgeColor">{{ item.primaryBadge }}</a-tag>
+                      <a-tag>{{ item.secondaryBadge }}</a-tag>
+                      <a-tag v-if="item.is_stream" color="blue">流式</a-tag>
+                    </a-space>
+                    <div class="gateway-active-feed__request">
+                      <span>{{ item.targetLabel }}</span>
+                      <span>请求 {{ item.requestedModelLabel }}</span>
+                      <span>命中 {{ item.actualModelLabel }}</span>
+                      <span v-if="item.routeTypeLabel">{{ item.routeTypeLabel }}</span>
+                      <span>{{ item.groupLabel }}</span>
+                      <span>{{ item.strategyLabel }}</span>
+                      <span>{{ item.attemptLabel }}</span>
+                    </div>
+                    <div class="gateway-active-feed__meta">
+                      <span v-for="meta in item.meta" :key="meta">{{ meta }}</span>
+                      <span>{{ item.timeLabel }}</span>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-            <a-empty v-else description="等待网关请求进入路由池。" />
+              <a-empty v-else description="等待网关请求进入路由池。" />
+            </section>
+
+            <section class="gateway-panel gateway-panel--route-status">
+              <div class="gateway-panel__head">
+                <div>
+                  <div class="gateway-panel__title">路由池状态</div>
+                </div>
+              </div>
+              <div class="route-pool-status">
+                <div
+                  v-for="item in routePoolStatusCards"
+                  :key="item.key"
+                  class="route-pool-status__card"
+                  :class="`route-pool-status__card--${item.tone}`"
+                >
+                  <div class="route-pool-status__head">
+                    <span>{{ item.label }}</span>
+                    <strong>{{ item.value }}</strong>
+                  </div>
+                  <div class="route-pool-status__bar">
+                    <span :style="{ width: `${Math.max(8, item.ratio * 100)}%` }" />
+                  </div>
+                </div>
+              </div>
+
+              <div class="route-pool-preview">
+                <div
+                  v-for="route in routePoolPreviewRoutes"
+                  :key="route.id"
+                  class="route-pool-preview__row"
+                >
+                  <div class="route-pool-preview__main">
+                    <strong>{{ loadRouteLabel(route) }}</strong>
+                    <span>{{ formatGroupNames(route.group_name) || '未分组' }} · {{ routeTypeLabel(route.route_type) }}</span>
+                  </div>
+                  <div class="route-pool-preview__meta">
+                    <span :class="latencyClass(primaryLatency(route))">
+                      <span class="gateway-latency__dot"></span>
+                      <span class="gateway-latency__value">{{ formatLatency(primaryLatency(route)) }}</span>
+                    </span>
+                    <span :class="['gateway-concurrency', { 'gateway-concurrency--active': route.active_concurrency > 0 }]">
+                      <span class="gateway-concurrency__current">{{ route.active_concurrency }}</span>
+                      <span class="gateway-concurrency__separator">/</span>
+                      <span class="gateway-concurrency__limit">{{ routeConcurrencyLimitLabel }}</span>
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section class="gateway-panel gateway-panel--strategy">
+              <div class="gateway-panel__head">
+                <div>
+                  <div class="gateway-panel__title">策略分布</div>
+                </div>
+              </div>
+              <div class="gateway-strategy-board">
+                <div
+                  v-for="item in gatewayStrategyCards"
+                  :key="item.key"
+                  class="gateway-strategy-board__item"
+                  :class="`gateway-strategy-board__item--${item.tone}`"
+                >
+                  <div class="gateway-strategy-board__summary">
+                    <span>{{ item.title }}</span>
+                    <strong>{{ item.value }}</strong>
+                  </div>
+                  <div class="gateway-strategy-board__track">
+                    <span :style="{ width: item.width }" />
+                  </div>
+                </div>
+                <a-empty v-if="!gatewayStrategyCards.length" description="暂无策略统计数据" />
+              </div>
+            </section>
           </div>
         </a-card>
 
       <a-card v-if="isRouteManagement" :bordered="false" class="admin-card admin-card--fill route-pool-card route-pool-card--standalone">
-        <template #title>
-          <div class="route-pool-title">
-            <span>路由池</span>
-            <a-space size="small" wrap>
+        <div class="card-shell">
+          <div class="route-pool-filters">
+            <div class="route-pool-type-tabs">
               <a-button
                 size="small"
                 :type="selectedRouteTypes.length === 0 ? 'primary' : 'default'"
@@ -1660,67 +2169,43 @@ onBeforeUnmount(() => {
               >
                 {{ item.label }}
               </a-button>
-            </a-space>
-          </div>
-        </template>
-        <div class="card-shell">
-          <div class="route-pool-filters">
-            <a-input
-              v-model:value="routeSearch"
-              class="route-pool-filter route-pool-filter--search"
-              placeholder="搜索路由 / 域名 / 分组"
-              allow-clear
-            />
-            <a-select
-              v-model:value="selectedGroups"
-              class="route-pool-filter route-pool-filter--group"
-              mode="multiple"
-              allow-clear
-              :options="groupOptions"
-              placeholder="按分组筛选"
-            />
-            <a-select
-              v-model:value="selectedCircuitStates"
-              class="route-pool-filter"
-              mode="multiple"
-              allow-clear
-              :options="circuitStateOptions"
-              placeholder="按熔断状态"
-            />
-            <a-select
-              v-model:value="selectedPackageStates"
-              class="route-pool-filter route-pool-filter--compact"
-              mode="multiple"
-              allow-clear
-              :options="packageStateOptions"
-              placeholder="按套餐"
-            />
-            <a-select
-              v-model:value="selectedBalanceStates"
-              class="route-pool-filter"
-              mode="multiple"
-              allow-clear
-              :options="balanceStateOptions"
-              placeholder="按余额"
-            />
-            <a-select
-              v-model:value="selectedIssueStates"
-              class="route-pool-filter route-pool-filter--compact"
-              mode="multiple"
-              allow-clear
-              :options="issueStateOptions"
-              placeholder="按异常"
-            />
-            <a-switch
-              v-model:checked="includeDisabled"
-              class="route-pool-filter-switch"
-              checked-children="含停用"
-              un-checked-children="仅启用"
-              @change="loadData"
-            />
-            <a-button class="route-pool-clear" size="small" :disabled="!activeRouteFilterCount" @click="clearRouteFilters">
-              清空筛选
-            </a-button>
+            </div>
+            <div class="route-pool-searchbar">
+              <a-input
+                id="route-pool-search"
+                v-model:value="routeSearch"
+                class="route-pool-filter route-pool-filter--search"
+                name="route_pool_search"
+                placeholder="搜索路由 / 域名 / 分组"
+                allow-clear
+              />
+              <a-select
+                v-model:value="selectedGroups"
+                class="route-pool-filter route-pool-filter--group"
+                mode="multiple"
+                allow-clear
+                :options="groupOptions"
+                placeholder="按分组筛选"
+              />
+              <a-select
+                v-model:value="selectedIssueStates"
+                class="route-pool-filter route-pool-filter--compact"
+                mode="multiple"
+                allow-clear
+                :options="issueStateOptions"
+                placeholder="按异常"
+              />
+              <a-switch
+                v-model:checked="includeDisabled"
+                class="route-pool-filter-switch"
+                checked-children="含停用"
+                un-checked-children="仅启用"
+                @change="loadData"
+              />
+              <a-button class="route-pool-clear" size="small" :disabled="!activeRouteFilterCount" @click="clearRouteFilters">
+                清空筛选
+              </a-button>
+            </div>
           </div>
           <div :ref="bindPageTableContainer" class="table-fill table-fill--management">
             <a-table
@@ -1729,7 +2214,7 @@ onBeforeUnmount(() => {
               :pagination="{ pageSize: gatewayTablePageSize }"
               :row-key="routeRowKey"
               size="middle"
-              :scroll="{ x: 1940, y: pageTableY }"
+              :scroll="{ x: 1760, y: pageTableY }"
             >
               <template #headerCell="{ column }">
                 <template v-if="column.key === 'weight'">
@@ -1762,6 +2247,10 @@ onBeforeUnmount(() => {
                         </template>
                         <InfoCircleOutlined class="table-info-icon" />
                       </a-tooltip>
+                    </div>
+                    <div class="table-cell-compact__meta">
+                      <span class="table-cell-compact__meta-label">模型能力</span>
+                      <span>{{ supportedModelsPreview(asRoute(record).supported_models) }}</span>
                     </div>
                     <div v-if="routeIssueLabels(asRoute(record)).length" class="table-cell-compact__tags">
                       <a-tag
@@ -1811,16 +2300,6 @@ onBeforeUnmount(() => {
                       <span class="gateway-concurrency__limit">{{ routeConcurrencyLimitLabel }}</span>
                     </span>
                   </a-tooltip>
-                </template>
-                <template v-else-if="column.key === 'circuit'">
-                  <a-tooltip v-if="asRoute(record).circuit_open_until" :title="`冷却到 ${formatTime(asRoute(record).circuit_open_until)}`">
-                    <div class="participation-cell">
-                      <StatusPill :value="asRoute(record).is_enabled ? asRoute(record).circuit_state : 'paused'" />
-                    </div>
-                  </a-tooltip>
-                  <div v-else class="participation-cell">
-                    <StatusPill :value="asRoute(record).is_enabled ? asRoute(record).circuit_state : 'paused'" />
-                  </div>
                 </template>
                 <template v-else-if="column.key === 'success_rate'">
                   {{ asRoute(record).success_rate }}%
@@ -1902,6 +2381,10 @@ onBeforeUnmount(() => {
                           >
                             <InfoCircleOutlined />
                             <span>余额</span>
+                          </a-menu-item>
+                          <a-menu-item key="supported-models" @click="openRouteModelsDialog(asRoute(record))">
+                            <ToolOutlined />
+                            <span>支持模型</span>
                           </a-menu-item>
                           <a-menu-divider />
                           <a-menu-item key="enable-only" @click="handleEnableOnlyRoute(asRoute(record))">
@@ -1991,6 +2474,33 @@ onBeforeUnmount(() => {
             </div>
           </div>
         </a-spin>
+      </a-modal>
+
+      <a-modal
+        v-model:open="balanceProbeManualOpen"
+        title="余额探测接口"
+        width="640px"
+        :confirm-loading="balanceProbeManualLoading"
+        ok-text="重试探测"
+        @ok="submitManualRouteBalanceProbe"
+      >
+        <a-form layout="vertical">
+          <a-alert
+            v-if="balanceProbeManualMessage"
+            type="warning"
+            show-icon
+            :message="balanceProbeManualMessage"
+            style="margin-bottom: 12px"
+          />
+          <a-form-item :label="balanceProbeManualRoute ? loadRouteLabel(balanceProbeManualRoute) : '当前路由'">
+            <a-input
+              v-model:value="balanceProbeManualURL"
+              placeholder="https://example.com/v1/usage 或 /api/usage/token/"
+              autocomplete="off"
+            />
+            <small class="field-help">成功后会保存到当前路由，后续余额探测优先使用这个接口，并使用该路由自己的 API Key。</small>
+          </a-form-item>
+        </a-form>
       </a-modal>
 
       <a-modal
@@ -2288,6 +2798,35 @@ onBeforeUnmount(() => {
               </a-form-item>
             </a-col>
           </a-row>
+          <a-form-item label="支持模型（可选）">
+            <a-select
+              v-model:value="addUpstreamForm.supported_models"
+              mode="tags"
+              :token-separators="[',', '，', '\n', '\t']"
+              placeholder="留空表示该路由不会接收带 model 的精确匹配请求"
+            />
+            <small class="field-help">用于声明这个上游明确支持的模型 ID。请求体带 `model` 时，网关只会把请求发给这里精确声明过该模型的路由。</small>
+          </a-form-item>
+        </a-form>
+      </a-modal>
+
+      <a-modal
+        v-model:open="routeModelsDialogOpen"
+        title="编辑支持模型"
+        width="640px"
+        :confirm-loading="routeModelsDialogSaving"
+        @ok="saveRouteModelsDialog"
+      >
+        <a-form layout="vertical">
+          <a-form-item :label="routeModelsDialogRoute ? loadRouteLabel(routeModelsDialogRoute) : '当前路由'">
+            <a-select
+              v-model:value="routeModelsDialogValue"
+              mode="tags"
+              :token-separators="[',', '，', '\n', '\t']"
+              placeholder="留空表示该路由不会接收带 model 的精确匹配请求"
+            />
+            <small class="field-help">这里配置的是路由当前生效的模型能力。请求体带 `model` 时，只有精确包含该模型 ID 的同类型路由会参与调度。</small>
+          </a-form-item>
         </a-form>
       </a-modal>
 
@@ -2310,7 +2849,7 @@ onBeforeUnmount(() => {
             :pagination="{ pageSize: gatewayTablePageSize }"
             :row-key="logRowKey"
             size="small"
-            :scroll="{ x: 1100, y: drawerTableY }"
+            :scroll="{ x: 1360, y: drawerTableY }"
           >
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'created_at'">
@@ -2327,6 +2866,18 @@ onBeforeUnmount(() => {
                     <a-tooltip placement="right" :title="logRouteMeta(asLog(record))">
                       <InfoCircleOutlined class="table-info-icon" />
                     </a-tooltip>
+                  </div>
+                </div>
+              </template>
+              <template v-else-if="column.key === 'model'">
+                <div class="table-cell-compact gateway-log-models">
+                  <div class="table-cell-compact__meta">
+                    <span class="table-cell-compact__meta-label">请求</span>
+                    <span class="table-cell-compact__title">{{ logRequestedModel(asLog(record)) }}</span>
+                  </div>
+                  <div class="table-cell-compact__meta">
+                    <span class="table-cell-compact__meta-label">命中</span>
+                    <span class="table-cell-compact__title">{{ logActualModel(asLog(record)) }}</span>
                   </div>
                 </div>
               </template>
@@ -2370,7 +2921,7 @@ onBeforeUnmount(() => {
             :pagination="{ pageSize: gatewayTablePageSize }"
             :row-key="logRowKey"
             size="small"
-            :scroll="{ x: 1100, y: drawerTableY }"
+            :scroll="{ x: 1360, y: drawerTableY }"
           >
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'created_at'">
@@ -2387,6 +2938,18 @@ onBeforeUnmount(() => {
                     <a-tooltip placement="right" :title="logRouteMeta(asLog(record))">
                       <InfoCircleOutlined class="table-info-icon" />
                     </a-tooltip>
+                  </div>
+                </div>
+              </template>
+              <template v-else-if="column.key === 'model'">
+                <div class="table-cell-compact gateway-log-models">
+                  <div class="table-cell-compact__meta">
+                    <span class="table-cell-compact__meta-label">请求</span>
+                    <span class="table-cell-compact__title">{{ logRequestedModel(asLog(record)) }}</span>
+                  </div>
+                  <div class="table-cell-compact__meta">
+                    <span class="table-cell-compact__meta-label">命中</span>
+                    <span class="table-cell-compact__title">{{ logActualModel(asLog(record)) }}</span>
                   </div>
                 </div>
               </template>
@@ -2484,6 +3047,35 @@ onBeforeUnmount(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.table-cell-compact__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.table-cell-compact__meta-label {
+  flex: 0 0 auto;
+  color: #94a3b8;
+}
+
+.gateway-log-models {
+  gap: 3px;
+}
+
+.gateway-log-models .table-cell-compact__meta {
+  gap: 6px;
+}
+
+.gateway-log-models .table-cell-compact__title {
+  color: #24334d;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .table-info-icon {
@@ -2633,39 +3225,117 @@ onBeforeUnmount(() => {
   min-height: 0;
 }
 
-.gateway-usage-card {
+.gateway-monitor-toolbar {
   display: flex;
-  flex: 1 1 auto;
-  margin-bottom: 16px;
-  min-height: 0;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
 }
 
-.gateway-usage-card :deep(.ant-card-body) {
+.gateway-overview-shell {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.28) !important;
+  background:
+    radial-gradient(circle at top left, rgba(37, 99, 235, 0.1), transparent 34%),
+    linear-gradient(180deg, #ffffff, #f8fbff) !important;
+  box-shadow:
+    0 18px 42px rgba(30, 41, 59, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9) !important;
+}
+
+.gateway-overview-shell::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(rgba(37, 99, 235, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(37, 99, 235, 0.04) 1px, transparent 1px);
+  background-size: 24px 24px;
+  pointer-events: none;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.46), transparent 100%);
+}
+
+.gateway-overview-shell :deep(.ant-card-body) {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
   min-height: 0;
-  padding: 16px;
+  padding: 18px;
+  gap: 16px;
 }
 
-.gateway-usage-card__header {
+.gateway-overview-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(320px, 0.95fr);
+  grid-template-areas:
+    'usage route'
+    'usage strategy'
+    'activity activity';
+  gap: 16px;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.gateway-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 22px;
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 16px 34px rgba(30, 41, 59, 0.08);
+}
+
+.gateway-panel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.08), transparent 34%);
+}
+
+.gateway-panel--usage {
+  grid-area: usage;
+}
+
+.gateway-panel--activity {
+  grid-area: activity;
+  min-height: 320px;
+}
+
+.gateway-panel--route-status {
+  grid-area: route;
+}
+
+.gateway-panel--strategy {
+  grid-area: strategy;
+}
+
+.gateway-panel__head {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 14px;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 18px 18px 0;
 }
 
-.gateway-usage-card__title {
-  font-size: 15px;
-  font-weight: 650;
+.gateway-panel__title {
   color: #172033;
-}
-
-.gateway-usage-card__subtitle {
-  margin-top: 4px;
-  font-size: 12px;
-  color: #64748b;
+  font-size: 16px;
+  font-weight: 700;
 }
 
 .gateway-usage-card__sep {
@@ -2674,109 +3344,104 @@ onBeforeUnmount(() => {
 }
 
 .gateway-usage-input {
-  height: 32px;
-  min-width: 190px;
-  border: 1px solid #d8deea;
-  border-radius: 6px;
-  padding: 0 10px;
+  height: 34px;
+  min-width: 196px;
+  border: 1px solid rgba(148, 163, 184, 0.34);
+  border-radius: 12px;
+  padding: 0 12px;
   color: #172033;
-  background: #fff;
+  background: #ffffff;
   font-size: 13px;
   outline: none;
 }
 
 .gateway-usage-input:focus {
-  border-color: #2b5d8f;
-  box-shadow: 0 0 0 2px rgba(43, 93, 143, 0.12);
+  border-color: rgba(110, 168, 255, 0.5);
+  box-shadow: 0 0 0 2px rgba(77, 144, 254, 0.18);
 }
 
 .gateway-usage-summary {
-  flex: 0 0 auto;
+  position: relative;
+  z-index: 1;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
-  margin-bottom: 14px;
+  padding: 14px 18px 0;
 }
 
-.gateway-usage-card :deep(.ant-table-wrapper) {
-  flex: 0 0 auto;
+.gateway-usage-table {
+  position: relative;
+  z-index: 1;
+  padding: 14px 18px 18px;
+}
+
+.gateway-usage-table :deep(.ant-table),
+.gateway-usage-table :deep(.ant-table-container),
+.gateway-usage-table :deep(.ant-table-content) {
+  background: transparent !important;
+}
+
+.gateway-usage-table :deep(.ant-table-thead > tr > th) {
+  background: #f1f5f9 !important;
+  color: #334155;
+  border-bottom-color: rgba(148, 163, 184, 0.2) !important;
+}
+
+.gateway-usage-table :deep(.ant-table-tbody > tr > td) {
+  color: #172033;
+  background: rgba(255, 255, 255, 0.82);
+  border-bottom-color: rgba(148, 163, 184, 0.16) !important;
 }
 
 .gateway-usage-summary__item {
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  padding: 10px 12px;
-  background: #f8fafc;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 18px;
+  padding: 14px 16px;
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
 }
 
 .gateway-usage-summary__item span {
   display: block;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
   color: #64748b;
   font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 .gateway-usage-summary__item strong {
   color: #172033;
-  font-size: 18px;
+  font-size: 22px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
 
+.gateway-usage-summary__item--primary {
+  background: linear-gradient(145deg, #eff6ff, #ffffff);
+}
+
 .gateway-usage-summary__item--success {
-  background: rgba(47, 138, 74, 0.08);
-  border-color: rgba(47, 138, 74, 0.18);
+  background: linear-gradient(145deg, #ecfdf5, #ffffff);
 }
 
 .gateway-usage-summary__item--warning {
-  background: rgba(214, 90, 74, 0.08);
-  border-color: rgba(214, 90, 74, 0.18);
+  background: linear-gradient(145deg, #fff7ed, #ffffff);
 }
 
 .gateway-usage-summary__item--info {
-  background: rgba(43, 93, 143, 0.08);
-  border-color: rgba(43, 93, 143, 0.18);
-}
-
-.gateway-usage-activity {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  margin-top: 14px;
-  min-height: 0;
-  border-top: 1px solid #e5eaf2;
-  padding-top: 14px;
-}
-
-.gateway-usage-activity__header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 10px;
-}
-
-.gateway-usage-activity__title {
-  color: #24334d;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.gateway-usage-activity__subtitle {
-  margin-top: 3px;
-  color: #64748b;
-  font-size: 12px;
+  background: linear-gradient(145deg, #ecfeff, #ffffff);
 }
 
 .gateway-active-feed-panel__pulse {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 26px;
-  padding: 0 10px;
-  border: 1px solid #d8dee8;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid rgba(148, 163, 184, 0.26);
   border-radius: 999px;
-  background: #f8fafc;
+  background: rgba(255, 255, 255, 0.82);
   color: #64748b;
   font-family: 'IBM Plex Mono', monospace;
   font-size: 11px;
@@ -2793,9 +3458,9 @@ onBeforeUnmount(() => {
 }
 
 .gateway-active-feed-panel__pulse--active {
-  border-color: rgba(14, 165, 233, 0.36);
-  background: rgba(14, 165, 233, 0.09);
-  color: #0369a1;
+  border-color: rgba(37, 99, 235, 0.3);
+  background: rgba(37, 99, 235, 0.08);
+  color: #1d4ed8;
 }
 
 .gateway-active-feed {
@@ -2803,16 +3468,19 @@ onBeforeUnmount(() => {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: 2px 4px 2px 0;
+  padding: 2px 0 0;
 }
 
 .gateway-active-feed--embedded {
+  position: relative;
+  z-index: 1;
   align-content: start;
   max-height: none;
-  border: 1px solid #edf1f7;
-  border-radius: 8px;
-  background: #fbfdff;
-  padding: 8px 10px;
+  margin: 0 18px 18px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 18px;
+  background: rgba(248, 251, 255, 0.86);
+  padding: 8px 14px;
 }
 
 .gateway-active-feed__item {
@@ -2820,8 +3488,8 @@ onBeforeUnmount(() => {
   grid-template-columns: 18px minmax(0, 1fr);
   gap: 10px;
   min-width: 0;
-  padding: 7px 0;
-  border-bottom: 1px solid #eef2f7;
+  padding: 11px 0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
 }
 
 .gateway-active-feed__item:last-child {
@@ -2844,13 +3512,13 @@ onBeforeUnmount(() => {
   height: 10px;
   margin-top: 6px;
   border-radius: 999px;
-  background: #0ea5e9;
-  box-shadow: 0 0 0 4px rgba(14, 165, 233, 0.12);
+  background: #39c8ff;
+  box-shadow: 0 0 0 4px rgba(57, 200, 255, 0.14);
 }
 
 .gateway-active-feed__item--completed .gateway-active-feed__dot {
-  background: #94a3b8;
-  box-shadow: 0 0 0 4px rgba(148, 163, 184, 0.12);
+  background: #f08a5a;
+  box-shadow: 0 0 0 4px rgba(240, 138, 90, 0.12);
 }
 
 .gateway-active-feed__main {
@@ -2864,7 +3532,7 @@ onBeforeUnmount(() => {
 .gateway-active-feed__route {
   min-width: 0;
   overflow: hidden;
-  color: #1f2a44;
+  color: #172033;
   font-size: 13px;
   font-weight: 700;
   text-overflow: ellipsis;
@@ -2896,7 +3564,7 @@ onBeforeUnmount(() => {
 }
 
 .gateway-active-feed__request span {
-  color: #334155;
+  color: #475569;
   font-family: 'IBM Plex Mono', monospace;
   font-size: 12px;
   font-weight: 600;
@@ -2905,6 +3573,66 @@ onBeforeUnmount(() => {
 .gateway-active-feed__meta span {
   color: #64748b;
   font-size: 11px;
+}
+
+.gateway-metric-card {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.28) !important;
+  background: linear-gradient(180deg, #ffffff, #f8fbff) !important;
+  box-shadow:
+    0 16px 34px rgba(30, 41, 59, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9) !important;
+}
+
+.gateway-metric-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at right top, rgba(37, 99, 235, 0.08), transparent 42%);
+  pointer-events: none;
+}
+
+.gateway-metric-card :deep(.ant-card-body) {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 6px;
+  padding: 18px 18px 16px;
+}
+
+.gateway-metric-card__label {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.gateway-metric-card__value {
+  color: #172033;
+  font-size: clamp(2rem, 2vw, 2.4rem);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+
+.gateway-metric-card--primary {
+  background: linear-gradient(180deg, #ffffff, #f8fbff) !important;
+}
+
+.gateway-metric-card--info {
+  background: linear-gradient(180deg, #ffffff, #f8fbff) !important;
+}
+
+.gateway-metric-card--success {
+  background: linear-gradient(180deg, #ffffff, #f8fbff) !important;
+}
+
+.gateway-metric-card--warning {
+  background: linear-gradient(180deg, #ffffff, #f8fbff) !important;
+}
+
+.gateway-metric-card--neutral {
+  background: linear-gradient(180deg, #ffffff, #f8fbff) !important;
 }
 
 .gateway-policy-settings-layout {
@@ -2977,9 +3705,9 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   min-width: 0;
-  max-width: min(74vw, 980px);
+  max-width: min(100%, 980px);
 }
 
 .gateway-access code {
@@ -2987,10 +3715,10 @@ onBeforeUnmount(() => {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
-  padding: 6px 10px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-control);
-  background: var(--bg-panel);
+  padding: 7px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 12px;
+  background: #ffffff;
   color: #24334d;
   font-family: 'IBM Plex Mono', monospace;
   font-size: 12px;
@@ -3012,11 +3740,11 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 4px;
   height: 30px;
-  padding: 0 8px;
-  border: 1px solid #b8d8ff;
-  border-radius: var(--radius-control);
-  background: #f2f7ff;
-  color: #1e5ea8;
+  padding: 0 10px;
+  border: 1px solid rgba(37, 99, 235, 0.24);
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.08);
+  color: #1d4ed8;
   font-size: 12px;
   font-weight: 700;
   line-height: 1;
@@ -3031,6 +3759,14 @@ onBeforeUnmount(() => {
 
 .gateway-access .ant-btn {
   flex: 0 0 auto;
+}
+
+.route-management-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .route-management-heading {
@@ -3061,26 +3797,219 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-.route-pool-title {
-  display: flex;
+.gateway-access--route {
+  flex: 1 1 520px;
+  max-width: min(100%, 920px);
+}
+
+.gateway-access--route code:first-child {
+  max-width: min(28vw, 380px);
+}
+
+.gateway-access--route code:nth-of-type(2) {
+  max-width: min(18vw, 220px);
+}
+
+.route-probe-control {
+  display: inline-flex;
   align-items: center;
-  gap: 12px;
-  flex-wrap: nowrap;
+  gap: 10px;
   min-width: 0;
 }
 
-.route-pool-title > span {
-  flex: 0 0 auto;
+.route-probe-progress {
+  display: grid;
+  gap: 4px;
+  width: 168px;
+  min-width: 140px;
+}
+
+.route-probe-progress__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: #526684;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.route-probe-progress__bar {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(170, 190, 222, 0.32);
+}
+
+.route-probe-progress__bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2f6ff6, #19a66a);
+  transition: width 180ms ease;
+}
+
+.route-probe-progress--balance .route-probe-progress__bar span {
+  background: linear-gradient(90deg, #0f9f7a, #2f6ff6);
+}
+
+.route-pool-status {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 10px;
+  padding: 14px 18px 0;
+}
+
+.route-pool-status__card {
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 16px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.route-pool-status__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.route-pool-status__head span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.route-pool-status__head strong {
+  color: #172033;
+  font-size: 18px;
   font-weight: 700;
 }
 
-.route-pool-title :deep(.ant-space) {
-  flex: 0 1 auto;
+.route-pool-status__bar {
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.route-pool-status__bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(110, 168, 255, 0.86), rgba(79, 214, 200, 0.9));
+}
+
+.route-pool-status__card--success .route-pool-status__bar span {
+  background: linear-gradient(90deg, #3ddc97, #82f4a8);
+}
+
+.route-pool-status__card--warning .route-pool-status__bar span {
+  background: linear-gradient(90deg, #ffb34d, #ffd27f);
+}
+
+.route-pool-status__card--danger .route-pool-status__bar span {
+  background: linear-gradient(90deg, #ff7d61, #ffaf72);
+}
+
+.route-pool-preview {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 10px;
+  padding: 14px 18px 18px;
+}
+
+.route-pool-preview__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.route-pool-preview__main {
+  display: grid;
+  gap: 4px;
   min-width: 0;
 }
 
-.route-pool-title :deep(.ant-space-item) {
-  flex: 0 0 auto;
+.route-pool-preview__main strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #172033;
+  font-size: 13px;
+}
+
+.route-pool-preview__main span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.route-pool-preview__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.gateway-strategy-board {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 14px 18px 18px;
+}
+
+.gateway-strategy-board__item {
+  display: grid;
+  gap: 10px;
+  padding: 14px 14px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.gateway-strategy-board__summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+}
+
+.gateway-strategy-board__summary span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.gateway-strategy-board__summary strong {
+  color: #172033;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.gateway-strategy-board__track {
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.gateway-strategy-board__track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #6ea8ff, #7af8d0);
 }
 
 .route-pool-card :deep(.ant-card-body) {
@@ -3093,14 +4022,33 @@ onBeforeUnmount(() => {
 
 .route-pool-filters {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex-wrap: nowrap;
+  justify-content: space-between;
+  gap: 12px;
   align-items: center;
   margin-bottom: 0;
   min-width: 0;
   padding: var(--table-filter-gutter);
   border-bottom: 1px solid var(--border-muted);
   background: var(--bg-panel);
+}
+
+.route-pool-type-tabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.route-pool-searchbar {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .route-pool-filter {
@@ -3132,8 +4080,8 @@ onBeforeUnmount(() => {
 }
 
 .route-type-select :deep(.ant-select-selector) {
-  border-color: transparent !important;
-  color: #fff !important;
+  border-color: rgba(148, 163, 184, 0.28) !important;
+  color: #24334d !important;
   font-weight: 700;
 }
 
@@ -3145,19 +4093,22 @@ onBeforeUnmount(() => {
 
 .route-type-select :deep(.ant-select-selection-item),
 .route-type-select :deep(.ant-select-arrow) {
-  color: #fff !important;
+  color: inherit !important;
 }
 
 .route-type-select--claude :deep(.ant-select-selector) {
-  background: #f97316 !important;
+  background: #fff7ed !important;
+  color: #c2410c !important;
 }
 
 .route-type-select--codex :deep(.ant-select-selector) {
-  background: #111827 !important;
+  background: #eff6ff !important;
+  color: #1d4ed8 !important;
 }
 
 .route-type-select--gemini :deep(.ant-select-selector) {
-  background: #0891b2 !important;
+  background: #ecfeff !important;
+  color: #0e7490 !important;
 }
 
 .route-type-option {
@@ -3166,21 +4117,24 @@ onBeforeUnmount(() => {
   min-width: 74px;
   padding: 2px 9px;
   border-radius: 999px;
-  color: #fff;
+  color: #24334d;
   font-size: 12px;
   font-weight: 800;
 }
 
 .route-type-option--claude {
-  background: #f97316;
+  background: #fff7ed;
+  color: #c2410c;
 }
 
 .route-type-option--codex {
-  background: #111827;
+  background: #eff6ff;
+  color: #1d4ed8;
 }
 
 .route-type-option--gemini {
-  background: #0891b2;
+  background: #ecfeff;
+  color: #0e7490;
 }
 
 .priority-dialog {
@@ -3250,10 +4204,10 @@ onBeforeUnmount(() => {
   min-width: 62px;
   height: 26px;
   padding: 0 10px;
-  border: 1px solid rgba(148, 163, 184, 0.32);
+  border: 1px solid #cbd5e1;
   border-radius: 999px;
-  background: rgba(148, 163, 184, 0.1);
-  color: #475569;
+  background: #f8fafc;
+  color: #0f172a;
   font-family: 'IBM Plex Mono', monospace;
   font-size: 12px;
   font-weight: 700;
@@ -3261,19 +4215,28 @@ onBeforeUnmount(() => {
 }
 
 .gateway-concurrency--active {
-  border-color: rgba(14, 165, 233, 0.5);
-  background: rgba(14, 165, 233, 0.14);
-  color: #0369a1;
+  border-color: #10b981;
+  background: #ecfdf5;
+  color: #064e3b;
+  box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.16);
+}
+
+.gateway-concurrency__current {
+  color: #0f172a;
 }
 
 .gateway-concurrency__separator,
 .gateway-concurrency__limit {
-  color: #94a3b8;
+  color: #475569;
+}
+
+.gateway-concurrency--active .gateway-concurrency__current {
+  color: #047857;
 }
 
 .gateway-concurrency--active .gateway-concurrency__separator,
 .gateway-concurrency--active .gateway-concurrency__limit {
-  color: #0c4a6e;
+  color: #0f172a;
 }
 
 .gateway-latency {
@@ -3282,8 +4245,8 @@ onBeforeUnmount(() => {
   gap: 8px;
   padding: 4px 10px;
   border-radius: 999px;
-  background: rgba(148, 163, 184, 0.12);
-  color: #cbd5e1;
+  background: #f1f5f9;
+  color: #475569;
   font-variant-numeric: tabular-nums;
 }
 
@@ -3315,9 +4278,245 @@ onBeforeUnmount(() => {
   color: #ef4444;
 }
 
+/* 全站固定明色主题：覆盖网关监控旧样式，仅作用于本页。 */
+.gateway-panel__title,
+.gateway-usage-summary__item strong,
+.gateway-active-feed__route,
+.gateway-metric-card__value {
+  color: #172033;
+}
+
+.gateway-usage-card__sep,
+.gateway-usage-summary__item span,
+.gateway-active-feed-panel__pulse,
+.gateway-active-feed__request span,
+.gateway-active-feed__meta span,
+.gateway-metric-card__label {
+  color: #64748b;
+}
+
+.gateway-active-feed-panel__pulse {
+  border-color: rgba(148, 163, 184, 0.26);
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.gateway-overview-shell {
+  border-color: rgba(148, 163, 184, 0.28) !important;
+  background:
+    radial-gradient(circle at top left, rgba(37, 99, 235, 0.1), transparent 34%),
+    linear-gradient(180deg, #ffffff, #f8fbff) !important;
+  box-shadow:
+    0 18px 42px rgba(30, 41, 59, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9) !important;
+}
+
+.gateway-overview-shell::before {
+  background:
+    linear-gradient(rgba(37, 99, 235, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(37, 99, 235, 0.04) 1px, transparent 1px);
+}
+
+.gateway-panel,
+.gateway-metric-card {
+  border-color: rgba(148, 163, 184, 0.28) !important;
+  background: linear-gradient(180deg, #ffffff, #f8fbff) !important;
+  box-shadow:
+    0 16px 34px rgba(30, 41, 59, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9) !important;
+}
+
+.gateway-panel::after,
+.gateway-metric-card::before {
+  background: radial-gradient(circle at right top, rgba(37, 99, 235, 0.08), transparent 42%);
+}
+
+.gateway-usage-input {
+  border-color: rgba(148, 163, 184, 0.34);
+  background: #ffffff;
+  color: #172033;
+}
+
+.gateway-usage-table :deep(.ant-table-thead > tr > th) {
+  background: #f1f5f9 !important;
+  color: #334155;
+  border-bottom-color: rgba(148, 163, 184, 0.2) !important;
+}
+
+.gateway-usage-table :deep(.ant-table-tbody > tr > td) {
+  color: #172033;
+  background: rgba(255, 255, 255, 0.82);
+  border-bottom-color: rgba(148, 163, 184, 0.16) !important;
+}
+
+.gateway-usage-summary__item,
+.gateway-usage-summary__item--primary,
+.gateway-usage-summary__item--success,
+.gateway-usage-summary__item--warning,
+.gateway-usage-summary__item--info {
+  border-color: rgba(148, 163, 184, 0.24);
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.gateway-active-feed--embedded {
+  border-color: rgba(148, 163, 184, 0.24);
+  background: rgba(248, 251, 255, 0.86);
+}
+
+.gateway-active-feed__item {
+  border-bottom-color: rgba(148, 163, 184, 0.16);
+}
+
+.gateway-metric-card--primary,
+.gateway-metric-card--info,
+.gateway-metric-card--success,
+.gateway-metric-card--warning,
+.gateway-metric-card--neutral {
+  background: linear-gradient(180deg, #ffffff, #f8fbff) !important;
+}
+
+.gateway-route-page {
+  gap: 16px;
+}
+
+.gateway-route-page .page-toolbar {
+  padding: 4px 0 2px;
+}
+
+.gateway-route-page .route-management-heading strong {
+  color: #1c2f57;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.gateway-route-page .route-management-heading span {
+  border-color: rgba(148, 163, 184, 0.28);
+  background: rgba(255, 255, 255, 0.86);
+  color: #5b6f94;
+}
+
+.gateway-route-page .route-pool-card--standalone {
+  border: 1px solid rgba(178, 200, 235, 0.48) !important;
+  border-radius: 24px !important;
+  background:
+    radial-gradient(circle at top right, rgba(92, 149, 255, 0.08), transparent 32%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(246, 249, 255, 0.96)) !important;
+  box-shadow:
+    0 18px 40px rgba(66, 113, 230, 0.09),
+    inset 0 1px 0 rgba(255, 255, 255, 0.92) !important;
+}
+
+.gateway-route-page .route-pool-card--standalone :deep(.ant-card-head) {
+  min-height: 70px;
+  padding: 0 18px;
+  border-bottom-color: rgba(178, 200, 235, 0.34);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 250, 255, 0.98));
+}
+
+.gateway-route-page .route-pool-card--standalone :deep(.ant-card-head-title) {
+  padding: 20px 0;
+  color: #274284;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.gateway-route-page .route-pool-card--standalone :deep(.ant-card-extra) {
+  padding: 14px 0;
+}
+
+.gateway-route-page .route-pool-card :deep(.ant-card-body) {
+  border-radius: 0 0 24px 24px;
+  overflow: hidden;
+}
+
+.gateway-route-page .route-pool-filters {
+  padding: 12px 14px;
+  border-bottom-color: rgba(178, 200, 235, 0.3);
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.gateway-route-page .route-pool-filter :deep(.ant-select-selector),
+.gateway-route-page .route-pool-filter :deep(.ant-input) {
+  border-radius: 12px !important;
+  border-color: rgba(188, 211, 245, 0.88) !important;
+  background: rgba(255, 255, 255, 0.92) !important;
+}
+
+.gateway-route-page .route-pool-clear.ant-btn,
+.gateway-route-page .route-pool-filter-switch {
+  border-radius: 12px;
+}
+
+.gateway-route-page .route-pool-card .card-shell {
+  background: transparent;
+}
+
+.gateway-route-page .table-fill--management {
+  background: transparent;
+}
+
+.gateway-route-page .table-fill--management :deep(.ant-table-thead > tr > th) {
+  height: 40px;
+  padding: 0 14px !important;
+  background: linear-gradient(180deg, #f1f5ff, #edf3ff) !important;
+  color: #516cae !important;
+  font-size: 13px;
+}
+
+.gateway-route-page .table-fill--management :deep(.ant-table-tbody > tr > td) {
+  padding: 9px 14px !important;
+  font-size: 13px;
+  color: #2e4381;
+  border-bottom: 1px solid rgba(104, 141, 241, 0.08);
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.gateway-route-page .table-fill--management :deep(.ant-table-tbody > tr:hover > td) {
+  background: linear-gradient(180deg, rgba(246, 249, 255, 0.96), rgba(241, 246, 255, 0.92)) !important;
+}
+
+.gateway-route-page .route-pool-preview__row,
+.gateway-route-page .gateway-active-feed__item {
+  border-bottom-color: rgba(148, 163, 184, 0.16);
+}
+
+.gateway-route-page .gateway-actions-cell {
+  flex-wrap: nowrap;
+}
+
+.gateway-route-page .gateway-actions-menu-button {
+  width: 28px;
+  padding-inline: 0;
+}
+
 @media (max-width: 720px) {
-  .route-pool-title {
+  .route-management-toolbar,
+  .route-pool-filters,
+  .route-pool-searchbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .gateway-access--route {
+    flex-basis: auto;
+  }
+
+  .gateway-access--route code:first-child,
+  .gateway-access--route code:nth-of-type(2) {
+    max-width: 100%;
+  }
+
+  .route-pool-type-tabs {
     flex-wrap: wrap;
+  }
+
+  .route-probe-control {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .route-probe-progress {
+    width: 100%;
   }
 
   .route-pool-filter {
@@ -3329,6 +4528,19 @@ onBeforeUnmount(() => {
   .gateway-policy-help__notes {
     grid-template-columns: 1fr;
   }
+
+  .gateway-metrics {
+    grid-auto-columns: minmax(220px, 1fr);
+  }
+
+  .gateway-usage-summary,
+  .gateway-strategy-board {
+    grid-template-columns: 1fr;
+  }
+
+  .route-pool-preview__row {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 960px) {
@@ -3336,8 +4548,13 @@ onBeforeUnmount(() => {
     grid-template-columns: 1fr;
   }
 
-  .gateway-usage-card__header {
-    flex-direction: column;
+  .gateway-overview-grid {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      'usage'
+      'route'
+      'strategy'
+      'activity';
   }
 
   .gateway-usage-input {
@@ -3348,6 +4565,10 @@ onBeforeUnmount(() => {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .gateway-panel__head {
+    flex-direction: column;
+  }
+
   .gateway-active-feed__main {
     grid-template-columns: 1fr;
     align-items: start;
@@ -3356,6 +4577,20 @@ onBeforeUnmount(() => {
   .gateway-active-feed__request,
   .gateway-active-feed__meta {
     flex-wrap: wrap;
+  }
+
+  .gateway-strategy-board {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 961px) and (max-width: 1320px) {
+  .gateway-overview-grid {
+    grid-template-columns: minmax(0, 1.2fr) minmax(300px, 0.9fr);
+  }
+
+  .gateway-strategy-board {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 </style>

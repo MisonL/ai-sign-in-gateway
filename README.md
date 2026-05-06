@@ -283,29 +283,31 @@ http://127.0.0.1:8972/api/gateway
 
 使用方式：
 
-1. 选择已保存站点。
+1. 在底部输入区上方选择已保存站点。
 2. 系统使用该站点保存的 API Key、请求 API URL 和路由类型自动请求模型列表。
-3. 从模型下拉框选择模型。
+3. 在同一控制行选择模型。
 4. 输入消息并发送。
 
 模型决定请求方式：
 
 - 普通对话模型走 OpenAI 兼容 `/chat/completions`。
 - `gpt-image-*`、`dall-e*`、`imagen` 等图片模型走图片生成/编辑接口。
-- 图片模型支持预设尺寸和自定义宽高；锁定按钮会以当前宽高作为固定比例，继续修改任一边时自动联动另一边。
-- 对话和图片模型都可以添加参考图；是否支持由上游模型决定。
+- 图片模型支持 `1:1`、`3:4`、`4:3`、`16:9`、`9:16` 快捷比例和自定义宽高；选择比例会设置最小 100 基准尺寸并锁定比例，解锁后手动输入会自动识别常见比例但不会重新锁定。
+- 只有图片模型可以添加参考图；普通对话模型会阻止参考图输入，避免把图片发给不支持图片输入的上游。
 
 如果模型加载提示 404，通常表示当前站点的请求 API URL 不支持模型列表接口，或后台进程尚未更新到包含 `/api/tools/models` 的版本。先确认站点的 `api_request_urls` / `gateway_request_urls` 是否指向模型请求根地址，并重启最新二进制或后端进程。
+
+路由模型探测如果从 Codex/OpenAI 兼容 `/models` 成功读取到空列表，会默认写入 `gpt-5.4,gpt-5.5` 作为支持模型，避免“探测无模型但编辑仍保留旧模型”的状态不一致。
 
 ## 余额与套餐余量
 
 余额探测优先使用站点和供应商的真实余额接口，普通 OpenAI 兼容 `/v1/usage` 只作为 fallback：
 
-- `sub2api-platform`：登录态读取 `/api/v1/subscriptions/progress`，识别日、周、月限额窗口；如果存在日限额，优先展示当日剩余可用额度。失败时回退 `/api/v1/subscriptions/summary` 或 `/api/v1/keys` 的额度字段。
+- `sub2api-platform`：登录态读取 `/api/v1/subscriptions/progress`，失败时回退 `/api/v1/subscriptions/summary` 或 `/api/v1/keys` 的额度字段。
 - `yellowpeach-newapi`：登录态读取 `/api/subscription/self` 的 `amount_total/amount_used`，失败时使用 API Key 调 `/api/usage/token/` 的 `total_available/total_used/total_granted`。
 - 官方供应商余额探测支持 DeepSeek、StepFun、SiliconFlow、OpenRouter、Novita AI 的公开余额接口。
 
-套餐余量会写入 `package_remaining/package_total/package_used/package_unit/package_display`，路由列表余额展示当前可用余额或当前限额窗口的剩余额度。
+套餐余量会写入 `package_remaining/package_total/package_used/package_unit/package_display`，路由列表余额仍保留钱包余额或 API Key 余额。
 
 ## 站点与插件
 

@@ -1,19 +1,20 @@
 <script setup lang="ts">
 import {
+  DeleteOutlined,
   PlusOutlined,
   ReloadOutlined,
   ExportOutlined,
-  EditOutlined,
   ExperimentOutlined,
-  CheckCircleOutlined,
   KeyOutlined,
   ShareAltOutlined,
   DollarCircleOutlined,
-  DeleteOutlined,
   MoreOutlined,
 } from '@ant-design/icons-vue'
 import { Modal } from 'ant-design-vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type ComponentPublicInstance } from 'vue'
+import siteEditorAccountArtwork from '../assets/site-editor-account.png'
+import siteEditorCloudArtwork from '../assets/site-editor-cloud.png'
+import siteEditorGatewayArtwork from '../assets/site-editor-gateway.png'
 import {
   analyzeLocalStorage,
   convertCCSwitchSql,
@@ -50,7 +51,7 @@ import ShellLayout from '../components/ShellLayout.vue'
 import StatusPill from '../components/StatusPill.vue'
 import { useDebouncedTask } from '../composables/useDebouncedTask'
 import { useTableScrollHeights } from '../composables/useTableScrollHeights'
-import { balanceTone, formatBalance, formatGroupNames, normalizeGroupNames, parseGroupNames } from '../format'
+import { balanceTone, formatBalance, formatGroupNames, normalizeBalanceUnit, normalizeGroupNames, parseGroupNames } from '../format'
 import { useToast } from '../toast'
 import type {
   CheckinRun,
@@ -246,6 +247,7 @@ const editor = reactive<SitePayload>({
   base_url: '',
   plugin_key: '',
   group_name: '',
+  supported_models: null,
   is_enabled: true,
   notes: '',
   credentials: {},
@@ -327,7 +329,7 @@ const totalBalancesByUnit = computed(() => {
     } else {
       const match = display.match(/\s([^\s]+)$/)
       if (match) {
-        unit = match[1]
+        unit = normalizeBalanceUnit(match[1])
       }
     }
     totals.set(unit, (totals.get(unit) ?? 0) + Number(site.last_balance))
@@ -483,17 +485,16 @@ const ccSwitchFileButtonLabel = computed(() => (ccSwitchImportMode.value === 'sq
 const ccSwitchImportOkText = computed(() => (ccSwitchImportMode.value === 'sql' ? '解析并替换' : '开始替换'))
 
 const siteColumns = [
-  { title: '站点', key: 'site', width: 320, sorter: (a: Site, b: Site) => a.name.localeCompare(b.name, 'zh-CN') },
-  { title: '插件', key: 'plugin', width: 150, sorter: (a: Site, b: Site) => pluginNameFor(a.plugin_key).localeCompare(pluginNameFor(b.plugin_key), 'zh-CN') },
-  { title: 'API Key 数量', key: 'api_key_count', width: 170, sorter: (a: Site, b: Site) => siteApiKeyCount(a) - siteApiKeyCount(b) },
-  { title: '余额', key: 'balance', width: 150, sorter: (a: Site, b: Site) => (a.last_balance ?? -Infinity) - (b.last_balance ?? -Infinity) },
-  { title: '套餐', key: 'package', width: 160, sorter: (a: Site, b: Site) => String(a.package_display ?? '').localeCompare(String(b.package_display ?? ''), 'zh-CN') },
-  { title: '签到状态', key: 'checkin_status', width: 120, sorter: (a: Site, b: Site) => String(visibleCheckinStatus(a) ?? '').localeCompare(String(visibleCheckinStatus(b) ?? ''), 'zh-CN') },
-  { title: '分组', key: 'group', width: 120, sorter: (a: Site, b: Site) => String(a.group_name ?? '').localeCompare(String(b.group_name ?? ''), 'zh-CN') },
-  { title: '连通状态', key: 'status', width: 120, sorter: (a: Site, b: Site) => String(a.connection_status ?? '').localeCompare(String(b.connection_status ?? ''), 'zh-CN') },
-  { title: '启用', key: 'enabled', width: 90, sorter: (a: Site, b: Site) => Number(a.is_enabled) - Number(b.is_enabled) },
+  { title: '站点', key: 'site', width: 280, sorter: (a: Site, b: Site) => a.name.localeCompare(b.name, 'zh-CN') },
+  { title: '平台标签', key: 'plugin', width: 148, sorter: (a: Site, b: Site) => pluginNameFor(a.plugin_key).localeCompare(pluginNameFor(b.plugin_key), 'zh-CN') },
+  { title: '余额', key: 'balance', width: 132, sorter: (a: Site, b: Site) => (a.last_balance ?? -Infinity) - (b.last_balance ?? -Infinity) },
+  { title: '套餐', key: 'package', width: 144, sorter: (a: Site, b: Site) => String(a.package_display ?? '').localeCompare(String(b.package_display ?? ''), 'zh-CN') },
+  { title: '签到状态', key: 'checkin_status', width: 116, sorter: (a: Site, b: Site) => String(visibleCheckinStatus(a) ?? '').localeCompare(String(visibleCheckinStatus(b) ?? ''), 'zh-CN') },
+  { title: '分组', key: 'group', width: 150, sorter: (a: Site, b: Site) => String(a.group_name ?? '').localeCompare(String(b.group_name ?? ''), 'zh-CN') },
+  { title: '连通状态', key: 'status', width: 112, sorter: (a: Site, b: Site) => String(a.connection_status ?? '').localeCompare(String(b.connection_status ?? ''), 'zh-CN') },
+  { title: '启用', key: 'enabled', width: 84, sorter: (a: Site, b: Site) => Number(a.is_enabled) - Number(b.is_enabled) },
   { title: '可签到', key: 'participation', width: 100, sorter: (a: Site, b: Site) => Number(checkinMeta.value.get(b.id)?.include_in_checkin ?? false) - Number(checkinMeta.value.get(a.id)?.include_in_checkin ?? false) },
-  { title: '操作', key: 'actions', width: 136, fixed: 'right' as const },
+  { title: '操作', key: 'actions', width: 128, fixed: 'right' as const },
 ]
 
 const checkinRunColumns = [
@@ -562,6 +563,16 @@ function duplicateSuggestedSiteName(record: unknown) {
 
 function asSite(record: unknown) {
   return record as Site
+}
+
+function normalizeSite(site: Site): Site {
+  const balanceUnit = normalizeBalanceUnit(site.balance_unit)
+  return {
+    ...site,
+    balance_unit: balanceUnit,
+    balance_display: site.balance_display || formatBalance(site.last_balance, balanceUnit),
+    package_unit: normalizeBalanceUnit(site.package_unit, ''),
+  }
 }
 
 function includesSearch(values: Array<string | number | boolean | null | undefined>, keyword: string) {
@@ -735,6 +746,7 @@ function assignEditor(site?: Site | null) {
     detectRecommendedPluginKey(site?.base_url ?? '') ??
     fallbackPlugin
   editor.group_name = site?.group_name ?? ''
+  editor.supported_models = normalizeSupportedModels(site?.supported_models ?? null)
   editor.is_enabled = site?.is_enabled ?? true
   editor.notes = site?.notes ?? ''
   editor.credentials = { ...(site?.credentials ?? {}) }
@@ -997,11 +1009,11 @@ async function loadData(
   try {
     const [pluginData, siteData, groupData] = await Promise.all([getPlugins(), getSites(), getSiteGroups()])
     plugins.value = pluginData
-    sites.value = siteData
+    sites.value = siteData.map(normalizeSite)
     siteGroups.value = groupData
 
     const nextSelected =
-      preferredId !== null ? siteData.find((item) => item.id === preferredId) ?? siteData[0] ?? null : siteData[0] ?? null
+      preferredId !== null ? sites.value.find((item) => item.id === preferredId) ?? sites.value[0] ?? null : sites.value[0] ?? null
 
     if (nextSelected) {
       selectedId.value = nextSelected.id
@@ -1126,6 +1138,20 @@ function normalizeStringList(values: unknown): string[] {
     .split(/[\n\r,，\t]+/)
     .map((item) => item.trim())
     .filter((item, index, source) => item && source.indexOf(item) === index)
+}
+
+function normalizeSupportedModels(values: unknown): string[] | null {
+  const normalized = normalizeStringList(values)
+  return normalized.length ? normalized : null
+}
+
+function supportedModelsPreview(values: unknown, limit = 2): string {
+  const normalized = normalizeStringList(values)
+  if (!normalized.length) {
+    return '未声明'
+  }
+  const preview = normalized.slice(0, limit).join(' / ')
+  return normalized.length > limit ? `${preview} 等 ${normalized.length} 个` : preview
 }
 
 function normalizeApiKeyRouteType(value: unknown): string {
@@ -1371,6 +1397,7 @@ function applyBalanceProbeResult(result: { site_id: number; last_balance: number
   }
   const balance = result.last_balance ?? result.remaining
   target.last_balance = balance
+  target.balance_unit = normalizeBalanceUnit(result.unit)
   target.balance_display = formatBalance(balance, result.unit)
 }
 
@@ -1436,7 +1463,7 @@ function applyPackageQuota(target: Site, source: {
     target.package_used = source.package_used
   }
   if (source.package_unit !== undefined) {
-    target.package_unit = source.package_unit
+    target.package_unit = normalizeBalanceUnit(source.package_unit, '')
   }
 }
 
@@ -1699,6 +1726,7 @@ function applyCheckinResultForSite(
   target.last_message = result.message
   if (result.balance !== null && result.balance !== undefined && !Number.isNaN(result.balance)) {
     target.last_balance = result.balance
+    target.balance_unit = normalizeBalanceUnit(result.balance_unit)
     target.balance_display = result.balance_display || formatBalance(result.balance, result.balance_unit)
   }
   applyPackageQuota(target, result)
@@ -1851,6 +1879,7 @@ async function saveApiKeyDialog() {
       base_url: site.base_url,
       plugin_key: site.plugin_key,
       group_name: site.group_name,
+      supported_models: normalizeSupportedModels(site.supported_models),
       is_enabled: site.is_enabled,
       notes: site.notes,
       credentials: JSON.parse(JSON.stringify(site.credentials)),
@@ -2455,10 +2484,14 @@ async function ensureStorageAnalysisFinished() {
 }
 
 function editorPayload(): SitePayload {
-  return JSON.parse(JSON.stringify(editor))
+  return {
+    ...JSON.parse(JSON.stringify(editor)),
+    supported_models: null,
+  }
 }
 
 function upsertSite(saved: Site) {
+  saved = normalizeSite(saved)
   const index = sites.value.findIndex((site) => site.id === saved.id)
   if (index >= 0) {
     sites.value[index] = saved
@@ -2836,121 +2869,171 @@ onBeforeUnmount(() => {
 
 <template>
   <ShellLayout>
-    <div class="page-stack page-stack--dashboard">
-      <div class="page-toolbar page-toolbar--actions">
-        <div>
-          <a-space>
-            <a-button @click="checkinConfigOpen = true">签到配置</a-button>
-            <a-button @click="checkinLogsOpen = true">最近执行</a-button>
-            <a-button type="primary" :loading="busy" :disabled="!includedCheckinCount" @click="handleCheckinAllIncluded">
-              {{ checkinAllIncludedLabel }}
-            </a-button>
-          </a-space>
+    <div class="sites-page page-stack page-stack--dashboard">
+      <div class="sites-toolbar">
+        <div class="sites-toolbar__segment">
+          <a-button class="sites-toolbar__seg-btn" @click="checkinConfigOpen = true">签到配置</a-button>
+          <a-button class="sites-toolbar__seg-btn" @click="checkinLogsOpen = true">最近执行</a-button>
+          <a-button
+            type="primary"
+            class="sites-toolbar__seg-btn sites-toolbar__seg-btn--primary"
+            :loading="busy"
+            :disabled="!includedCheckinCount"
+            @click="handleCheckinAllIncluded"
+          >
+            {{ checkinAllIncludedLabel }}
+          </a-button>
         </div>
-        <a-space>
-          <a-button :loading="busy" @click="handleRefresh(selectedId)">
+
+        <div class="sites-toolbar__actions">
+          <a-button class="sites-toolbar__ghost-btn" :loading="busy" @click="handleRefresh(selectedId)">
             <template #icon>
               <ReloadOutlined />
             </template>
             刷新
           </a-button>
-          <a-button :loading="busy" @click="handleConnectivitySweep">{{ connectivitySweepLabel }}</a-button>
-          <a-button :loading="inviteRefreshAllLoading" @click="refreshAllInvites">
+          <a-button class="sites-toolbar__ghost-btn" :loading="busy" @click="handleConnectivitySweep">
+            {{ connectivitySweepLabel }}
+          </a-button>
+          <a-button class="sites-toolbar__ghost-btn" :loading="duplicateCheckLoading" @click="handleDuplicateCheck">
+            清理检测
+          </a-button>
+          <a-button class="sites-toolbar__ghost-btn" :loading="inviteRefreshAllLoading" @click="refreshAllInvites">
             <template #icon>
               <ShareAltOutlined />
             </template>
             {{ inviteRefreshAllLabel }}
           </a-button>
-          <a-button :loading="apiKeyRefreshAllLoading" @click="refreshAllApiKeys">
+          <a-button
+            type="primary"
+            class="sites-toolbar__ghost-btn sites-toolbar__ghost-btn--strong"
+            :loading="apiKeyRefreshAllLoading"
+            @click="refreshAllApiKeys"
+          >
             <template #icon>
               <KeyOutlined />
             </template>
             {{ apiKeyRefreshAllLabel }}
           </a-button>
-          <a-button :loading="duplicateCheckLoading" @click="handleDuplicateCheck">清理检测</a-button>
-          <a-button :loading="ccSwitchExportLoading" @click="openCCSwitchConfig('import')">供应商配置</a-button>
-          <a-button type="primary" @click="openCreateDrawer">
+          <a-button class="sites-toolbar__ghost-btn" :loading="ccSwitchExportLoading" @click="openCCSwitchConfig('export')">
+            导出供应商
+          </a-button>
+          <a-button class="sites-toolbar__ghost-btn" @click="openCCSwitchConfig('import')">导入供应商</a-button>
+          <a-button type="primary" class="sites-toolbar__create-btn" @click="openCreateDrawer">
             <template #icon>
               <PlusOutlined />
             </template>
             新建站点
           </a-button>
-        </a-space>
+        </div>
       </div>
 
       <input
+        id="cc-switch-import-file"
         ref="ccSwitchFileInput"
         type="file"
+        name="cc_switch_import_file"
         accept=".json,.sql,application/json,text/plain"
         style="display: none"
         @change="handleCCSwitchFileChange"
       >
 
-      <a-row :gutter="[16, 16]">
+      <a-row :gutter="[16, 16]" class="sites-metric-grid">
         <a-col :xs="24" :sm="12" :xl="8" :xxl="4">
-          <a-card :bordered="false" class="admin-card stat-card stat-card--signal">
-            <a-statistic title="站点总数" :value="sites.length" />
-          </a-card>
-        </a-col>
-        <a-col :xs="24" :sm="12" :xl="8" :xxl="4">
-          <a-card :bordered="false" class="admin-card stat-card stat-card--signal">
-            <a-statistic title="已启用" :value="enabledSiteCount" />
-          </a-card>
-        </a-col>
-        <a-col :xs="24" :sm="12" :xl="8" :xxl="4">
-          <a-card :bordered="false" class="admin-card stat-card stat-card--signal">
-            <a-statistic title="网关就绪" :value="readyGatewayCount" />
-          </a-card>
-        </a-col>
-        <a-col :xs="24" :sm="12" :xl="8" :xxl="4">
-          <a-card :bordered="false" class="admin-card stat-card stat-card--signal">
-            <div class="stat-balance-total">
-              <div class="ant-statistic-title">余额合计</div>
-              <div class="stat-balance-line">
-                <span :class="['stat-balance-amount', `stat-balance-amount--${totalBalanceTone}`]">
-                  {{ totalBalanceSummary }}
-                </span>
-                <span class="stat-balance-count">{{ quantifiedBalanceSiteCount }} 个站点</span>
-              </div>
+          <a-card :bordered="false" class="admin-card stat-card stat-card--signal sites-stat-card">
+            <div class="sites-stat-card__meta">
+              <div class="sites-stat-card__eyebrow">站点总数</div>
+              <div class="sites-stat-card__value">{{ sites.length }}</div>
+              <div class="sites-stat-card__desc">所有已配置站点</div>
             </div>
+            <div class="sites-stat-card__icon sites-stat-card__icon--sheet" />
           </a-card>
         </a-col>
         <a-col :xs="24" :sm="12" :xl="8" :xxl="4">
-          <a-card :bordered="false" class="admin-card stat-card stat-card--signal">
-            <a-statistic title="状态成功" :value="successSiteCount" />
+          <a-card :bordered="false" class="admin-card stat-card stat-card--signal sites-stat-card">
+            <div class="sites-stat-card__meta">
+              <div class="sites-stat-card__eyebrow">已启用</div>
+              <div class="sites-stat-card__value">{{ enabledSiteCount }}</div>
+              <div class="sites-stat-card__desc">当前启用站点</div>
+            </div>
+            <div class="sites-stat-card__icon sites-stat-card__icon--stack" />
           </a-card>
         </a-col>
         <a-col :xs="24" :sm="12" :xl="8" :xxl="4">
-          <a-card :bordered="false" class="admin-card stat-card stat-card--signal">
-            <a-statistic title="失败 / 未测" :value="`${failedSiteCount} / ${pendingSiteCount}`" />
+          <a-card :bordered="false" class="admin-card stat-card stat-card--signal sites-stat-card">
+            <div class="sites-stat-card__meta">
+              <div class="sites-stat-card__eyebrow">网关就绪</div>
+              <div class="sites-stat-card__value">{{ readyGatewayCount }}</div>
+              <div class="sites-stat-card__desc">可稳定转发站点</div>
+            </div>
+            <div class="sites-stat-card__icon sites-stat-card__icon--gateway" />
+          </a-card>
+        </a-col>
+        <a-col :xs="24" :sm="12" :xl="8" :xxl="6">
+          <a-card :bordered="false" class="admin-card stat-card stat-card--signal sites-stat-card sites-stat-card--balance">
+            <div class="sites-stat-card__meta">
+              <div class="sites-stat-card__eyebrow">余额合计</div>
+              <div
+                class="sites-stat-card__value sites-stat-card__value--balance"
+                :class="`sites-stat-card__value--${totalBalanceTone}`"
+                :title="totalBalanceSummary"
+              >
+                {{ totalBalanceSummary }}
+              </div>
+              <div class="sites-stat-card__desc">{{ quantifiedBalanceSiteCount }} 个站点</div>
+            </div>
+            <div class="sites-stat-card__icon sites-stat-card__icon--wallet" />
+          </a-card>
+        </a-col>
+        <a-col :xs="24" :sm="12" :xl="8" :xxl="3">
+          <a-card :bordered="false" class="admin-card stat-card stat-card--signal sites-stat-card">
+            <div class="sites-stat-card__meta">
+              <div class="sites-stat-card__eyebrow">状态成功</div>
+              <div class="sites-stat-card__value">{{ successSiteCount }}</div>
+              <div class="sites-stat-card__desc">连通检测成功</div>
+            </div>
+            <div class="sites-stat-card__icon sites-stat-card__icon--check" />
+          </a-card>
+        </a-col>
+        <a-col :xs="24" :sm="12" :xl="8" :xxl="3">
+          <a-card :bordered="false" class="admin-card stat-card stat-card--signal sites-stat-card">
+            <div class="sites-stat-card__meta">
+              <div class="sites-stat-card__eyebrow">失败 / 未测</div>
+              <div class="sites-stat-card__value">{{ `${failedSiteCount} / ${pendingSiteCount}` }}</div>
+              <div class="sites-stat-card__desc">失败 / 未检测站点</div>
+            </div>
+            <div class="sites-stat-card__icon sites-stat-card__icon--users" />
           </a-card>
         </a-col>
       </a-row>
 
-      <a-card :bordered="false" class="admin-card admin-card--fill site-list-card">
+      <a-card :bordered="false" class="admin-card admin-card--fill site-list-card sites-list-card">
         <template #title>站点列表</template>
         <template #extra>
-          <a-space>
+          <div class="sites-list-toolbar">
             <a-input
+              id="sites-list-search"
               v-model:value="siteSearch"
               allow-clear
-              placeholder="搜索站点 / 域名 / 分组"
-              style="width: 240px"
+              class="sites-list-toolbar__search"
+              name="sites_list_search"
+              placeholder="搜索站点 / 标签 / 分组"
             />
-            <span>{{ groupedSiteCount }} 个已分组</span>
-            <span>已选签到 {{ selectedCheckinIds.length }} 个</span>
+            <span class="sites-list-toolbar__meta">{{ groupedSiteCount }} 个已分组</span>
+            <span class="sites-list-toolbar__meta">已选 {{ selectedCheckinIds.length }} 个</span>
             <a-button
               type="primary"
+              class="sites-list-toolbar__btn"
               :disabled="!selectedCheckinIds.length || busy"
               @click="handleCheckinSelected"
             >
               {{ checkinBatchProgress ? `签到中 ${checkinBatchProgress.done}/${checkinBatchProgress.total}` : '签到选中' }}
             </a-button>
-            <a-button :disabled="!selectedCheckinIds.length" @click="selectedCheckinIds = []">清空选择</a-button>
-          </a-space>
+            <a-button class="sites-list-toolbar__btn" :disabled="!selectedCheckinIds.length" @click="selectedCheckinIds = []">清空选择</a-button>
+          </div>
         </template>
 
-        <div class="card-shell">
+        <div class="card-shell sites-list-shell">
           <div :ref="bindPageTableContainer" class="table-fill table-fill--management">
             <a-table
               :columns="siteColumns"
@@ -2958,10 +3041,10 @@ onBeforeUnmount(() => {
               :pagination="{ pageSize: tablePageSize }"
               :row-key="rowKey"
               :row-selection="checkinRowSelection"
-              size="middle"
+              size="small"
               :custom-row="siteCustomRow"
               :row-class-name="siteRowClassName"
-              :scroll="{ x: 1530, y: pageTableY }"
+              :scroll="{ x: 1480, y: pageTableY }"
             >
               <template #bodyCell="{ column, record }">
                 <template v-if="column.key === 'site'">
@@ -2981,20 +3064,27 @@ onBeforeUnmount(() => {
                         </a-button>
                       </a-tooltip>
                     </div>
+                    <div class="site-subline">
+                      <span class="site-subline__label">{{ record.base_url }}</span>
+                    </div>
+                    <div class="site-subline site-subline--secondary">
+                      <span>{{ supportedModelsPreview(asSite(record).supported_models) }}</span>
+                      <a-tag class="site-inline-badge" :color="siteApiKeyCountTagColor(asSite(record))">
+                        {{ siteApiKeyCountLabel(asSite(record)) }}
+                      </a-tag>
+                    </div>
                   </div>
                 </template>
                 <template v-else-if="column.key === 'plugin'">
-                  <PluginTag :plugin-key="record.plugin_key" :label="displayPluginLabel(asSite(record))" />
-                </template>
-                <template v-else-if="column.key === 'api_key_count'">
-                  <a-tag :color="siteApiKeyCountTagColor(asSite(record))">
-                    {{ siteApiKeyCountLabel(asSite(record)) }}
-                  </a-tag>
+                  <PluginTag class="site-platform-tag" :plugin-key="record.plugin_key" :label="displayPluginLabel(asSite(record))" />
                 </template>
                 <template v-else-if="column.key === 'balance'">
-                  <span :class="balanceClass(record.last_balance)">
-                    {{ record.balance_display || '暂无' }}
-                  </span>
+                  <div class="site-balance-cell">
+                    <span :class="balanceClass(record.last_balance)">
+                      {{ record.balance_display || '暂无' }}
+                    </span>
+                    <span class="site-balance-cell__meta">{{ siteApiKeyCount(asSite(record)) ? `${siteApiKeyCount(asSite(record))} 个 Key` : '无 Key' }}</span>
+                  </div>
                 </template>
                 <template v-else-if="column.key === 'package'">
                   <a-tooltip v-if="record.package_display" :title="record.package_display">
@@ -3004,9 +3094,10 @@ onBeforeUnmount(() => {
                 </template>
                 <template v-else-if="column.key === 'checkin_status'">
                   <StatusPill v-if="visibleCheckinStatus(asSite(record))" :value="visibleCheckinStatus(asSite(record))" />
+                  <span v-else class="site-empty-pill">未加入</span>
                 </template>
                 <template v-else-if="column.key === 'group'">
-                  <span>{{ displayGroupName(asSite(record)) }}</span>
+                  <span class="site-group-text">{{ displayGroupName(asSite(record)) }}</span>
                 </template>
                 <template v-else-if="column.key === 'status'">
                   <StatusPill :value="record.connection_status" />
@@ -3031,24 +3122,25 @@ onBeforeUnmount(() => {
                   />
                 </template>
                 <template v-else-if="column.key === 'actions'">
-                  <a-space size="small" class="site-actions-cell">
-                    <a-button size="small" type="primary" ghost @click.stop="openEditDrawer(asSite(record))">
-                      <template #icon><EditOutlined /></template>
+                  <div class="site-actions-cell">
+                    <a-button size="small" class="site-action-btn site-action-btn--edit" @click.stop="openEditDrawer(asSite(record))">
                       编辑
                     </a-button>
                     <a-dropdown :trigger="['click']">
-                      <a-tooltip title="更多操作">
-                        <a-button
-                          size="small"
-                          class="site-actions-menu-button"
-                          :loading="isInviteLoading(asSite(record).id) || isBalanceProbing(asSite(record).id) || isApiKeyRefreshing(asSite(record).id)"
-                          @click.stop
-                        >
-                          <template #icon><MoreOutlined /></template>
-                        </a-button>
-                      </a-tooltip>
+                      <a-button
+                        size="small"
+                        class="site-actions-menu-button"
+                        :loading="
+                          isInviteLoading(asSite(record).id) ||
+                          isBalanceProbing(asSite(record).id) ||
+                          isApiKeyRefreshing(asSite(record).id)
+                        "
+                        @click.stop
+                      >
+                        <template #icon><MoreOutlined /></template>
+                      </a-button>
                       <template #overlay>
-                        <a-menu @click.stop>
+                        <a-menu @click.stop class="site-actions-menu">
                           <a-menu-item key="test" @click="handleTest(asSite(record))">
                             <ExperimentOutlined />
                             <span>{{ isRelayOnlySitePayload(asSite(record)) ? '验证出口' : '测试连接' }}</span>
@@ -3058,12 +3150,20 @@ onBeforeUnmount(() => {
                             key="checkin"
                             @click="handleCheckin(asSite(record))"
                           >
-                            <CheckCircleOutlined />
+                            <ReloadOutlined />
                             <span>{{ siteCheckinActionLabel(asSite(record)) }}</span>
                           </a-menu-item>
                           <a-menu-item key="api-key" @click="openApiKeyDialog(asSite(record))">
                             <KeyOutlined />
                             <span>API Key</span>
+                          </a-menu-item>
+                          <a-menu-item
+                            key="balance"
+                            :disabled="isBalanceProbing(asSite(record).id)"
+                            @click="handleProbeSiteBalance(asSite(record))"
+                          >
+                            <DollarCircleOutlined />
+                            <span>{{ isBalanceProbing(asSite(record).id) ? '余额读取中' : '读取余额' }}</span>
                           </a-menu-item>
                           <a-menu-item
                             v-if="siteSupportsApiKeySync(asSite(record))"
@@ -3083,15 +3183,6 @@ onBeforeUnmount(() => {
                             <ShareAltOutlined />
                             <span>{{ isInviteLoading(asSite(record).id) ? '邀请读取中' : '邀请信息' }}</span>
                           </a-menu-item>
-                          <a-menu-item
-                            key="balance"
-                            :disabled="isBalanceProbing(asSite(record).id)"
-                            @click="handleProbeSiteBalance(asSite(record))"
-                          >
-                            <DollarCircleOutlined />
-                            <span>{{ isBalanceProbing(asSite(record).id) ? '余额读取中' : '读取余额' }}</span>
-                          </a-menu-item>
-                          <a-menu-divider />
                           <a-menu-item key="delete" danger @click="handleDelete(asSite(record))">
                             <DeleteOutlined />
                             <span>删除站点</span>
@@ -3099,7 +3190,7 @@ onBeforeUnmount(() => {
                         </a-menu>
                       </template>
                     </a-dropdown>
-                  </a-space>
+                  </div>
                 </template>
               </template>
             </a-table>
@@ -3107,325 +3198,348 @@ onBeforeUnmount(() => {
         </div>
       </a-card>
 
-      <a-drawer
+      <a-modal
         v-model:open="drawerOpen"
-        :title="editingId ? `编辑站点 · ${editingSite?.name ?? ''}` : '新建站点'"
-        width="min(1180px, 100vw)"
-        placement="right"
+        :title="null"
+        width="1180px"
+        centered
+        :mask-closable="false"
         :destroy-on-close="false"
+        wrap-class-name="site-editor-modal-wrap"
+        class="site-editor-modal"
       >
-        <div class="drawer-form-shell">
-          <a-alert
-            v-if="saveFeedback"
-            type="success"
-            show-icon
-            :message="saveFeedback"
-            style="margin-bottom: 16px"
-          />
+        <template #closeIcon>
+          <span class="site-editor-modal__close">×</span>
+        </template>
+        <div class="site-editor-modal__frame">
+          <div class="site-editor-modal__header">
+            <div class="site-editor-modal__title">
+              {{ editingId ? `编辑站点 · ${editingSite?.name ?? ''}` : '新建站点' }}
+            </div>
+          </div>
 
-          <a-alert
-            v-if="pluginMismatch && recommendedPlugin"
-            type="warning"
-            show-icon
-            style="margin-bottom: 16px"
-            :message="`当前域名更适合使用 ${recommendedPlugin.name}`"
-          >
-            <template #description>
-              <a-button type="link" style="padding: 0" @click="applyRecommendedPlugin">
-                切换到推荐插件
-              </a-button>
-            </template>
-          </a-alert>
+          <div class="site-editor-modal__body">
+            <div class="drawer-form-shell site-editor-shell">
+              <a-alert
+                v-if="saveFeedback"
+                type="success"
+                show-icon
+                :message="saveFeedback"
+                class="site-editor-alert"
+              />
 
-          <a-alert
-            v-if="testFeedback"
-            :type="testFeedback.type"
-            show-icon
-            :message="testFeedback.title"
-            style="margin-bottom: 16px"
-          >
-            <template #description>
-              <pre class="feedback-pre">{{ testFeedback.message }}</pre>
-            </template>
-          </a-alert>
+              <a-alert
+                v-if="pluginMismatch && recommendedPlugin"
+                type="warning"
+                show-icon
+                class="site-editor-alert"
+                :message="`当前域名更适合使用 ${recommendedPlugin.name}`"
+              >
+                <template #description>
+                  <a-button type="link" style="padding: 0" @click="applyRecommendedPlugin">
+                    切换到推荐插件
+                  </a-button>
+                </template>
+              </a-alert>
 
-          <a-form layout="vertical">
-            <a-row :gutter="[18, 18]" class="drawer-editor-grid">
-              <a-col :xs="24" :xl="13">
-                <div class="drawer-editor-column">
-                  <div class="form-block form-block--elevated">
-                    <div class="form-block__head compact">
-                      <div>
-                        <h3>基础信息</h3>
+              <a-alert
+                v-if="testFeedback"
+                :type="testFeedback.type"
+                show-icon
+                :message="testFeedback.title"
+                class="site-editor-alert"
+              >
+                <template #description>
+                  <pre class="feedback-pre">{{ testFeedback.message }}</pre>
+                </template>
+              </a-alert>
+
+              <a-form layout="vertical">
+                <div class="site-editor-grid">
+                  <div class="site-editor-column site-editor-column--primary">
+                    <section class="site-editor-card site-editor-card--info site-editor-card--gateway">
+                      <div class="site-editor-card__art site-editor-card__art--gateway" aria-hidden="true">
+                        <img :src="siteEditorGatewayArtwork" alt="" />
                       </div>
-                    </div>
-
-                    <a-row :gutter="16">
-                      <a-col :xs="24" :md="12">
-                        <a-form-item label="站点名称">
-                          <a-input v-model:value="editor.name" />
-                        </a-form-item>
-                      </a-col>
-                      <a-col :xs="24" :md="12">
-                        <a-form-item label="基础 URL">
-                          <a-input v-model:value="editor.base_url" />
-                        </a-form-item>
-                      </a-col>
-                    </a-row>
-
-                    <a-row :gutter="16">
-                      <a-col :xs="24" :md="12">
-                        <a-form-item label="插件类型">
-                          <a-select v-model:value="editor.plugin_key" :options="pluginOptions" />
-                        </a-form-item>
-                      </a-col>
-                      <a-col :xs="24" :md="12">
-                        <a-form-item label="分组标签">
-                          <a-select
-                            v-model:value="editorGroupNames"
-                            mode="multiple"
-                            :options="groupOptions"
-                            :max-tag-count="4"
-                            placeholder="选择分组"
-                          />
-                          <small class="field-help">分组请在站点中心顶部“分组管理”里单独维护；这里仅负责选择。</small>
-                        </a-form-item>
-                      </a-col>
-                    </a-row>
-
-                    <a-form-item label="站点备注">
-                      <a-textarea v-model:value="editor.notes" :rows="3" />
-                    </a-form-item>
-
-                    <a-form-item label="启用状态">
-                      <a-switch v-model:checked="editor.is_enabled" checked-children="启用" un-checked-children="停用" />
-                    </a-form-item>
-                  </div>
-
-                  <div class="form-block form-block--elevated">
-                    <div class="form-block__head">
-                      <div>
-                        <h3>浏览器存储导入</h3>
-                        <p>在目标站点控制台运行采集脚本，粘贴输出后自动识别插件类型并回填账号凭证。</p>
-                      </div>
-                      <a-space wrap align="start">
-                        <a-button @click="handleCopyConsoleScript">复制脚本</a-button>
-                        <a-button
-                          type="primary"
-                          :loading="localStorageAnalyzeLoading"
-                          @click="handleAnalyzeLocalStorage"
-                        >
-                          分析并回填
-                        </a-button>
-                      </a-space>
-                    </div>
-
-                    <a-row :gutter="16">
-                      <a-col :xs="24" :lg="12">
-                        <a-form-item label="控制台函数">
-                          <a-textarea
-                            :value="consoleCollectorScript"
-                            :rows="8"
-                            readonly
-                          />
-                          <small class="field-help">复制后到目标站点控制台执行；脚本会尝试把结果写入剪贴板，并输出 URL、可读 Cookie、localStorage、sessionStorage 和可识别 token payload。</small>
-                        </a-form-item>
-                      </a-col>
-                      <a-col :xs="24" :lg="12">
-                        <a-form-item label="脚本输出 JSON">
-                          <a-textarea
-                            v-model:value="localStorageRawText"
-                            :rows="8"
-                            placeholder="粘贴控制台输出的 JSON；粘贴后会自动分析。"
-                            @paste="handleStoragePayloadPaste"
-                          />
-                          <small class="field-help">系统会自动切换插件类型，再把 access_token、refresh_token、邮箱、用户 ID、User-Agent 等写入当前插件支持的字段。</small>
-                        </a-form-item>
-                      </a-col>
-                    </a-row>
-                  </div>
-
-                  <div v-if="currentPlugin" class="form-block form-block--elevated">
-                    <div class="form-block__head">
-                      <div>
-                        <h3>账号凭证</h3>
-                        <p>{{ currentPlugin.auth_hint || '可先在站点侧完成登录，再回到后台回填最终凭证。' }}</p>
-                      </div>
-                      <a-space wrap align="start">
-                        <a-button :disabled="!officialSiteUrl" @click="handleOpenOfficialSite">打开官网</a-button>
-                        <a-button
-                          v-if="showAuthEntryButton"
-                          type="primary"
-                          ghost
-                          :disabled="!authEntryUrl"
-                          @click="handleOpenAuthSite"
-                        >
-                          {{ authEntryLabel }}
-                        </a-button>
-                      </a-space>
-                    </div>
-
-                    <a-row :gutter="16">
-                      <a-col
-                        v-for="field in primaryCredentialFields"
-                        :key="field.name"
-                        :xs="24"
-                        :md="field.type === 'textarea' ? 24 : 12"
-                      >
-                        <a-form-item :label="field.label">
-                          <a-textarea
-                            v-if="field.type === 'textarea'"
-                            v-model:value="editor.credentials[field.name]"
-                            :rows="3"
-                            :placeholder="field.placeholder"
-                            :name="credentialInputName(field.name)"
-                            :autocomplete="credentialAutocomplete(field.name, field.type)"
-                          />
-                          <a-input-password
-                            v-else-if="field.type === 'password'"
-                            v-model:value="editor.credentials[field.name]"
-                            :placeholder="field.placeholder"
-                            :name="credentialInputName(field.name)"
-                            :autocomplete="credentialAutocomplete(field.name, field.type)"
-                          />
-                          <a-input
-                            v-else
-                            v-model:value="editor.credentials[field.name]"
-                            :placeholder="field.placeholder"
-                            :name="credentialInputName(field.name)"
-                            :autocomplete="credentialAutocomplete(field.name, field.type)"
-                          />
-                          <small v-if="field.help_text" class="field-help">{{ field.help_text }}</small>
-                        </a-form-item>
-                      </a-col>
-                    </a-row>
-
-                    <div v-if="manualLoginFields.length" class="nested-form-block">
-                      <div class="form-block__head compact">
-                        <div>
-                          <h3>账号密码</h3>
+                      <div class="site-editor-card__content">
+                        <div class="site-editor-section-head">
+                          <div class="site-editor-section-head__badge">◫</div>
+                          <h3>基础信息</h3>
                         </div>
-                      </div>
-                      <a-row :gutter="16">
-                        <a-col
-                          v-for="field in manualLoginFields"
-                          :key="field.name"
-                          :xs="24"
-                          :md="12"
-                        >
-                          <a-form-item :label="field.label">
-                            <a-input-password
-                              v-if="field.type === 'password'"
-                              v-model:value="editor.credentials[field.name]"
-                              :placeholder="field.placeholder"
-                              :name="credentialInputName(field.name)"
-                              :autocomplete="credentialAutocomplete(field.name, field.type)"
-                            />
-                            <a-input
-                              v-else
-                              v-model:value="editor.credentials[field.name]"
-                              :placeholder="field.placeholder"
-                              :name="credentialInputName(field.name)"
-                              :autocomplete="credentialAutocomplete(field.name, field.type)"
-                            />
-                            <small v-if="field.help_text" class="field-help">{{ field.help_text }}</small>
-                          </a-form-item>
-                        </a-col>
-                      </a-row>
-                    </div>
 
-                    <div v-if="totpCredentialFields.length" class="nested-form-block">
-                      <div class="form-block__head compact">
-                        <div>
-                          <h3>双重验证</h3>
-                        </div>
-                        <a-button
-                          v-if="editingId"
-                          :loading="totpPreviewLoading"
-                          @click="handlePreviewTotp"
-                        >
-                          查看当前验证码
-                        </a-button>
+                        <a-row :gutter="[18, 4]">
+                          <a-col :xs="24" :md="12">
+                            <a-form-item label="站点名称">
+                              <a-input v-model:value="editor.name" />
+                            </a-form-item>
+                          </a-col>
+                          <a-col :xs="24" :md="12">
+                            <a-form-item label="基础 URL">
+                              <a-input v-model:value="editor.base_url" />
+                            </a-form-item>
+                          </a-col>
+                          <a-col :xs="24" :md="12">
+                            <a-form-item label="插件类型">
+                              <a-select v-model:value="editor.plugin_key" :options="pluginOptions" />
+                            </a-form-item>
+                          </a-col>
+                          <a-col :xs="24" :md="12">
+                            <a-form-item label="分组标签">
+                              <a-select
+                                v-model:value="editorGroupNames"
+                                mode="multiple"
+                                :options="groupOptions"
+                                :max-tag-count="4"
+                                placeholder="选择分组"
+                              />
+                              <small class="field-help">分组请在站点中心顶部“分组管理”里单独维护；这里仅负责选择。</small>
+                            </a-form-item>
+                          </a-col>
+                        </a-row>
+
+                        <a-form-item label="站点备注">
+                          <a-textarea v-model:value="editor.notes" :rows="3" placeholder="请输入站点备注（选填）" />
+                        </a-form-item>
+
+                        <a-form-item label="启用状态" class="site-editor-switch-item">
+                          <a-switch v-model:checked="editor.is_enabled" checked-children="启用" un-checked-children="停用" />
+                        </a-form-item>
                       </div>
-                      <a-row :gutter="16">
-                        <a-col
-                          v-for="field in totpCredentialFields"
-                          :key="field.name"
-                          :xs="24"
-                        >
-                          <a-form-item :label="field.label">
+                    </section>
+
+                    <section class="site-editor-card site-editor-card--wide">
+                      <div class="site-editor-card__content">
+                        <div class="site-editor-section-head site-editor-section-head--between">
+                          <div>
+                            <div class="site-editor-section-head">
+                              <div class="site-editor-section-head__badge">⌘</div>
+                              <h3>浏览器存储导入</h3>
+                            </div>
+                            <p>在目标站点控制台运行采集脚本，粘贴输出后自动识别插件类型并回填账号凭证。</p>
+                          </div>
+                          <a-space wrap align="center">
+                            <a-button @click="handleCopyConsoleScript">复制脚本</a-button>
+                            <a-button
+                              type="primary"
+                              :loading="localStorageAnalyzeLoading"
+                              @click="handleAnalyzeLocalStorage"
+                            >
+                              分析并回填
+                            </a-button>
+                          </a-space>
+                        </div>
+
+                        <div class="site-editor-storage-grid">
+                          <a-form-item label="控制台函数">
                             <a-textarea
-                              v-model:value="editor.credentials[field.name]"
-                              :rows="3"
-                              :placeholder="field.placeholder"
-                              :name="credentialInputName(field.name)"
-                              autocomplete="off"
+                              :value="consoleCollectorScript"
+                              :rows="8"
+                              readonly
                             />
-                            <small v-if="field.help_text" class="field-help">{{ field.help_text }}</small>
+                            <small class="field-help">复制后到目标站点控制台执行；脚本会尝试把结果写入剪贴板，并输出 URL、可读 Cookie、localStorage、sessionStorage 和可识别 token payload。</small>
                           </a-form-item>
-                        </a-col>
-                      </a-row>
-                    </div>
-                  </div>
-                </div>
-              </a-col>
 
-              <a-col :xs="24" :xl="11">
-                <div class="drawer-editor-column">
-                  <div v-if="currentPlugin" class="form-block form-block--elevated form-block--sticky">
-                    <div class="form-block__head compact">
-                      <div>
-                        <h3>插件配置</h3>
+                          <a-form-item label="脚本输出 JSON">
+                            <a-textarea
+                              v-model:value="localStorageRawText"
+                              :rows="8"
+                              placeholder="粘贴控制台输出的 JSON；粘贴后会自动分析。"
+                              @paste="handleStoragePayloadPaste"
+                            />
+                            <small class="field-help">系统会自动切换插件类型，再把 access_token、refresh_token、邮箱、用户 ID、User-Agent 等写入当前插件支持的字段。</small>
+                          </a-form-item>
+                        </div>
                       </div>
-                    </div>
-                    <a-alert
-                      v-if="editor.plugin_key === 'api-supplier'"
-                      type="info"
-                      show-icon
-                      message="此站点只用于网关转发，不参与签到 / 资料同步。"
-                      description="api_format 推荐填 openai / anthropic / gemini / general（写错只会影响路由分类，不会影响转发）。Base URL 与 API Key 是必填项。"
-                      style="margin: 0 8px 12px;"
-                    />
-                    <a-row :gutter="16">
-                      <a-col
-                        v-for="field in currentPlugin.config_fields"
-                        :key="field.name"
-                        :xs="24"
-                      >
-                        <a-form-item :label="field.label">
-                          <a-textarea
-                            v-if="field.type === 'textarea'"
-                            :value="configTextValue(field.name)"
-                            :rows="3"
-                            :placeholder="field.placeholder"
-                            @update:value="(value) => updateConfigField(field.name, value)"
-                          />
-                          <a-input-number
-                            v-else-if="field.type === 'number'"
-                            :value="configNumberValue(field.name)"
-                            style="width: 100%"
-                            :placeholder="field.placeholder"
-                            @update:value="(value) => updateConfigField(field.name, value)"
-                          />
-                          <a-input
-                            v-else
-                            :value="configTextValue(field.name)"
-                            :placeholder="field.placeholder"
-                            @update:value="(value) => updateConfigField(field.name, value)"
-                          />
-                          <small v-if="field.help_text" class="field-help">{{ field.help_text }}</small>
-                        </a-form-item>
-                      </a-col>
-                    </a-row>
+                    </section>
+
+                    <section v-if="currentPlugin" class="site-editor-card site-editor-card--wide site-editor-card--account">
+                      <div class="site-editor-card__art site-editor-card__art--account" aria-hidden="true">
+                        <img :src="siteEditorAccountArtwork" alt="" />
+                      </div>
+                      <div class="site-editor-card__content">
+                        <div class="site-editor-section-head site-editor-section-head--between">
+                          <div>
+                            <div class="site-editor-section-head">
+                              <div class="site-editor-section-head__badge">◎</div>
+                              <h3>账号凭证</h3>
+                            </div>
+                            <p>{{ currentPlugin.auth_hint || '可先在站点侧完成登录，再回到后台回填最终凭证。' }}</p>
+                          </div>
+                          <a-space wrap align="center">
+                            <a-button :disabled="!officialSiteUrl" @click="handleOpenOfficialSite">打开官网</a-button>
+                            <a-button
+                              v-if="showAuthEntryButton"
+                              type="primary"
+                              ghost
+                              :disabled="!authEntryUrl"
+                              @click="handleOpenAuthSite"
+                            >
+                              {{ authEntryLabel }}
+                            </a-button>
+                          </a-space>
+                        </div>
+
+                        <a-row :gutter="[18, 4]">
+                          <a-col
+                            v-for="field in primaryCredentialFields"
+                            :key="field.name"
+                            :xs="24"
+                            :md="field.type === 'textarea' ? 24 : 12"
+                          >
+                            <a-form-item :label="field.label">
+                              <a-textarea
+                                v-if="field.type === 'textarea'"
+                                v-model:value="editor.credentials[field.name]"
+                                :rows="3"
+                                :placeholder="field.placeholder"
+                                :name="credentialInputName(field.name)"
+                                :autocomplete="credentialAutocomplete(field.name, field.type)"
+                              />
+                              <a-input-password
+                                v-else-if="field.type === 'password'"
+                                v-model:value="editor.credentials[field.name]"
+                                :placeholder="field.placeholder"
+                                :name="credentialInputName(field.name)"
+                                :autocomplete="credentialAutocomplete(field.name, field.type)"
+                              />
+                              <a-input
+                                v-else
+                                v-model:value="editor.credentials[field.name]"
+                                :placeholder="field.placeholder"
+                                :name="credentialInputName(field.name)"
+                                :autocomplete="credentialAutocomplete(field.name, field.type)"
+                              />
+                              <small v-if="field.help_text" class="field-help">{{ field.help_text }}</small>
+                            </a-form-item>
+                          </a-col>
+                        </a-row>
+
+                        <div v-if="manualLoginFields.length" class="nested-form-block site-editor-subblock">
+                          <div class="site-editor-subblock__head">
+                            <h4>账号密码</h4>
+                          </div>
+                          <a-row :gutter="[18, 4]">
+                            <a-col
+                              v-for="field in manualLoginFields"
+                              :key="field.name"
+                              :xs="24"
+                              :md="12"
+                            >
+                              <a-form-item :label="field.label">
+                                <a-input-password
+                                  v-if="field.type === 'password'"
+                                  v-model:value="editor.credentials[field.name]"
+                                  :placeholder="field.placeholder"
+                                  :name="credentialInputName(field.name)"
+                                  :autocomplete="credentialAutocomplete(field.name, field.type)"
+                                />
+                                <a-input
+                                  v-else
+                                  v-model:value="editor.credentials[field.name]"
+                                  :placeholder="field.placeholder"
+                                  :name="credentialInputName(field.name)"
+                                  :autocomplete="credentialAutocomplete(field.name, field.type)"
+                                />
+                                <small v-if="field.help_text" class="field-help">{{ field.help_text }}</small>
+                              </a-form-item>
+                            </a-col>
+                          </a-row>
+                        </div>
+
+                        <div v-if="totpCredentialFields.length" class="nested-form-block site-editor-subblock">
+                          <div class="site-editor-subblock__head site-editor-subblock__head--between">
+                            <h4>双重验证</h4>
+                            <a-button
+                              v-if="editingId"
+                              :loading="totpPreviewLoading"
+                              @click="handlePreviewTotp"
+                            >
+                              查看当前验证码
+                            </a-button>
+                          </div>
+                          <a-row :gutter="[18, 4]">
+                            <a-col
+                              v-for="field in totpCredentialFields"
+                              :key="field.name"
+                              :xs="24"
+                            >
+                              <a-form-item :label="field.label">
+                                <a-textarea
+                                  v-model:value="editor.credentials[field.name]"
+                                  :rows="3"
+                                  :placeholder="field.placeholder"
+                                  :name="credentialInputName(field.name)"
+                                  autocomplete="off"
+                                />
+                                <small v-if="field.help_text" class="field-help">{{ field.help_text }}</small>
+                              </a-form-item>
+                            </a-col>
+                          </a-row>
+	                        </div>
+	                      </div>
+	                    </section>
+                  </div>
+
+                  <div class="site-editor-column site-editor-column--secondary">
+                    <section v-if="currentPlugin" class="site-editor-card site-editor-card--config site-editor-card--cloud">
+                      <div class="site-editor-card__art site-editor-card__art--cloud" aria-hidden="true">
+                        <img :src="siteEditorCloudArtwork" alt="" />
+                      </div>
+                      <div class="site-editor-card__content">
+                        <div class="site-editor-section-head">
+                          <div class="site-editor-section-head__badge">▣</div>
+                          <h3>插件配置</h3>
+                        </div>
+                        <a-alert
+                          v-if="editor.plugin_key === 'api-supplier'"
+                          type="info"
+                          show-icon
+                          message="此站点只用于网关转发，不参与签到 / 资料同步。"
+                          description="api_format 推荐填 openai / anthropic / gemini / general（写错只会影响路由分类，不会影响转发）。Base URL 与 API Key 是必填项。"
+                          class="site-editor-config-alert"
+                        />
+                        <a-row :gutter="[0, 4]">
+                          <a-col
+                            v-for="field in currentPlugin.config_fields"
+                            :key="field.name"
+                            :xs="24"
+                          >
+                            <a-form-item :label="field.label">
+                              <a-textarea
+                                v-if="field.type === 'textarea'"
+                                :value="configTextValue(field.name)"
+                                :rows="3"
+                                :placeholder="field.placeholder"
+                                @update:value="(value) => updateConfigField(field.name, value)"
+                              />
+                              <a-input-number
+                                v-else-if="field.type === 'number'"
+                                :value="configNumberValue(field.name)"
+                                style="width: 100%"
+                                :placeholder="field.placeholder"
+                                @update:value="(value) => updateConfigField(field.name, value)"
+                              />
+                              <a-input
+                                v-else
+                                :value="configTextValue(field.name)"
+                                :placeholder="field.placeholder"
+                                @update:value="(value) => updateConfigField(field.name, value)"
+                              />
+                              <small v-if="field.help_text" class="field-help">{{ field.help_text }}</small>
+                            </a-form-item>
+                          </a-col>
+                        </a-row>
+                      </div>
+                    </section>
                   </div>
                 </div>
-              </a-col>
-            </a-row>
-          </a-form>
+              </a-form>
+            </div>
+          </div>
         </div>
 
         <template #footer>
-          <div class="drawer-footer">
+          <div class="drawer-footer site-editor-modal__footer">
             <a-space wrap>
               <a-button @click="closeDrawer">取消</a-button>
               <a-button v-if="editingSite" :loading="busy" @click="handleTest(editingSite)">{{ testActionLabel }}</a-button>
@@ -3443,7 +3557,7 @@ onBeforeUnmount(() => {
             </a-space>
           </div>
         </template>
-      </a-drawer>
+      </a-modal>
 
       <a-modal
         v-model:open="ccSwitchConfigOpen"
@@ -3913,3 +4027,889 @@ onBeforeUnmount(() => {
     </div>
   </ShellLayout>
 </template>
+
+<style scoped>
+.site-editor-shell {
+  display: grid;
+  gap: 16px;
+}
+
+.site-editor-alert {
+  margin: 0;
+  border-radius: 16px;
+  border: 1px solid rgba(126, 167, 255, 0.22);
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(18px);
+}
+
+.site-editor-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(360px, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.site-editor-column {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
+.site-editor-card {
+  position: relative;
+  overflow: hidden;
+  border-radius: 20px;
+  border: 1px solid rgba(176, 207, 255, 0.42);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(241, 248, 255, 0.86)),
+    rgba(232, 241, 255, 0.74);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.78),
+    0 18px 42px rgba(107, 154, 235, 0.18);
+  backdrop-filter: blur(22px);
+}
+
+.site-editor-card--info {
+  min-height: 348px;
+}
+
+.site-editor-card--config {
+  min-height: 348px;
+}
+
+.site-editor-card__content {
+  position: relative;
+  z-index: 1;
+  padding: 18px 20px 16px;
+}
+
+.site-editor-card__art {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 16px;
+  pointer-events: none;
+  user-select: none;
+  z-index: 0;
+  opacity: 0.18;
+  filter: saturate(0.92) contrast(1.04);
+}
+
+.site-editor-card__art img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center;
+}
+
+.site-editor-card__art--gateway {
+  opacity: 0.2;
+}
+
+.site-editor-card__art--cloud {
+  opacity: 0.18;
+}
+
+.site-editor-card__art--account {
+  opacity: 0.16;
+}
+
+.site-editor-section-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.site-editor-section-head--between {
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.site-editor-section-head--between > div:first-child {
+  min-width: 0;
+}
+
+.site-editor-section-head h3 {
+  margin: 0;
+  color: #1c2f57;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.site-editor-section-head p {
+  margin: 10px 0 0;
+  color: #7083a7;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.site-editor-section-head__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(69, 134, 255, 0.18), rgba(95, 159, 255, 0.1));
+  color: #4282ff;
+  font-size: 15px;
+  font-weight: 700;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.site-editor-storage-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.site-editor-subblock {
+  margin-top: 8px;
+  border-radius: 16px;
+  border: 1px solid rgba(178, 204, 245, 0.42);
+  background: rgba(255, 255, 255, 0.5);
+  padding: 14px 16px 4px;
+}
+
+.site-editor-subblock__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.site-editor-subblock__head--between {
+  justify-content: space-between;
+}
+
+.site-editor-subblock__head h4 {
+  margin: 0;
+  color: #29416b;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.site-editor-switch-item :deep(.ant-form-item-control-input) {
+  min-height: auto;
+}
+
+.site-editor-config-alert {
+  margin: 0 0 14px;
+  border-radius: 14px;
+}
+
+.site-editor-modal__frame {
+  position: relative;
+  overflow: hidden;
+  border-radius: 26px;
+  background:
+    radial-gradient(circle at top left, rgba(104, 174, 255, 0.2), rgba(104, 174, 255, 0) 28%),
+    linear-gradient(180deg, rgba(251, 253, 255, 0.98), rgba(232, 240, 251, 0.95));
+}
+
+.site-editor-modal__frame::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0) 36%),
+    repeating-linear-gradient(120deg, rgba(112, 164, 255, 0.06) 0 1px, transparent 1px 18px);
+  opacity: 0.8;
+  pointer-events: none;
+}
+
+.site-editor-modal__header {
+  position: relative;
+  z-index: 1;
+  padding: 18px 30px 8px;
+}
+
+.site-editor-modal__title {
+  color: #11295a;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.site-editor-modal__body {
+  position: relative;
+  z-index: 1;
+  max-height: calc(100vh - 220px);
+  overflow: auto;
+  padding: 10px 24px 0;
+}
+
+.site-editor-modal__footer {
+  width: 100%;
+  padding: 14px 24px 18px;
+  border-top: 1px solid rgba(171, 200, 241, 0.42);
+  background: linear-gradient(180deg, rgba(246, 250, 255, 0.56), rgba(233, 241, 252, 0.94));
+  backdrop-filter: blur(16px);
+}
+
+.site-editor-modal__footer :deep(.ant-space) {
+  width: 100%;
+  justify-content: flex-end;
+}
+
+.site-editor-modal__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  color: #7d8eb2;
+  font-size: 26px;
+  line-height: 1;
+}
+
+.field-help {
+  color: #7b8aa9;
+}
+
+.site-editor-shell :deep(.ant-form-item) {
+  margin-bottom: 14px;
+}
+
+.site-editor-shell :deep(.ant-form-item-label > label) {
+  color: #18315e;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.site-editor-shell :deep(.ant-input),
+.site-editor-shell :deep(.ant-input-affix-wrapper),
+.site-editor-shell :deep(.ant-input-number),
+.site-editor-shell :deep(.ant-select-selector),
+.site-editor-shell :deep(.ant-input-number-affix-wrapper),
+.site-editor-shell :deep(textarea.ant-input) {
+  border-radius: 12px;
+  border-color: rgba(188, 211, 245, 0.88);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.74);
+}
+
+.site-editor-shell :deep(.ant-input),
+.site-editor-shell :deep(.ant-input-affix-wrapper),
+.site-editor-shell :deep(.ant-input-number),
+.site-editor-shell :deep(.ant-input-number-affix-wrapper),
+.site-editor-shell :deep(.ant-select-selector) {
+  min-height: 42px;
+}
+
+.site-editor-shell :deep(textarea.ant-input) {
+  min-height: 94px;
+}
+
+.site-editor-shell :deep(.ant-input:focus),
+.site-editor-shell :deep(.ant-input-affix-wrapper-focused),
+.site-editor-shell :deep(.ant-input-number-focused),
+.site-editor-shell :deep(.ant-select-focused .ant-select-selector) {
+  border-color: #7aaaff;
+  box-shadow: 0 0 0 3px rgba(73, 133, 255, 0.12);
+}
+
+.site-editor-shell :deep(.ant-btn) {
+  border-radius: 12px;
+  height: 40px;
+  padding-inline: 18px;
+  font-weight: 600;
+}
+
+.site-editor-shell :deep(.ant-btn-primary) {
+  border-color: #4b82ff;
+  background: linear-gradient(180deg, #62a0ff, #4b7dff);
+  box-shadow: 0 10px 24px rgba(86, 132, 255, 0.24);
+}
+
+.site-editor-shell :deep(.ant-switch) {
+  background: rgba(65, 119, 217, 0.32);
+}
+
+.site-editor-shell :deep(.ant-switch.ant-switch-checked) {
+  background: linear-gradient(90deg, #2f7bff, #65a9ff);
+}
+
+.site-editor-shell :deep(.ant-select-multiple .ant-select-selection-item) {
+  border-radius: 10px;
+  background: rgba(89, 138, 255, 0.14);
+}
+
+@media (max-width: 1280px) {
+  .site-editor-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .site-editor-storage-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .site-editor-card__art {
+    opacity: 0.14;
+    padding: 10px 12px;
+  }
+
+  .site-editor-modal__body {
+    max-height: calc(100vh - 188px);
+    padding-inline: 14px;
+  }
+
+  .site-editor-modal__header {
+    padding-inline: 18px;
+  }
+
+  .site-editor-modal__footer {
+    padding-inline: 14px;
+  }
+}
+</style>
+
+<style scoped>
+.sites-page {
+  --sites-accent: #4f86ff;
+  --sites-accent-strong: #2f6fff;
+  --sites-text: #213a7a;
+  --sites-text-soft: #7f93c7;
+  --sites-border: rgba(110, 149, 255, 0.2);
+  --sites-panel: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(245, 249, 255, 0.96));
+  --sites-shadow: 0 18px 40px rgba(66, 113, 230, 0.09);
+  gap: 18px;
+}
+
+.sites-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px 18px;
+  align-items: center;
+  padding: 6px 0 2px;
+}
+
+.sites-toolbar__segment,
+.sites-toolbar__actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.sites-toolbar__seg-btn.ant-btn,
+.sites-toolbar__ghost-btn.ant-btn,
+.sites-toolbar__create-btn.ant-btn,
+.sites-list-toolbar__btn.ant-btn {
+  height: 38px;
+  padding: 0 18px;
+  border-radius: 13px !important;
+  border-color: rgba(125, 154, 233, 0.28) !important;
+  background: rgba(255, 255, 255, 0.8) !important;
+  color: #4261b3 !important;
+  box-shadow: 0 10px 20px rgba(110, 140, 214, 0.08);
+}
+
+.sites-toolbar__seg-btn--primary.ant-btn,
+.sites-toolbar__ghost-btn--strong.ant-btn,
+.sites-toolbar__create-btn.ant-btn {
+  background: linear-gradient(135deg, #5a8dff, #3f72ff) !important;
+  color: #fff !important;
+  border-color: transparent !important;
+  box-shadow: 0 14px 24px rgba(79, 124, 255, 0.26);
+}
+
+.sites-toolbar__segment :deep(.ant-btn-icon),
+.sites-toolbar__actions :deep(.ant-btn-icon) {
+  font-size: 14px;
+}
+
+.sites-metric-grid {
+  margin-top: 2px;
+}
+
+.sites-stat-card.ant-card {
+  position: relative;
+  overflow: hidden;
+  min-height: 128px;
+  border-radius: 24px !important;
+  border: 1px solid var(--sites-border) !important;
+  background: var(--sites-panel) !important;
+  box-shadow: var(--sites-shadow) !important;
+}
+
+.sites-stat-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 15% 16%, rgba(113, 179, 255, 0.18), transparent 32%),
+    radial-gradient(circle at 92% 12%, rgba(125, 122, 255, 0.08), transparent 34%);
+  pointer-events: none;
+}
+
+.sites-stat-card :deep(.ant-card-body) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px;
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+}
+
+.sites-stat-card__meta {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.sites-stat-card__eyebrow {
+  font-size: 13px;
+  font-weight: 700;
+  color: #4d76d3;
+}
+
+.sites-stat-card__value {
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: clamp(1.55rem, 1.65vw, 2.05rem);
+  line-height: 1.05;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: #1f397a;
+  font-variant-numeric: tabular-nums;
+}
+
+.sites-stat-card__value--balance {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: clamp(1.1rem, 1.18vw, 1.45rem);
+  line-height: 1.12;
+}
+
+.sites-stat-card__value--positive {
+  color: var(--sites-accent-strong);
+}
+
+.sites-stat-card__value--negative {
+  color: #ff5d5d;
+}
+
+.sites-stat-card__value--zero,
+.sites-stat-card__value--empty {
+  color: #5f77b6;
+}
+
+.sites-stat-card__desc {
+  font-size: 12px;
+  color: var(--sites-text-soft);
+}
+
+.sites-stat-card__icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 16px;
+  flex: 0 0 auto;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(233, 241, 255, 0.95)),
+    linear-gradient(135deg, rgba(122, 163, 255, 0.22), rgba(92, 122, 255, 0.18));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.86),
+    0 10px 24px rgba(93, 122, 205, 0.18);
+  position: relative;
+  overflow: hidden;
+}
+
+.sites-stat-card__icon::before,
+.sites-stat-card__icon::after {
+  content: '';
+  position: absolute;
+}
+
+.sites-stat-card__icon--sheet::before {
+  left: 50%;
+  top: 50%;
+  width: 22px;
+  height: 28px;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #6aa5ff, #4d82ff);
+  transform: translate(-50%, -50%);
+}
+
+.sites-stat-card__icon--sheet::after {
+  left: 50%;
+  top: 44%;
+  width: 14px;
+  height: 2px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 7px 0 rgba(255, 255, 255, 0.92), 0 14px 0 rgba(255, 255, 255, 0.92);
+  transform: translate(-38%, -50%);
+}
+
+.sites-stat-card__icon--stack::before,
+.sites-stat-card__icon--stack::after {
+  left: 50%;
+  width: 24px;
+  height: 8px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #5e95ff, #4480ff);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.28) inset;
+  transform: translateX(-50%);
+}
+
+.sites-stat-card__icon--stack::before {
+  top: 14px;
+  box-shadow:
+    0 10px 0 0 #4f84ff,
+    0 20px 0 0 #3f73ff;
+}
+
+.sites-stat-card__icon--stack::after {
+  display: none;
+}
+
+.sites-stat-card__icon--gateway::before {
+  left: 50%;
+  top: 58%;
+  width: 25px;
+  height: 16px;
+  border-radius: 6px;
+  background: linear-gradient(180deg, #6aa0ff, #4f82ff);
+  transform: translate(-50%, -50%);
+}
+
+.sites-stat-card__icon--gateway::after {
+  left: 50%;
+  top: 28%;
+  width: 12px;
+  height: 18px;
+  border: 4px solid #6ea3ff;
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  transform: translate(-50%, 0);
+}
+
+.sites-stat-card__icon--wallet::before {
+  left: 50%;
+  top: 50%;
+  width: 28px;
+  height: 20px;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #6ca0ff, #4d80ff);
+  transform: translate(-50%, -50%);
+}
+
+.sites-stat-card__icon--wallet::after {
+  left: 58%;
+  top: 50%;
+  width: 12px;
+  height: 9px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.92);
+  transform: translate(-50%, -50%);
+}
+
+.sites-stat-card__icon--check::before {
+  left: 50%;
+  top: 50%;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #6da6ff, #4c80ff);
+  transform: translate(-50%, -50%);
+}
+
+.sites-stat-card__icon--check::after {
+  left: 51%;
+  top: 50%;
+  width: 12px;
+  height: 7px;
+  border-left: 3px solid #fff;
+  border-bottom: 3px solid #fff;
+  transform: translate(-50%, -50%) rotate(-45deg);
+}
+
+.sites-stat-card__icon--users::before {
+  left: 41%;
+  top: 36%;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #75abff, #4b7fff);
+  box-shadow: 15px 0 0 #6ca2ff;
+  transform: translate(-50%, -50%);
+}
+
+.sites-stat-card__icon--users::after {
+  left: 50%;
+  top: 65%;
+  width: 34px;
+  height: 16px;
+  border-radius: 16px 16px 10px 10px;
+  background: linear-gradient(180deg, #7fb4ff, #5185ff);
+  transform: translate(-50%, -50%);
+}
+
+.sites-list-card.ant-card {
+  border-radius: 26px !important;
+  overflow: hidden;
+  border: 1px solid rgba(109, 145, 247, 0.18) !important;
+}
+
+.sites-list-card :deep(.ant-card-head) {
+  min-height: 72px;
+  padding: 0 20px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(246, 249, 255, 0.98));
+}
+
+.sites-list-card :deep(.ant-card-head-title) {
+  padding: 20px 0;
+  font-size: 22px;
+  font-weight: 700;
+  color: #274284;
+}
+
+.sites-list-card :deep(.ant-card-extra) {
+  padding: 14px 0;
+}
+
+.sites-list-shell {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(247, 250, 255, 0.96));
+}
+
+.sites-list-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.sites-list-toolbar__search {
+  width: 260px;
+}
+
+.sites-list-toolbar__search :deep(.ant-input-affix-wrapper),
+.sites-list-toolbar__search :deep(.ant-input) {
+  border-radius: 12px !important;
+  background: rgba(255, 255, 255, 0.85) !important;
+}
+
+.sites-list-toolbar__meta {
+  color: #5a6fa9;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.table-fill--management {
+  background: transparent;
+}
+
+.sites-page .table-fill--management :deep(.ant-table) {
+  background: transparent !important;
+}
+
+.sites-page .table-fill--management :deep(.ant-table-container) {
+  border-radius: 18px;
+}
+
+.sites-page .table-fill--management :deep(.ant-table-thead > tr > th) {
+  height: 40px;
+  padding: 0 14px !important;
+  background: linear-gradient(180deg, #f1f5ff, #edf3ff) !important;
+  color: #516cae !important;
+  font-size: 13px;
+}
+
+.sites-page .table-fill--management :deep(.ant-table-selection-column) {
+  width: 48px !important;
+  min-width: 48px !important;
+}
+
+.sites-page .table-fill--management :deep(.ant-table-tbody > tr > td) {
+  padding: 8px 14px !important;
+  font-size: 13px;
+  color: #2e4381;
+  border-bottom: 1px solid rgba(104, 141, 241, 0.08);
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.sites-page .table-fill--management :deep(.ant-table-tbody > tr:hover > td) {
+  background: linear-gradient(180deg, rgba(246, 249, 255, 0.96), rgba(241, 246, 255, 0.92)) !important;
+}
+
+.sites-page .table-fill--management :deep(.ant-pagination) {
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.site-table-cell {
+  gap: 6px;
+}
+
+.site-name-cell strong {
+  font-size: 14px;
+  color: #253c79;
+}
+
+.site-name-open-btn.ant-btn {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 8px !important;
+  color: var(--sites-accent) !important;
+}
+
+.site-subline {
+  gap: 8px;
+  min-width: 0;
+  font-size: 12px;
+  color: #8a9bc4;
+}
+
+.site-subline__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.site-subline--secondary {
+  color: #6e82b8;
+}
+
+.site-inline-badge.ant-tag {
+  margin-inline-end: 0;
+  padding: 0 8px;
+}
+
+.site-platform-tag {
+  max-width: 100%;
+}
+
+.site-balance-cell {
+  display: grid;
+  gap: 4px;
+}
+
+.site-balance-cell__meta {
+  font-size: 11px;
+  color: #8ea0cb;
+}
+
+.site-package-cell {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  color: #4e648f;
+  background: rgba(95, 136, 255, 0.08);
+}
+
+.site-package-cell--empty {
+  color: #9cadcf;
+  background: rgba(139, 156, 197, 0.12);
+}
+
+.site-empty-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  color: #96a5c9;
+  background: rgba(145, 159, 194, 0.14);
+  font-size: 12px;
+}
+
+.site-group-text {
+  color: #4a6296;
+}
+
+.site-actions-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+}
+
+.site-action-btn.ant-btn,
+.site-actions-menu-button.ant-btn {
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px !important;
+  background: rgba(255, 255, 255, 0.92) !important;
+  border-color: rgba(130, 156, 232, 0.3) !important;
+  color: #5e73a6 !important;
+  box-shadow: none;
+}
+
+.site-action-btn--edit.ant-btn {
+  color: #4a7dff !important;
+  border-color: rgba(89, 134, 255, 0.34) !important;
+  background: rgba(79, 124, 255, 0.08) !important;
+}
+
+.site-action-btn--danger.ant-btn {
+  color: #ff6a6a !important;
+  border-color: rgba(255, 126, 126, 0.28) !important;
+  background: rgba(255, 108, 108, 0.07) !important;
+}
+
+.site-actions-menu-button.ant-btn {
+  width: 28px;
+  min-width: 28px;
+  padding: 0;
+}
+
+.site-actions-menu :deep(.ant-dropdown-menu-item) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sites-page :deep(.ant-switch) {
+  min-width: 42px;
+  height: 22px;
+  line-height: 22px;
+}
+
+.sites-page :deep(.ant-switch.ant-switch-checked) {
+  background: linear-gradient(135deg, #5a8dff, #3f72ff);
+}
+
+.sites-page :deep(.plugin-tag.ant-tag),
+.sites-page :deep(.ant-tag) {
+  font-size: 12px;
+}
+
+.sites-page :deep(.management-row--active > td:first-child::before) {
+  background: linear-gradient(180deg, #7ab2ff, #3f72ff);
+}
+
+@media (max-width: 1400px) {
+  .sites-toolbar {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 960px) {
+  .sites-list-toolbar {
+    align-items: stretch;
+  }
+
+  .sites-list-toolbar__search {
+    width: min(100%, 360px);
+  }
+}
+</style>

@@ -10,6 +10,7 @@ import (
 	"ai-sign-in-gateway/internal/models"
 	"ai-sign-in-gateway/internal/plugins"
 	"ai-sign-in-gateway/internal/schemas"
+	"ai-sign-in-gateway/internal/services"
 	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm"
 )
@@ -41,7 +42,7 @@ func (a *App) CheckinSites(w http.ResponseWriter, r *http.Request) {
 			"base_url": site.BaseURL, "is_enabled": site.IsEnabled, "can_checkin": true,
 			"include_in_checkin": includeInCheckin(site), "checkin_label": "签到", "reason": "",
 			"last_status": site.LastStatus, "connection_status": site.LastStatus, "last_message": site.LastMessage,
-			"last_balance": site.LastBalance, "balance_display": balanceDisplay(site.LastBalance),
+			"last_balance": site.LastBalance, "balance_display": balanceDisplayWithUnit(site.LastBalance, jsonMapString(site.PluginConfig, "balance_unit")),
 			"package_display": packageDisplay(site), "checkin_status": site.LastStatus, "last_run_at": site.LastRunAt,
 		}
 		for key, value := range packageQuotaMap(site) {
@@ -102,7 +103,7 @@ func (a *App) UpdateCheckinParticipation(w http.ResponseWriter, r *http.Request)
 		"base_url": site.BaseURL, "is_enabled": site.IsEnabled, "can_checkin": true,
 		"include_in_checkin": includeInCheckin(site), "checkin_label": "签到", "reason": "",
 		"last_status": site.LastStatus, "connection_status": site.LastStatus, "last_message": site.LastMessage,
-		"last_balance": site.LastBalance, "balance_display": balanceDisplay(site.LastBalance),
+		"last_balance": site.LastBalance, "balance_display": balanceDisplayWithUnit(site.LastBalance, jsonMapString(site.PluginConfig, "balance_unit")),
 		"package_display": packageDisplay(site), "checkin_status": site.LastStatus, "last_run_at": site.LastRunAt,
 	}
 	for key, value := range packageQuotaMap(site) {
@@ -126,8 +127,8 @@ func (a *App) SiteCheckin(w http.ResponseWriter, r *http.Request) {
 		"status":            run.Status,
 		"message":           run.Message,
 		"balance":           run.Balance,
-		"balance_unit":      strings.TrimSpace(jsonMapString(site.PluginConfig, "balance_unit")),
-		"balance_display":   balanceDisplay(run.Balance),
+		"balance_unit":      services.NormalizeBalanceUnit(jsonMapString(site.PluginConfig, "balance_unit")),
+		"balance_display":   balanceDisplayWithUnit(run.Balance, jsonMapString(site.PluginConfig, "balance_unit")),
 		"package_display":   packageDisplay(site),
 		"checkin_status":    run.Status,
 		"connection_status": run.Status,
@@ -207,7 +208,7 @@ func (a *App) syncBalanceAfterCheckin(r *http.Request, plugin plugins.SitePlugin
 		site.Credentials = models.JSONMap{}
 	}
 	if result.BalanceUnit != nil && strings.TrimSpace(*result.BalanceUnit) != "" {
-		site.PluginConfig = mergeJSON(site.PluginConfig, models.JSONMap{"balance_unit": strings.TrimSpace(*result.BalanceUnit)})
+		site.PluginConfig = mergeJSON(site.PluginConfig, models.JSONMap{"balance_unit": services.NormalizeBalanceUnit(*result.BalanceUnit)})
 	}
 	balance := result.Balance
 	opCtx, cancel := siteOperationContext(r.Context(), timeout)
@@ -223,7 +224,7 @@ func (a *App) syncBalanceAfterCheckin(r *http.Request, plugin plugins.SitePlugin
 		balance = status.Balance
 	}
 	if status.BalanceUnit != nil && strings.TrimSpace(*status.BalanceUnit) != "" {
-		site.PluginConfig = mergeJSON(site.PluginConfig, models.JSONMap{"balance_unit": strings.TrimSpace(*status.BalanceUnit)})
+		site.PluginConfig = mergeJSON(site.PluginConfig, models.JSONMap{"balance_unit": services.NormalizeBalanceUnit(*status.BalanceUnit)})
 	}
 	if status.PackageDisplay != nil && strings.TrimSpace(*status.PackageDisplay) != "" {
 		site.PluginConfig = mergeJSON(site.PluginConfig, models.JSONMap{"package_display": strings.TrimSpace(*status.PackageDisplay)})

@@ -358,27 +358,27 @@ onMounted(loadData)
                     <a-form layout="vertical">
                   <a-row :gutter="16">
                     <a-col :xs="24" :md="12">
-                      <a-form-item label="时区">
-                        <a-input v-model:value="form.timezone" />
+                      <a-form-item label="时区" html-for="settings-timezone">
+                        <a-input id="settings-timezone" v-model:value="form.timezone" name="settings_timezone" />
                       </a-form-item>
                     </a-col>
                     <a-col :xs="24" :md="12">
-                      <a-form-item label="每日执行时间">
-                        <a-input v-model:value="form.daily_run_time" type="time" />
+                      <a-form-item label="每日执行时间" html-for="settings-daily-run-time">
+                        <a-input id="settings-daily-run-time" v-model:value="form.daily_run_time" name="settings_daily_run_time" type="time" />
                       </a-form-item>
                     </a-col>
                   </a-row>
 
                   <a-row :gutter="16">
                     <a-col :xs="24" :md="12">
-                      <a-form-item label="同站点 URL 并发数">
-                        <a-input-number v-model:value="form.checkin_concurrency" style="width: 100%" :min="1" :max="20" />
+                      <a-form-item label="同站点 URL 并发数" html-for="settings-checkin-concurrency">
+                        <a-input-number id="settings-checkin-concurrency" v-model:value="form.checkin_concurrency" name="settings_checkin_concurrency" style="width: 100%" :min="1" :max="20" />
                         <small class="field-help">限制同一 base_url 下多账号同时签到，默认 1 用于降低同站风控风险。</small>
                       </a-form-item>
                     </a-col>
                     <a-col :xs="24" :md="12">
-                      <a-form-item label="不同站点总并发数">
-                        <a-input-number v-model:value="form.checkin_global_concurrency" style="width: 100%" :min="1" :max="50" />
+                      <a-form-item label="不同站点总并发数" html-for="settings-checkin-global-concurrency">
+                        <a-input-number id="settings-checkin-global-concurrency" v-model:value="form.checkin_global_concurrency" name="settings_checkin_global_concurrency" style="width: 100%" :min="1" :max="50" />
                         <small class="field-help">控制不同 base_url 之间可同时执行的总任务数。</small>
                       </a-form-item>
                     </a-col>
@@ -386,21 +386,21 @@ onMounted(loadData)
 
                   <a-row :gutter="16">
                     <a-col :xs="24" :md="12">
-                      <a-form-item label="站点间隔（秒）">
-                        <a-input-number v-model:value="form.checkin_interval_seconds" style="width: 100%" :min="0" :max="60" />
+                      <a-form-item label="站点间隔（秒）" html-for="settings-checkin-interval-seconds">
+                        <a-input-number id="settings-checkin-interval-seconds" v-model:value="form.checkin_interval_seconds" name="settings_checkin_interval_seconds" style="width: 100%" :min="0" :max="60" />
                       </a-form-item>
                     </a-col>
                   </a-row>
 
                   <a-row :gutter="16">
                     <a-col :xs="24" :md="12">
-                      <a-form-item label="失败重试次数">
-                        <a-input-number v-model:value="form.retry_count" style="width: 100%" :min="0" :max="5" />
+                      <a-form-item label="失败重试次数" html-for="settings-retry-count">
+                        <a-input-number id="settings-retry-count" v-model:value="form.retry_count" name="settings_retry_count" style="width: 100%" :min="0" :max="5" />
                       </a-form-item>
                     </a-col>
                     <a-col :xs="24" :md="12">
-                      <a-form-item label="请求超时（秒）">
-                        <a-input-number v-model:value="form.request_timeout" style="width: 100%" :min="5" :max="120" />
+                      <a-form-item label="请求超时（秒）" html-for="settings-request-timeout">
+                        <a-input-number id="settings-request-timeout" v-model:value="form.request_timeout" name="settings_request_timeout" style="width: 100%" :min="5" :max="120" />
                       </a-form-item>
                     </a-col>
                   </a-row>

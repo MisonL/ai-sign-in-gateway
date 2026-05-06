@@ -9,6 +9,8 @@ import {
 } from '@ant-design/icons-vue'
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import sidebarGatewayArtwork from '../assets/design/sidebar-gateway.png'
+import sidebarSkylineArtwork from '../assets/design/sidebar-skyline.png'
 import { getGatewayOverview, getMe, logout } from '../api'
 import GroupManagerButton from './GroupManagerButton.vue'
 import type { AdminUser, GatewayOverview } from '../types'
@@ -128,10 +130,12 @@ onBeforeUnmount(() => {
       theme="light"
     >
       <div class="brand-panel">
-        <div class="brand-mark">签</div>
+        <div class="brand-mark" aria-hidden="true">
+          <img :src="sidebarGatewayArtwork" alt="" />
+        </div>
         <div v-if="!collapsed">
           <strong>爱签网关</strong>
-          <p>ai-sign-in-gateway · 站点授权、自动签到与网关后台</p>
+          <p>签到与网关管理后台</p>
         </div>
       </div>
 
@@ -149,9 +153,33 @@ onBeforeUnmount(() => {
       </a-menu>
 
       <div v-if="!collapsed" class="sider-footer">
-        <a-tag color="blue">单管理员</a-tag>
-        <p>面向 API 中转站的统一登录、授权、签到、网关与测试工作台。</p>
+        <div class="sider-footer__panel">
+          <div class="sider-footer__head">
+            <span>系统状态</span>
+            <span class="sider-footer__badge">稳定</span>
+          </div>
+          <div class="sider-footer__status">
+            <span class="sider-footer__dot"></span>
+            <strong>网关运行中</strong>
+          </div>
+          <div class="sider-footer__meta">
+            <span>当前用户</span>
+            <strong>{{ admin?.username ?? 'admin' }}</strong>
+          </div>
+          <div class="sider-footer__meta">
+            <span>控制台</span>
+            <strong>爱签网关</strong>
+          </div>
+          <a-button class="sider-footer__button" block @click="navigate('/gateway/monitor')">查看运行日志</a-button>
+        </div>
+        <p>© 2025 爱签网关</p>
       </div>
+
+      <div v-else class="sider-footer sider-footer--collapsed" aria-hidden="true">
+        <span class="sider-footer__dot"></span>
+      </div>
+
+      <div class="sider-visual" :style="{ '--sider-skyline': `url(${sidebarSkylineArtwork})` }" aria-hidden="true"></div>
     </a-layout-sider>
 
     <a-layout class="app-main">

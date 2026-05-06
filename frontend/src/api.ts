@@ -15,6 +15,7 @@ import type {
   GatewayActiveRequest,
   GatewayLog,
   GatewayOverview,
+  GatewayRouteUpdatePayload,
   GatewayUsage,
   GatewayRouteDiagnosis,
   GatewayRouteProbeResult,
@@ -670,10 +671,13 @@ export function resetGatewayRouteCircuit(id: number): Promise<{ id: number; is_e
   })
 }
 
-export function updateGatewayRouteType(id: number, routeType: 'claude' | 'codex' | 'gemini'): Promise<GatewayRoute> {
+export function updateGatewayRouteType(
+  id: number,
+  payload: GatewayRouteUpdatePayload,
+): Promise<GatewayRoute> {
   return request(`/gateway-admin/routes/${id}/type`, {
     method: 'PATCH',
-    body: JSON.stringify({ route_type: routeType }),
+    body: JSON.stringify(payload),
   })
 }
 
@@ -698,9 +702,10 @@ export function diagnoseGatewayRoute(id: number): Promise<GatewayRouteDiagnosis>
   return request(`/gateway-admin/routes/${id}/diagnose`)
 }
 
-export function probeGatewayRouteBalance(id: number): Promise<BalanceProbeResult> {
+export function probeGatewayRouteBalance(id: number, payload?: { balance_probe_url?: string }): Promise<BalanceProbeResult> {
   return request(`/gateway-admin/routes/${id}/balance-probe`, {
     method: 'POST',
+    body: payload ? JSON.stringify(payload) : undefined,
   })
 }
 

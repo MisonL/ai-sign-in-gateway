@@ -136,7 +136,7 @@ func (p *YellowPeach) FetchAccountStatus(ctx context.Context, site models.Site, 
 	loggedIn := pathBool(payload, "success")
 	message := pathString(payload, "message", "用户信息读取成功。")
 	balance := p.extractBalance(site, payload)
-	balanceUnit := p.extractBalanceUnit(payload)
+	balanceUnit := normalizeBalanceUnit(p.extractBalanceUnit(payload))
 	packageQuota := p.fetchPackageQuota(ctx, site, auth, payload, timeoutSeconds)
 	accountName := p.extractAccountName(site, payload)
 	updates := models.JSONMap{}
@@ -642,6 +642,9 @@ func (p *YellowPeach) syncAPIKeys(ctx context.Context, site models.Site, auth ye
 			"status":     status,
 			"route_type": routeType,
 			"api_type":   routeType,
+		}
+		if supportedModels := apiKeySupportedModelsFromItem(item); len(supportedModels) > 0 {
+			entry["supported_models"] = supportedModels
 		}
 		apiKeys = append(apiKeys, entry)
 		if primary == nil && tokenItemMatchesPreference(entry, preferredName, preferredID) {

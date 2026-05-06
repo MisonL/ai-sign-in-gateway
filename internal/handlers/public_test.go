@@ -133,6 +133,76 @@ func TestGatewayAliasRouteWithoutV1(t *testing.T) {
 	}
 }
 
+func TestGatewaySub2APIProxyPathUsesModelProbeStrategy(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/sub2api/v1/models", nil)
+	if got := gatewayProxyTargetPath(req.URL.Path); got != "models" {
+		t.Fatalf("target path = %q", got)
+	}
+	if got := gatewayModelProbeStrategy(req); got != "sub2api" {
+		t.Fatalf("model probe strategy = %q", got)
+	}
+}
+
+func TestGatewayRootV1PathUsesSub2APIModelProbeStrategy(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	if got := gatewayProxyTargetPath(req.URL.Path); got != "models" {
+		t.Fatalf("target path = %q", got)
+	}
+	if got := gatewayModelProbeStrategy(req); got != "sub2api" {
+		t.Fatalf("model probe strategy = %q", got)
+	}
+
+	chatReq := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	if got := gatewayProxyTargetPath(chatReq.URL.Path); got != "chat/completions" {
+		t.Fatalf("chat target path = %q", got)
+	}
+}
+
+func TestGatewayRootV1ModelsServesSub2APIHealthProbe(t *testing.T) {
+	db, err := database.Open(config.Config{DatabaseURL: "sqlite:///" + t.TempDir() + "/gateway_root_v1.db"})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close(db) })
+	if err := migrations.Apply(db); err != nil {
+		t.Fatalf("migrations: %v", err)
+	}
+	site := models.Site{
+		Name:      "root-v1",
+		BaseURL:   "https://upstream.example",
+		PluginKey: "http-relay-station",
+		IsEnabled: true,
+		Credentials: models.JSONMap{
+			"api_key": "route-key",
+		},
+		PluginConfig: models.JSONMap{
+			"supported_models": []any{"gpt-5.5"},
+		},
+	}
+	if err := db.Create(&site).Error; err != nil {
+		t.Fatalf("create site: %v", err)
+	}
+	if err := db.Create(&models.SystemSetting{ID: 1, GatewayAPIKey: "gateway-key"}).Error; err != nil {
+		t.Fatalf("create settings: %v", err)
+	}
+
+	router := NewRouter(db, config.Config{})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer gateway-key")
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); !strings.Contains(body, `"id":"gpt-5.5"`) || !strings.Contains(body, `"object":"list"`) {
+		t.Fatalf("unexpected body: %s", body)
+	}
+	if got := rec.Header().Get("X-Gateway-Model-Probe"); got != "sub2api" {
+		t.Fatalf("X-Gateway-Model-Probe = %q", got)
+	}
+}
+
 func TestGatewayProxyRejectsMissingGatewayAPIKey(t *testing.T) {
 	db, err := database.Open(config.Config{DatabaseURL: "sqlite:///" + t.TempDir() + "/gateway_missing_key.db"})
 	if err != nil {

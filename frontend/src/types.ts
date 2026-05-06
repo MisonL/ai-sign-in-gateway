@@ -29,6 +29,7 @@ export interface SitePayload {
   base_url: string
   plugin_key: string
   group_name: string
+  supported_models: string[] | null
   is_enabled: boolean
   notes: string
   credentials: Record<string, any>
@@ -42,6 +43,7 @@ export interface Site extends SitePayload {
   last_message: string | null
   last_balance: number | null
   balance_display?: string | null
+  balance_unit?: string | null
   package_remaining?: number | null
   package_total?: number | null
   package_used?: number | null
@@ -60,6 +62,7 @@ export interface SiteSummary {
   last_message: string | null
   last_balance: number | null
   balance_display?: string | null
+  balance_unit?: string | null
   package_remaining?: number | null
   package_total?: number | null
   package_used?: number | null
@@ -181,6 +184,7 @@ export interface BalanceProbeResult {
   remaining: number | null
   unit: string
   base_url: string
+  balance_probe_url?: string | null
   message: string
   checked_at: string
   last_balance: number | null
@@ -446,6 +450,7 @@ export interface GatewayOverview {
   request_count_24h: number
   success_rate_24h: number
   avg_latency_ms_24h: number | null
+  usage_cost_24h: GatewayUsageCostSummary
   strategy_breakdown_24h: GatewayStrategyStat[]
   route_strategy: 'round_robin' | 'latency_first' | 'priority' | 'smart'
   failure_threshold: number
@@ -458,6 +463,29 @@ export interface GatewayOverview {
   concurrency_overflow_strategy: 'latency_first' | 'sequential'
 }
 
+export interface GatewayUsageCostSummary {
+  input_cost: number
+  cached_cost: number
+  output_cost: number
+  total_cost: number
+  upstream_cost: number
+  prompt_tokens: number
+  cached_tokens: number
+  output_tokens: number
+  total_tokens: number
+  known_requests: number
+  unknown_requests: number
+  upstream_requests: number
+  currency: string
+  window_seconds: number
+  top_models: Array<{
+    model: string
+    requests: number
+    total_cost: number
+    known_price: boolean
+  }>
+}
+
 export interface GatewayUsageRoute {
   route_id: number | null
   route_label: string
@@ -467,6 +495,7 @@ export interface GatewayUsageRoute {
   key_fingerprint: string
   group_name: string
   route_type: string
+  model: string
   request_count: number
   success_count: number
   failure_count: number
@@ -477,10 +506,12 @@ export interface GatewayUsageRoute {
   completion_tokens: number
   total_tokens: number
   usage_cost: number | null
-  official_input_cost: number
-  official_cached_cost: number
-  official_output_cost: number
-  official_total_cost: number
+  computed_input_cost: number
+  computed_cached_cost: number
+  computed_output_cost: number
+  computed_total_cost: number
+  computed_cost_known: boolean
+  computed_cost_mixed: boolean
   avg_latency_ms: number | null
   last_used_at: string | null
 }
@@ -521,8 +552,11 @@ export interface GatewayRoute {
   site_missing?: boolean
   has_api_key?: boolean
   group_name: string
+  supported_models: string[]
   last_balance?: number | null
   balance_display?: string | null
+  balance_unit?: string | null
+  balance_probe_url?: string | null
   package_remaining?: number | null
   package_total?: number | null
   package_used?: number | null
@@ -534,6 +568,9 @@ export interface GatewayRoute {
   key_source: string
   route_type: 'claude' | 'codex' | 'gemini'
   route_type_manual?: boolean
+  model_probe_status?: 'default' | 'key_metadata' | 'success' | 'failed' | ''
+  model_probe_message?: string
+  model_probe_updated_at?: string | null
   route_priority: number
   route_priority_manual?: boolean
   weight: number
@@ -568,12 +605,21 @@ export interface GatewayRouteProbeResult {
   latency_ms: number | null
   message: string
   models: string[]
+  supported_models?: string[]
+  model_probe_status?: 'default' | 'key_metadata' | 'success' | 'failed' | ''
+  model_probe_message?: string
+  model_probe_updated_at?: string | null
   last_status_code: number | null
   last_error: string | null
   last_latency_ms: number | null
   last_success_at: string | null
   last_failure_at: string | null
   checked_at: string
+}
+
+export interface GatewayRouteUpdatePayload {
+  route_type: 'claude' | 'codex' | 'gemini'
+  supported_models?: string[]
 }
 
 export interface GatewayRouteDiagnosticItem {
@@ -616,6 +662,9 @@ export interface GatewayLog {
   completion_tokens: number | null
   total_tokens: number | null
   usage_cost: number | null
+  model: string
+  requested_model?: string
+  actual_model?: string
   circuit_state_before: string
   failure_reason: string | null
   is_stream: boolean
@@ -638,6 +687,8 @@ export interface GatewayActiveRequest {
   attempt_index: number
   is_stream: boolean
   route_type: 'claude' | 'codex' | 'gemini' | string
+  requested_model?: string
+  actual_model?: string
   request_base_url: string
   active_concurrency: number
   started_at: string

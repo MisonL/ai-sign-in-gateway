@@ -31,30 +31,32 @@ func writeError(w http.ResponseWriter, status int, detail string) {
 }
 
 func siteResponse(site models.Site) schemas.SiteResponse {
-	return siteResponseWithSecrets(site, true)
+	return siteResponseWithSupportedModels(site, true, nil)
 }
 
 func siteListResponse(site models.Site) schemas.SiteResponse {
-	return siteResponseWithSecrets(site, false)
+	return siteResponseWithSupportedModels(site, false, nil)
 }
 
-func siteResponseWithSecrets(site models.Site, includeSecrets bool) schemas.SiteResponse {
+func siteResponseWithSupportedModels(site models.Site, includeSecrets bool, supportedModels []string) schemas.SiteResponse {
 	credentials := cloneJSONMap(nonNilJSON(site.Credentials))
-	pluginConfig := cloneJSONMap(nonNilJSON(site.PluginConfig))
+	pluginConfig := stripSiteSupportedModels(site.PluginConfig)
+	supportedModels = services.NormalizeStringList(supportedModels)
 	if !includeSecrets {
 		credentials = redactJSONMap(credentials)
 		pluginConfig = redactJSONMap(pluginConfig)
 	}
 	return schemas.SiteResponse{
 		SiteBase: schemas.SiteBase{
-			Name:         site.Name,
-			BaseURL:      site.BaseURL,
-			PluginKey:    site.PluginKey,
-			GroupName:    site.GroupName,
-			IsEnabled:    site.IsEnabled,
-			Notes:        site.Notes,
-			Credentials:  credentials,
-			PluginConfig: pluginConfig,
+			Name:            site.Name,
+			BaseURL:         site.BaseURL,
+			PluginKey:       site.PluginKey,
+			GroupName:       site.GroupName,
+			SupportedModels: supportedModels,
+			IsEnabled:       site.IsEnabled,
+			Notes:           site.Notes,
+			Credentials:     credentials,
+			PluginConfig:    pluginConfig,
 		},
 		ID:               site.ID,
 		LastStatus:       site.LastStatus,
@@ -62,15 +64,38 @@ func siteResponseWithSecrets(site models.Site, includeSecrets bool) schemas.Site
 		LastMessage:      site.LastMessage,
 		LastBalance:      site.LastBalance,
 		BalanceDisplay:   balanceDisplayWithUnit(site.LastBalance, jsonMapString(site.PluginConfig, "balance_unit")),
+		BalanceUnit:      stringPtrIfNonEmpty(services.NormalizeBalanceUnit(jsonMapString(site.PluginConfig, "balance_unit"))),
 		PackageRemaining: jsonMapNumberPtr(site.PluginConfig, "package_remaining"),
 		PackageTotal:     jsonMapNumberPtr(site.PluginConfig, "package_total"),
 		PackageUsed:      jsonMapNumberPtr(site.PluginConfig, "package_used"),
-		PackageUnit:      stringPtrIfNonEmpty(jsonMapString(site.PluginConfig, "package_unit")),
+		PackageUnit:      stringPtrIfNonEmpty(services.NormalizeBalanceUnit(jsonMapString(site.PluginConfig, "package_unit"))),
 		PackageDisplay:   packageDisplay(site),
 		CheckinStatus:    site.LastStatus,
 		LastRunAt:        site.LastRunAt,
 		CreatedAt:        site.CreatedAt,
 		UpdatedAt:        &site.UpdatedAt,
+	}
+}
+
+func stripSiteSupportedModels(config models.JSONMap) models.JSONMap {
+	next := cloneJSONMap(nonNilJSON(config))
+	delete(next, "supported_models")
+	normalizePluginConfigBalanceUnits(next)
+	return next
+}
+
+func normalizePluginConfigBalanceUnits(config models.JSONMap) {
+	if config == nil {
+		return
+	}
+	if value := jsonMapString(config, "balance_unit"); value != "" {
+		config["balance_unit"] = services.NormalizeBalanceUnit(value)
+	}
+	if value := jsonMapString(config, "package_unit"); value != "" {
+		config["package_unit"] = services.NormalizeBalanceUnit(value)
+	}
+	if value := jsonMapString(config, "package_display"); value != "" {
+		config["package_display"] = services.NormalizeBalanceUnitText(value)
 	}
 }
 
@@ -82,12 +107,22 @@ func stringPtrIfNonEmpty(value string) *string {
 	return &value
 }
 
+func firstNonEmptyStringSlice(values ...[]string) []string {
+	for _, value := range values {
+		if len(value) == 0 {
+			continue
+		}
+		return append([]string(nil), value...)
+	}
+	return nil
+}
+
 func packageQuotaMap(site models.Site) map[string]any {
 	return map[string]any{
 		"package_remaining": jsonMapNumberPtr(site.PluginConfig, "package_remaining"),
 		"package_total":     jsonMapNumberPtr(site.PluginConfig, "package_total"),
 		"package_used":      jsonMapNumberPtr(site.PluginConfig, "package_used"),
-		"package_unit":      strings.TrimSpace(jsonMapString(site.PluginConfig, "package_unit")),
+		"package_unit":      services.NormalizeBalanceUnit(jsonMapString(site.PluginConfig, "package_unit")),
 	}
 }
 
@@ -381,14 +416,13 @@ func balanceDisplayWithUnit(value *float64, unit string) *string {
 	if text == "" {
 		text = "0"
 	}
-	unit = strings.TrimSpace(unit)
+	unit = services.NormalizeBalanceUnit(unit)
 	if unit == "" {
 		return &text
 	}
-	switch unit {
-	case "$", "¥", "€", "£":
+	if services.BalanceUnitIsSymbol(unit) {
 		text = unit + text
-	default:
+	} else {
 		text = text + " " + unit
 	}
 	return &text
@@ -416,18 +450,19 @@ func jsonMapString(m models.JSONMap, key string) string {
 
 func balanceProbeResponse(result services.BalanceProbeResult) map[string]any {
 	return map[string]any{
-		"site_id":         result.SiteID,
-		"route_id":        result.RouteID,
-		"ok":              result.OK,
-		"status_code":     result.StatusCode,
-		"latency_ms":      result.LatencyMS,
-		"remaining":       result.Remaining,
-		"unit":            result.Unit,
-		"base_url":        result.BaseURL,
-		"message":         result.Message,
-		"checked_at":      result.CheckedAt,
-		"last_balance":    result.Remaining,
-		"balance_display": balanceDisplayWithUnit(result.Remaining, result.Unit),
+		"site_id":           result.SiteID,
+		"route_id":          result.RouteID,
+		"ok":                result.OK,
+		"status_code":       result.StatusCode,
+		"latency_ms":        result.LatencyMS,
+		"remaining":         result.Remaining,
+		"unit":              services.NormalizeBalanceUnit(result.Unit),
+		"base_url":          result.BaseURL,
+		"balance_probe_url": result.BalanceProbeURL,
+		"message":           result.Message,
+		"checked_at":        result.CheckedAt,
+		"last_balance":      result.Remaining,
+		"balance_display":   balanceDisplayWithUnit(result.Remaining, result.Unit),
 	}
 }
 
@@ -445,7 +480,7 @@ func mergePackageQuotaPluginConfig(target models.JSONMap, remaining, total, used
 		target["package_used"] = *used
 	}
 	if unit != nil && strings.TrimSpace(*unit) != "" {
-		target["package_unit"] = strings.TrimSpace(*unit)
+		target["package_unit"] = services.NormalizeBalanceUnit(*unit)
 	}
 }
 
