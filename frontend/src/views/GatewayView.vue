@@ -29,6 +29,7 @@ import StatusPill from '../components/StatusPill.vue'
 import { useDebouncedTask } from '../composables/useDebouncedTask'
 import { useTableScrollHeights } from '../composables/useTableScrollHeights'
 import { balanceTone, formatBalance, formatGroupNames, normalizeBalanceUnit, normalizeGroupNames, parseGroupNames } from '../format'
+import { applyGatewayActiveConcurrency } from '../gatewayRouteConcurrency'
 import { useToast } from '../toast'
 import type { BalanceProbeResult, GatewayActiveRequest, GatewayLog, GatewayOverview, GatewayRoute, GatewayRouteDiagnosis, GatewayRouteProbeResult, GatewaySettingsData, GatewayStrategyStat, GatewayUsage, GatewayUsageRoute, SiteGroup, SiteSummary } from '../types'
 
@@ -46,6 +47,7 @@ const isGatewayMonitor = computed(() => props.section === 'monitor')
 const toast = useToast()
 const loading = ref(false)
 const autoRefreshing = ref(false)
+const activeRequestsRefreshing = ref(false)
 const probeLoading = ref(false)
 const settingsLoading = ref(false)
 const settingsOpen = ref(false)
@@ -154,10 +156,13 @@ const routeLogsRoute = ref<GatewayRoute | null>(null)
 const routeDiagnosisOpen = ref(false)
 const includeDisabled = ref(true)
 let autoRefreshTimer: number | null = null
+let activeRequestRefreshTimer: number | null = null
 let lastAutoRefreshAt = 0
+let lastActiveRequestRefreshAt = 0
 const gatewayTablePageSize = 20
 const gatewayRouteAutoRefreshMs = 60_000
 const gatewayMonitorAutoRefreshMs = 60_000
+const gatewayActiveRequestRefreshMs = 1_000
 const selectedGroups = ref<string[]>([])
 const addUpstreamGroupNames = ref<string[]>([])
 const selectedRouteTypes = ref<Array<GatewayRoute['route_type']>>([])
@@ -238,7 +243,7 @@ const routeColumns = [
   { title: '分组', key: 'group', width: 110, sorter: (a: GatewayRoute, b: GatewayRoute) => String(a.group_name ?? '').localeCompare(String(b.group_name ?? ''), 'zh-CN') },
   { title: '优先级', key: 'priority', width: 90, sorter: (a: GatewayRoute, b: GatewayRoute) => a.route_priority - b.route_priority },
   { title: '权重', key: 'weight', width: 80, sorter: (a: GatewayRoute, b: GatewayRoute) => a.weight - b.weight },
-  { title: '并发', key: 'concurrency', width: 130, sorter: (a: GatewayRoute, b: GatewayRoute) => a.active_concurrency - b.active_concurrency },
+  { title: '并发/最大转移', key: 'concurrency', width: 150, sorter: (a: GatewayRoute, b: GatewayRoute) => a.active_concurrency - b.active_concurrency },
   { title: '成功率', key: 'success_rate', width: 110, sorter: (a: GatewayRoute, b: GatewayRoute) => a.success_rate - b.success_rate },
   { title: '延迟', key: 'latency', width: 138, sorter: (a: GatewayRoute, b: GatewayRoute) => (a.last_latency_ms ?? a.avg_latency_ms ?? Infinity) - (b.last_latency_ms ?? b.avg_latency_ms ?? Infinity) },
   { title: '最后异常', key: 'error', width: 220, sorter: (a: GatewayRoute, b: GatewayRoute) => new Date(routeLastUpdateTime(a) ?? 0).getTime() - new Date(routeLastUpdateTime(b) ?? 0).getTime() },
@@ -303,13 +308,13 @@ const gatewayRouteStrategyOptions: Array<{ label: string; value: GatewaySettings
 ]
 
 const gatewayOverflowStrategyOptions: Array<{ label: string; value: GatewaySettingsData['concurrency_overflow_strategy']; description: string }> = [
-  { label: '低延迟优先', value: 'latency_first', description: '只有所有可用路由都达到并发上限后才生效，溢出请求优先尝试延迟较低的路由。' },
-  { label: '按顺序优先', value: 'sequential', description: '只有所有可用路由都达到并发上限后才生效，溢出请求按当前策略顺序继续尝试。' },
+  { label: '低延迟优先', value: 'latency_first', description: '只有所有可用路由都达到转移阈值后才生效，溢出请求优先尝试延迟较低的路由。' },
+  { label: '按顺序优先', value: 'sequential', description: '只有所有可用路由都达到转移阈值后才生效，溢出请求按当前策略顺序继续尝试。' },
 ]
 
 const gatewayConcurrencyTransferOptions: Array<{ label: string; value: GatewaySettingsData['concurrency_transfer_strategy']; description: string }> = [
-  { label: '并发达上限转移', value: 'limit_only', description: '保持当前策略排序；只有某条路由达到单路由并发上限后，新请求才转移到其他未满路由。' },
-  { label: '并发均衡转移', value: 'balance', description: '在未满上限的候选路由中，优先使用当前并发更低的路由，让请求更主动地摊开。' },
+  { label: '并发达阈值转移', value: 'limit_only', description: '保持当前策略排序；某条路由达到最大转移阈值后，新请求会优先转到其他未达阈值路由。' },
+  { label: '并发均衡转移', value: 'balance', description: '在未达阈值的候选路由中，优先使用当前并发更低的路由，让请求更主动地摊开。' },
 ]
 
 const gatewayFailureRetryModeOptions: Array<{ label: string; value: GatewaySettingsData['failure_retry_mode']; description: string }> = [
@@ -742,6 +747,20 @@ function normalizeGatewayRoute(route: GatewayRoute): GatewayRoute {
     balance_display: route.balance_display || formatBalance(route.last_balance, balanceUnit),
     package_unit: normalizeBalanceUnit(route.package_unit, ''),
     supported_models: normalizeModelList(route.supported_models),
+  }
+}
+
+function applyActiveRequestSnapshot(items: GatewayActiveRequest[]) {
+  routes.value = applyGatewayActiveConcurrency(routes.value, items)
+  priorityRoutes.value = applyGatewayActiveConcurrency(priorityRoutes.value, items)
+  if (overview.value) {
+    const activeConcurrency = items.length
+    if (overview.value.active_concurrency !== activeConcurrency) {
+      overview.value = {
+        ...overview.value,
+        active_concurrency: activeConcurrency,
+      }
+    }
   }
 }
 
@@ -1327,14 +1346,11 @@ async function handleUsageToday() {
 }
 
 async function loadActiveRequests(silent = false) {
-  if (!isGatewayMonitor.value) {
-    activeRequests.value = []
-    return
-  }
   try {
-    activeRequests.value = await getGatewayActiveRequests()
+    const snapshot = await getGatewayActiveRequests()
+    activeRequests.value = snapshot
+    applyActiveRequestSnapshot(snapshot)
   } catch (err) {
-    activeRequests.value = []
     if (!silent) {
       toast.error(err instanceof Error ? err.message : '网关实时请求加载失败')
     }
@@ -1406,9 +1422,29 @@ async function refreshRealtimeData() {
   }
 }
 
+async function refreshActiveRequests(silent = true) {
+  if (activeRequestsRefreshing.value || document.visibilityState !== 'visible') {
+    return
+  }
+  const now = Date.now()
+  if (now - lastActiveRequestRefreshAt < 500) {
+    return
+  }
+  lastActiveRequestRefreshAt = now
+  activeRequestsRefreshing.value = true
+  try {
+    await loadActiveRequests(silent)
+  } finally {
+    activeRequestsRefreshing.value = false
+  }
+}
+
 function startAutoRefresh() {
   stopAutoRefresh()
   autoRefreshTimer = window.setInterval(refreshRealtimeData, isGatewayMonitor.value ? gatewayMonitorAutoRefreshMs : gatewayRouteAutoRefreshMs)
+  activeRequestRefreshTimer = window.setInterval(() => {
+    void refreshActiveRequests(true)
+  }, gatewayActiveRequestRefreshMs)
 }
 
 function stopAutoRefresh() {
@@ -1416,11 +1452,16 @@ function stopAutoRefresh() {
     window.clearInterval(autoRefreshTimer)
     autoRefreshTimer = null
   }
+  if (activeRequestRefreshTimer !== null) {
+    window.clearInterval(activeRequestRefreshTimer)
+    activeRequestRefreshTimer = null
+  }
 }
 
 function handleVisibilityChange() {
   if (document.visibilityState === 'visible') {
     void refreshRealtimeData()
+    void refreshActiveRequests(true)
   }
 }
 
@@ -2293,7 +2334,7 @@ onBeforeUnmount(() => {
                   {{ asRoute(record).weight }}
                 </template>
                 <template v-else-if="column.key === 'concurrency'">
-                  <a-tooltip :title="`当前并发 ${asRoute(record).active_concurrency} / 单路由并发总额 ${routeConcurrencyLimitLabel}`">
+                  <a-tooltip :title="`当前并发 ${asRoute(record).active_concurrency} / 最大转移 ${routeConcurrencyLimitLabel}；达到后优先转发，不是硬上限`">
                     <span :class="['gateway-concurrency', { 'gateway-concurrency--active': asRoute(record).active_concurrency > 0 }]">
                       <span class="gateway-concurrency__current">{{ asRoute(record).active_concurrency }}</span>
                       <span class="gateway-concurrency__separator">/</span>
@@ -2578,14 +2619,14 @@ onBeforeUnmount(() => {
 
               <a-row :gutter="16">
                 <a-col :xs="24" :md="12">
-                  <a-form-item label="单路由并发上限">
+                  <a-form-item label="单路由最大转移">
                     <a-input-number
                       v-model:value="settingsForm.route_concurrency_limit"
                       style="width: 100%"
                       :min="0"
                       :max="1000"
                     />
-                    <small class="field-help">例如填 5，某条路由达到 5 个当前并发后，新请求会优先转到其他路由；填 0 表示不限制。</small>
+                    <small class="field-help">例如填 5，某条路由达到 5 个当前并发后，新请求会优先转到其他未达阈值路由；如果所有路由都已达到阈值，仍会继续选择并累加并发。填 0 表示不主动转移。</small>
                   </a-form-item>
                 </a-col>
                 <a-col :xs="24" :md="12">
@@ -2614,7 +2655,7 @@ onBeforeUnmount(() => {
                     type="info"
                     show-icon
                     message="策略关系"
-                    description="并发转移策略决定未超过上限时是否主动均衡；并发溢出优先级只在所有可用路由都达到并发上限后参与排序。"
+                    description="并发转移策略决定未达到阈值时是否主动均衡；并发溢出优先级只在所有可用路由都达到转移阈值后参与排序。"
                   />
                 </a-col>
               </a-row>

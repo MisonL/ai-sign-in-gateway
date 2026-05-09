@@ -149,6 +149,7 @@ cmd/ai-sign-in-gateway/*.syso
 /ai-sign-in-gateway
 .run/
 .release/
+.deploy.config
 site_screenshots/
 project_screenshots/
 ai-agent/

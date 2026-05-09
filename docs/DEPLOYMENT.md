@@ -380,6 +380,18 @@ cd ai-sign-in-gateway
 - 桌面窗口使用系统 WebView 加载完整前端，不使用 Electron。
 - 托盘提供网关 24h 简要统计、路由健康、当前并发、站点连通率检测、同步路由、探测全部网关路由和打开关键页面。
 
+`build-server-single.sh` 构建成功后会检测仓库根目录的 `.deploy.config`。如果当前是交互式终端，且配置包含 `host` 和 `path`，脚本会进入部署确认界面，并可调用 `scp` 上传服务版产物：
+
+```ini
+host=example.com
+user=root
+path=/opt/ai-sign-in-gateway/ai-sign-in-gateway
+port=22
+identity_file=~/.ssh/id_ed25519
+```
+
+`port` 可省略，默认 `22`；`user` 和 `identity_file` 可省略。非交互式构建会跳过上传，不阻塞 CI 或发布脚本。
+
 默认输出：
 
 ```text

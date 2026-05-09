@@ -371,6 +371,18 @@ http://127.0.0.1:8972/api/gateway
 | `WINDOWS_ICON` | `true` | Windows exe 是否注入图标 |
 | `APPIMAGETOOL` | 自动查找/下载 | 指定 AppImageKit appimagetool |
 
+`./scripts/build-server-single.sh` 构建成功后会检测仓库根目录的 `.deploy.config`。如果当前是交互式终端，且配置里包含 `host` 和 `path`，脚本会询问是否用 `scp` 上传服务版产物：
+
+```ini
+host=example.com
+user=root
+path=/opt/ai-sign-in-gateway/ai-sign-in-gateway
+port=22
+identity_file=~/.ssh/id_ed25519
+```
+
+`port` 可省略，默认 `22`；`user` 和 `identity_file` 可省略。
+
 发布到 GitHub Release 并同步 `release` 分支：
 
 ```bash

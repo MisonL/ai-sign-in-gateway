@@ -2277,3 +2277,79 @@ func TestGatewayActiveRequestsSnapshot(t *testing.T) {
 		t.Fatalf("expected active requests cleared, got %d", len(active))
 	}
 }
+
+func TestGatewayConcurrencyLimitIsTransferThresholdNotHardLimit(t *testing.T) {
+	ResetGatewayCountersForTest()
+
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		entered <- struct{}{}
+		<-release
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer upstream.Close()
+
+	db := newGatewayTestDB(t)
+	createGatewaySite(t, db, "threshold-up", upstream.URL, "threshold-key")
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+	var state models.GatewayRouteState
+	if err := db.First(&state).Error; err != nil {
+		t.Fatal(err)
+	}
+	state.SupportedModels = EncodeGatewaySupportedModels([]string{"gpt-4o"})
+	if err := db.Save(&state).Error; err != nil {
+		t.Fatal(err)
+	}
+	acquireRoute(state.ID)
+	defer releaseRoute(state.ID)
+
+	done := make(chan error, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodPost, "/api/gateway/v1/chat/completions", strings.NewReader(`{"model":"gpt-4o","messages":[]}`))
+		req.Header.Set("Content-Type", "application/json")
+		result, err := ProxyGatewayRequest(req.Context(), db, req, "chat/completions", "", "", GatewayPolicy{
+			RouteStrategy:               "round_robin",
+			RequestTimeout:              5,
+			MaxAttempts:                 1,
+			RouteConcurrencyLimit:       1,
+			ConcurrencyTransferStrategy: "limit_only",
+			ConcurrencyOverflowStrategy: "sequential",
+		})
+		if err == nil && !result.Success {
+			err = io.ErrUnexpectedEOF
+		}
+		done <- err
+	}()
+
+	select {
+	case <-entered:
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Fatal("proxy returned before upstream request was observed")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for upstream request")
+	}
+	if active := RouteActiveCount(state.ID); active != 2 {
+		close(release)
+		t.Fatalf("active count = %d, want 2 when threshold is 1", active)
+	}
+	activeRequests := ListGatewayActiveRequests()
+	if len(activeRequests) != 1 {
+		close(release)
+		t.Fatalf("active request count = %d", len(activeRequests))
+	}
+	if activeRequests[0].ActiveConcurrency != 2 {
+		close(release)
+		t.Fatalf("active request concurrency = %d, want 2", activeRequests[0].ActiveConcurrency)
+	}
+
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
