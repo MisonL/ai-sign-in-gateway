@@ -31,7 +31,7 @@ func (p *Sub2API) Meta() schemas.PluginMetaResponse {
 		Key:            "sub2api-platform",
 		Name:           "sub2api 平台",
 		Description:    "适配 Wei-Shaw/sub2api 平台的登录、资料读取、API Key 同步与可选签到。",
-		Capabilities:   []string{"login", "checkin", "account_status", "api_key_sync", "token_refresh"},
+		Capabilities:   []string{"login", "checkin", "account_status", "api_key_sync", "token_refresh", "account_registration"},
 		AuthEntryLabel: "打开 sub2api 登录页",
 		AuthHint:       "支持 access_token 直填或 email/password 自动登录；api_key 仅用于模型调用。",
 		CredentialFields: []schemas.FieldDescriptor{
@@ -47,10 +47,13 @@ func (p *Sub2API) Meta() schemas.PluginMetaResponse {
 		},
 		ConfigFields: []schemas.FieldDescriptor{
 			Field("turnstile_token", "Turnstile Token", "text", "可留空", false, ""),
+			Field("register_url", "注册接口 URL", "url", "/api/v1/auth/register", false, "批量注册账号时使用；不同部署可按实际接口路径调整。"),
 			Field("totp_field_name", "TOTP 字段名", "text", "code", false, ""),
 			Field("preferred_api_key_name", "首选 API Key 名称", "text", "default", false, ""),
 			Field("preferred_api_key_id", "首选 API Key ID", "text", "例如 12", false, ""),
 			Field("api_keys_url", "API Key 列表 URL", "url", "/api/v1/keys?page=1&page_size=100", false, ""),
+			Field("create_api_key_url", "API Key 创建 URL", "url", "/api/v1/keys", false, "注册后没有可用 Key 时自动创建。"),
+			Field("default_api_key_name", "默认 API Key 名称", "text", "default", false, ""),
 			Field("invite_path", "邀请接口路径", "url", "/api/v1/user/referral?timezone=Asia%2FShanghai", false, "填写后会额外请求该接口解析邀请链接；留空时默认尝试 sub2api 常见 referral 接口。"),
 			Field("invite_method", "邀请接口方法", "text", "GET", false, ""),
 			Field("invite_body_json", "邀请接口 JSON Body", "textarea", `{"refresh": false}`, false, ""),
@@ -63,6 +66,76 @@ func (p *Sub2API) Meta() schemas.PluginMetaResponse {
 			Field("invite_link_template", "邀请链接模板", "text", "/register?aff={code}", false, "支持相对路径或完整 URL，使用 {code} 作为邀请码占位符；部分 sub2api 站点会使用 /register?ref={code}。"),
 		},
 	}
+}
+
+func (p *Sub2API) RegisterAccount(ctx context.Context, site models.Site, request AccountRegistrationRequest, timeoutSeconds int) (AccountRegistrationResult, error) {
+	email := strings.TrimSpace(request.Email)
+	password := strings.TrimSpace(request.Password)
+	if email == "" || password == "" {
+		return AccountRegistrationResult{}, errors.New("注册邮箱和密码不能为空")
+	}
+	if strings.TrimSpace(site.BaseURL) == "" {
+		return AccountRegistrationResult{}, errors.New("Base URL 不能为空")
+	}
+
+	body := map[string]any{"email": email, "password": password}
+	if t := strings.TrimSpace(stringValue(site.PluginConfig, "turnstile_token", "")); t != "" {
+		body["turnstile_token"] = t
+	}
+	if inviteCode := strings.TrimSpace(stringValue(site.PluginConfig, "invite_code", "")); inviteCode != "" {
+		body["invite_code"] = inviteCode
+	}
+	if accountName := strings.TrimSpace(request.AccountName); accountName != "" {
+		body["name"] = accountName
+	}
+	registerPath := strings.TrimSpace(stringValue(site.PluginConfig, "register_url", ""))
+	if registerPath == "" {
+		registerPath = "/api/v1/auth/register"
+	}
+	payload, _, err := p.requestJSON(ctx, site, http.MethodPost, registerPath, sub2apiAuth{}, body, timeoutSeconds)
+	if err != nil {
+		return AccountRegistrationResult{}, err
+	}
+	if !pathBool(payload, "success") && pathString(payload, "code", "") != "0" {
+		if message := strings.TrimSpace(pathString(payload, "message", "")); message != "" {
+			return AccountRegistrationResult{}, errors.New(message)
+		}
+	}
+
+	loginSite := site
+	loginSite.Credentials = clonePluginJSON(site.Credentials)
+	loginSite.Credentials["account"] = firstNonEmptyPlugin(strings.TrimSpace(request.AccountName), email)
+	loginSite.Credentials["email"] = email
+	loginSite.Credentials["password"] = password
+	auth, err := p.login(ctx, loginSite, timeoutSeconds)
+	if err != nil {
+		return AccountRegistrationResult{}, err
+	}
+	updates, primaryKey := p.syncAPIKeys(ctx, loginSite, &auth, timeoutSeconds, true)
+	credentials := clonePluginJSON(updates)
+	credentials["account"] = firstNonEmptyPlugin(strings.TrimSpace(request.AccountName), email)
+	credentials["email"] = email
+	credentials["password"] = password
+	credentials["access_token"] = auth.AccessToken
+	if auth.RefreshToken != "" {
+		credentials["refresh_token"] = auth.RefreshToken
+	}
+	if primaryKey != "" {
+		credentials["api_key"] = primaryKey
+	}
+	apiCount := apiKeyUpdateCount(credentials)
+	message := "注册并登录成功。"
+	if apiCount > 0 {
+		message = fmt.Sprintf("%s 已同步 %d 个 API Key。", message, apiCount)
+	}
+	return AccountRegistrationResult{
+		Message:      message,
+		Credentials:  credentials,
+		PluginConfig: clonePluginJSON(site.PluginConfig),
+		PrimaryKey:   primaryKey,
+		APIKeyCount:  apiCount,
+		AccountName:  email,
+	}, nil
 }
 
 func (p *Sub2API) Validate(site models.Site) error {
@@ -116,7 +189,7 @@ func (p *Sub2API) FetchAccountStatus(ctx context.Context, site models.Site, time
 		return AccountStatus{}, err
 	}
 
-	updatedCredentials, primaryKey := p.syncAPIKeys(ctx, site, &auth, timeoutSeconds)
+	updatedCredentials, primaryKey := p.listAPIKeys(ctx, site, &auth, timeoutSeconds)
 	if updatedCredentials == nil {
 		updatedCredentials = models.JSONMap{}
 	}
@@ -182,7 +255,7 @@ func (p *Sub2API) SyncAPIKeys(ctx context.Context, site models.Site, timeoutSeco
 	if err != nil {
 		return APIKeySyncResult{}, err
 	}
-	updates, primaryKey := p.syncAPIKeys(ctx, site, &auth, timeoutSeconds)
+	updates, primaryKey := p.syncAPIKeys(ctx, site, &auth, timeoutSeconds, false)
 	if updates == nil {
 		updates = models.JSONMap{}
 	}
@@ -305,7 +378,11 @@ func (p *Sub2API) login(ctx context.Context, site models.Site, timeoutSeconds in
 	return sub2apiAuth{AccessToken: access, RefreshToken: refresh}, nil
 }
 
-func (p *Sub2API) syncAPIKeys(ctx context.Context, site models.Site, auth *sub2apiAuth, timeoutSeconds int) (models.JSONMap, string) {
+func (p *Sub2API) listAPIKeys(ctx context.Context, site models.Site, auth *sub2apiAuth, timeoutSeconds int) (models.JSONMap, string) {
+	return p.syncAPIKeys(ctx, site, auth, timeoutSeconds, false)
+}
+
+func (p *Sub2API) syncAPIKeys(ctx context.Context, site models.Site, auth *sub2apiAuth, timeoutSeconds int, allowCreate bool) (models.JSONMap, string) {
 	apiKeysURL := strings.TrimSpace(stringValue(site.PluginConfig, "api_keys_url", ""))
 	if apiKeysURL == "" {
 		apiKeysURL = "/api/v1/keys?page=1&page_size=100&sort_by=created_at&sort_order=desc"
@@ -317,19 +394,48 @@ func (p *Sub2API) syncAPIKeys(ctx context.Context, site models.Site, auth *sub2a
 	*auth = nextAuth
 	items := extractItems(payload)
 	if len(items) == 0 {
-		return nil, ""
+		if !allowCreate {
+			return nil, ""
+		}
+		p.createAPIKey(ctx, site, auth, timeoutSeconds)
+		payload, _, nextAuth, err = p.requestJSONWithAuth(ctx, site, http.MethodGet, apiKeysURL, *auth, nil, timeoutSeconds)
+		if err != nil {
+			return nil, ""
+		}
+		*auth = nextAuth
+		items = extractItems(payload)
+		if len(items) == 0 || !sub2apiItemsHaveUsableKey(items) {
+			return nil, ""
+		}
 	}
 	preferredName := strings.TrimSpace(stringValue(site.PluginConfig, "preferred_api_key_name", ""))
 	preferredID := strings.TrimSpace(stringValue(site.PluginConfig, "preferred_api_key_id", ""))
 	primary := pickAPIKey(items, preferredName, preferredID)
+	if primary == nil || !sub2apiUsableAPIKey(fmt.Sprint(primary["key"])) {
+		if !allowCreate {
+			return nil, ""
+		}
+		p.createAPIKey(ctx, site, auth, timeoutSeconds)
+		payload, _, nextAuth, err = p.requestJSONWithAuth(ctx, site, http.MethodGet, apiKeysURL, *auth, nil, timeoutSeconds)
+		if err != nil {
+			return nil, ""
+		}
+		*auth = nextAuth
+		items = extractItems(payload)
+		primary = pickAPIKey(items, preferredName, preferredID)
+	}
 	credentialsUpdate := models.JSONMap{}
 	apiKeys := []map[string]any{}
 	for _, item := range items {
+		key := strings.TrimSpace(fmt.Sprint(item["key"]))
+		if !sub2apiUsableAPIKey(key) {
+			continue
+		}
 		routeType := routeTypeFromAPIKeyItem(item, site)
 		entry := map[string]any{
 			"id":         fmt.Sprint(item["id"]),
 			"name":       fmt.Sprint(item["name"]),
-			"key":        fmt.Sprint(item["key"]),
+			"key":        key,
 			"status":     fmt.Sprint(item["status"]),
 			"route_type": routeType,
 			"api_type":   routeType,
@@ -339,12 +445,55 @@ func (p *Sub2API) syncAPIKeys(ctx context.Context, site models.Site, auth *sub2a
 		}
 		apiKeys = append(apiKeys, entry)
 	}
+	if len(apiKeys) == 0 {
+		return nil, ""
+	}
 	credentialsUpdate["api_keys"] = apiKeys
 	primaryKey := ""
-	if primary != nil {
+	if primary != nil && sub2apiUsableAPIKey(fmt.Sprint(primary["key"])) {
 		primaryKey = strings.TrimSpace(fmt.Sprint(primary["key"]))
 	}
+	if primaryKey == "" {
+		primaryKey = strings.TrimSpace(fmt.Sprint(apiKeys[0]["key"]))
+	}
 	return credentialsUpdate, primaryKey
+}
+
+func sub2apiItemsHaveUsableKey(items []map[string]any) bool {
+	for _, item := range items {
+		if sub2apiUsableAPIKey(fmt.Sprint(item["key"])) {
+			return true
+		}
+	}
+	return false
+}
+
+func sub2apiUsableAPIKey(value string) bool {
+	key := strings.TrimSpace(value)
+	if key == "" || key == "<nil>" {
+		return false
+	}
+	return !strings.Contains(key, "****") && !strings.Contains(key, "••••")
+}
+
+func (p *Sub2API) createAPIKey(ctx context.Context, site models.Site, auth *sub2apiAuth, timeoutSeconds int) {
+	target := strings.TrimSpace(stringValue(site.PluginConfig, "create_api_key_url", ""))
+	if target == "" {
+		target = "/api/v1/keys"
+	}
+	name := strings.TrimSpace(stringValue(site.PluginConfig, "default_api_key_name", ""))
+	if name == "" {
+		name = strings.TrimSpace(stringValue(site.Credentials, "account", ""))
+	}
+	if name == "" {
+		name = "default"
+	}
+	body := map[string]any{"name": name}
+	payload, _, nextAuth, err := p.requestJSONWithAuth(ctx, site, http.MethodPost, target, *auth, body, timeoutSeconds)
+	if err == nil {
+		*auth = nextAuth
+		_ = payload
+	}
 }
 
 func (p *Sub2API) fetchPackageQuota(ctx context.Context, site models.Site, auth *sub2apiAuth, profile map[string]any, timeoutSeconds int) packageQuotaSnapshot {

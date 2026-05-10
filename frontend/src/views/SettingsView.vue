@@ -40,6 +40,8 @@ const form = reactive<SettingsData>({
   database_backup_dir: '',
   database_backup_interval_minutes: 1440,
   database_backup_retention: 7,
+  feature_flags: {},
+  features: [],
   desktop_frontend_default_port: 3721,
   desktop_frontend_port: 0,
   desktop_frontend_url: '',

@@ -40,6 +40,21 @@ type APIKeySyncResult struct {
 	Message            string
 }
 
+type AccountRegistrationRequest struct {
+	Email       string
+	Password    string
+	AccountName string
+}
+
+type AccountRegistrationResult struct {
+	Message      string
+	Credentials  models.JSONMap
+	PluginConfig models.JSONMap
+	PrimaryKey   string
+	APIKeyCount  int
+	AccountName  string
+}
+
 type SitePlugin interface {
 	Meta() schemas.PluginMetaResponse
 	Validate(site models.Site) error
@@ -49,6 +64,10 @@ type SitePlugin interface {
 
 type APIKeySyncer interface {
 	SyncAPIKeys(ctx context.Context, site models.Site, timeoutSeconds int) (APIKeySyncResult, error)
+}
+
+type AccountRegistrar interface {
+	RegisterAccount(ctx context.Context, site models.Site, request AccountRegistrationRequest, timeoutSeconds int) (AccountRegistrationResult, error)
 }
 
 func apiKeyUpdateCount(credentials models.JSONMap) int {
@@ -77,6 +96,14 @@ func apiKeyUpdateCount(credentials models.JSONMap) int {
 
 func Field(name, label, fieldType, placeholder string, required bool, helpText string) schemas.FieldDescriptor {
 	return schemas.FieldDescriptor{Name: name, Label: label, Type: fieldType, Placeholder: placeholder, Required: required, HelpText: helpText}
+}
+
+func clonePluginJSON(value models.JSONMap) models.JSONMap {
+	out := models.JSONMap{}
+	for key, item := range value {
+		out[key] = item
+	}
+	return out
 }
 
 func normalizeBalanceUnit(unit string) string {

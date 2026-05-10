@@ -1,11 +1,17 @@
 package handlers
 
 import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"ai-sign-in-gateway/internal/models"
+	"ai-sign-in-gateway/internal/services"
 	"github.com/glebarez/sqlite"
+	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm"
 )
 
@@ -36,6 +42,74 @@ func TestGatewayTotalBalanceUsesRouteUnits(t *testing.T) {
 	}
 	if display != "$11.75 / ¥20" {
 		t.Fatalf("display = %v", display)
+	}
+}
+
+func TestUpdateGatewayRouteTypePersistsManualRequestBaseURLs(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:gateway-route-manual-url?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(models.All()...); err != nil {
+		t.Fatalf("auto migrate: %v", err)
+	}
+	site := models.Site{
+		Name:      "manual-url-site",
+		BaseURL:   "https://site.example",
+		PluginKey: "api-supplier",
+		IsEnabled: true,
+	}
+	if err := db.Create(&site).Error; err != nil {
+		t.Fatalf("create site: %v", err)
+	}
+	state := models.GatewayRouteState{
+		SiteID:              site.ID,
+		KeyFingerprint:      "key-a",
+		RouteType:           "codex",
+		SupportedModels:     services.EncodeGatewaySupportedModels([]string{"gpt-5.5"}),
+		SiteNameSnapshot:    site.Name,
+		SiteBaseURLSnapshot: site.BaseURL,
+		SiteAPIURLSnapshot:  "[]",
+		LastRequestBaseURL:  "https://last.example",
+		IsEnabled:           true,
+		CircuitState:        "closed",
+	}
+	if err := db.Create(&state).Error; err != nil {
+		t.Fatalf("create route: %v", err)
+	}
+
+	body, _ := json.Marshal(map[string]any{
+		"route_type":               "claude",
+		"supported_models":         []string{"claude-sonnet-4-6"},
+		"manual_request_base_urls": []string{"https://claude.example/v1"},
+	})
+	app := &App{DB: db}
+	router := chi.NewRouter()
+	router.Patch("/routes/{routeID}/type", app.UpdateGatewayRouteType)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPatch, "/routes/1/type", bytes.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var response map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response["request_base_url"] != "https://claude.example/v1" {
+		t.Fatalf("request_base_url = %v", response["request_base_url"])
+	}
+	if response["last_request_base_url"] != "" {
+		t.Fatalf("last_request_base_url = %v", response["last_request_base_url"])
+	}
+	var stored models.GatewayRouteState
+	if err := db.First(&stored, state.ID).Error; err != nil {
+		t.Fatalf("reload route: %v", err)
+	}
+	if got := services.GatewayRouteManualRequestBaseURLs(stored, site); len(got) != 1 || got[0] != "https://claude.example/v1" {
+		t.Fatalf("stored manual urls = %v", got)
+	}
+	if stored.RouteType != "claude" || !stored.RouteTypeManual {
+		t.Fatalf("route type manual = %s/%v", stored.RouteType, stored.RouteTypeManual)
 	}
 }
 

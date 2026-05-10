@@ -445,6 +445,22 @@ func findFrontendDist() string {
 	return filepath.Join("frontend", "dist")
 }
 
+func pathWithinDir(root string, target string) bool {
+	rootAbs, err := filepath.Abs(filepath.Clean(root))
+	if err != nil {
+		return false
+	}
+	targetAbs, err := filepath.Abs(filepath.Clean(target))
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(rootAbs, targetAbs)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel))
+}
+
 func serveFrontend(dist string, w http.ResponseWriter, r *http.Request) {
 	if !exists(filepath.Join(dist, "index.html")) {
 		http.Error(w, "frontend/dist 不存在，请先执行 npm run build", http.StatusServiceUnavailable)
@@ -455,7 +471,7 @@ func serveFrontend(dist string, w http.ResponseWriter, r *http.Request) {
 		cleanPath = "index.html"
 	}
 	requested := filepath.Join(dist, cleanPath)
-	if strings.HasPrefix(requested, dist) {
+	if pathWithinDir(dist, requested) {
 		if info, err := os.Stat(requested); err == nil && !info.IsDir() {
 			if contentType := mime.TypeByExtension(filepath.Ext(requested)); contentType != "" {
 				w.Header().Set("Content-Type", contentType)

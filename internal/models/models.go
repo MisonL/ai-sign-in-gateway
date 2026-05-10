@@ -78,47 +78,49 @@ type SystemSetting struct {
 }
 
 type GatewayRouteState struct {
-	ID                  uint       `gorm:"primaryKey" json:"id"`
-	SiteID              uint       `gorm:"uniqueIndex:uq_gateway_route_site_key;index" json:"site_id"`
-	KeyFingerprint      string     `gorm:"size:64;uniqueIndex:uq_gateway_route_site_key;index" json:"key_fingerprint"`
-	KeyName             string     `gorm:"size:120;default:''" json:"key_name"`
-	KeySource           string     `gorm:"size:80;default:site" json:"key_source"`
-	SiteNameSnapshot    string     `gorm:"size:120;default:''" json:"site_name_snapshot"`
-	SiteBaseURLSnapshot string     `gorm:"size:255;default:''" json:"site_base_url_snapshot"`
-	SiteAPIURLSnapshot  string     `gorm:"type:text;default:'[]'" json:"site_api_url_snapshot"`
-	LastRequestBaseURL  string     `gorm:"size:255;default:''" json:"last_request_base_url"`
-	LastBalance         *float64   `json:"last_balance,omitempty"`
-	BalanceUnit         string     `gorm:"size:30;default:''" json:"balance_unit"`
-	BalanceProbeURL     string     `gorm:"size:255;default:''" json:"balance_probe_url"`
-	RouteType           string     `gorm:"size:20;default:codex" json:"route_type"`
-	RouteTypeManual     bool       `gorm:"default:false" json:"route_type_manual"`
-	SupportedModels     string     `gorm:"type:text;default:'[]'" json:"supported_models"`
-	ModelProbeStatus    string     `gorm:"size:30;default:''" json:"model_probe_status"`
-	ModelProbeMessage   string     `gorm:"type:text;default:''" json:"model_probe_message"`
-	ModelProbeUpdatedAt *time.Time `json:"model_probe_updated_at,omitempty"`
-	GroupName           string     `gorm:"size:100;default:''" json:"group_name"`
-	RoutePriority       int        `gorm:"default:100;index" json:"route_priority"`
-	RoutePriorityManual bool       `gorm:"default:false" json:"route_priority_manual"`
-	Weight              int        `gorm:"default:1" json:"weight"`
-	IsEnabled           bool       `gorm:"default:true" json:"is_enabled"`
-	CircuitState        string     `gorm:"size:20;default:closed;index" json:"circuit_state"`
-	ConsecutiveFailures int        `gorm:"default:0" json:"consecutive_failures"`
-	RequestCount        int        `gorm:"default:0" json:"request_count"`
-	SuccessCount        int        `gorm:"default:0" json:"success_count"`
-	FailureCount        int        `gorm:"default:0" json:"failure_count"`
-	AvgLatencyMS        *float64   `json:"avg_latency_ms,omitempty"`
-	EWMALatencyMS       *float64   `gorm:"column:ewma_latency_ms" json:"ewma_latency_ms,omitempty"`
-	LastLatencyMS       *float64   `json:"last_latency_ms,omitempty"`
-	LastStatusCode      *int       `json:"last_status_code,omitempty"`
-	LastError           *string    `gorm:"type:text" json:"last_error,omitempty"`
-	LastUsedAt          *time.Time `json:"last_used_at,omitempty"`
-	LastSuccessAt       *time.Time `json:"last_success_at,omitempty"`
-	LastFailureAt       *time.Time `json:"last_failure_at,omitempty"`
-	CircuitOpenedAt     *time.Time `json:"circuit_opened_at,omitempty"`
-	CircuitOpenUntil    *time.Time `json:"circuit_open_until,omitempty"`
-	CreatedAt           time.Time  `json:"created_at"`
-	UpdatedAt           time.Time  `json:"updated_at"`
-	Site                Site       `json:"-"`
+	ID                    uint       `gorm:"primaryKey" json:"id"`
+	SiteID                uint       `gorm:"uniqueIndex:uq_gateway_route_site_key;index" json:"site_id"`
+	KeyFingerprint        string     `gorm:"size:64;uniqueIndex:uq_gateway_route_site_key;index" json:"key_fingerprint"`
+	KeyName               string     `gorm:"size:120;default:''" json:"key_name"`
+	KeySource             string     `gorm:"size:80;default:site" json:"key_source"`
+	SiteNameSnapshot      string     `gorm:"size:120;default:''" json:"site_name_snapshot"`
+	SiteBaseURLSnapshot   string     `gorm:"size:255;default:''" json:"site_base_url_snapshot"`
+	SiteAPIURLSnapshot    string     `gorm:"type:text;default:'[]'" json:"site_api_url_snapshot"`
+	ManualRequestBaseURLs string     `gorm:"type:text;default:'[]'" json:"manual_request_base_urls"`
+	LastRequestBaseURL    string     `gorm:"size:255;default:''" json:"last_request_base_url"`
+	LastBalance           *float64   `json:"last_balance,omitempty"`
+	BalanceUnit           string     `gorm:"size:30;default:''" json:"balance_unit"`
+	BalanceProbeURL       string     `gorm:"size:255;default:''" json:"balance_probe_url"`
+	RouteType             string     `gorm:"size:20;default:codex" json:"route_type"`
+	RouteTypeManual       bool       `gorm:"default:false" json:"route_type_manual"`
+	SupportedModels       string     `gorm:"type:text;default:'[]'" json:"supported_models"`
+	ModelProbeStatus      string     `gorm:"size:30;default:''" json:"model_probe_status"`
+	ModelProbeMessage     string     `gorm:"type:text;default:''" json:"model_probe_message"`
+	ModelProbeUpdatedAt   *time.Time `json:"model_probe_updated_at,omitempty"`
+	GroupName             string     `gorm:"size:100;default:''" json:"group_name"`
+	RoutePriority         int        `gorm:"default:100;index" json:"route_priority"`
+	RoutePriorityManual   bool       `gorm:"default:false" json:"route_priority_manual"`
+	Weight                int        `gorm:"default:1" json:"weight"`
+	IsEnabled             bool       `gorm:"default:true" json:"is_enabled"`
+	IsEnabledManual       bool       `gorm:"default:false" json:"is_enabled_manual"`
+	CircuitState          string     `gorm:"size:20;default:closed;index" json:"circuit_state"`
+	ConsecutiveFailures   int        `gorm:"default:0" json:"consecutive_failures"`
+	RequestCount          int        `gorm:"default:0" json:"request_count"`
+	SuccessCount          int        `gorm:"default:0" json:"success_count"`
+	FailureCount          int        `gorm:"default:0" json:"failure_count"`
+	AvgLatencyMS          *float64   `json:"avg_latency_ms,omitempty"`
+	EWMALatencyMS         *float64   `gorm:"column:ewma_latency_ms" json:"ewma_latency_ms,omitempty"`
+	LastLatencyMS         *float64   `json:"last_latency_ms,omitempty"`
+	LastStatusCode        *int       `json:"last_status_code,omitempty"`
+	LastError             *string    `gorm:"type:text" json:"last_error,omitempty"`
+	LastUsedAt            *time.Time `json:"last_used_at,omitempty"`
+	LastSuccessAt         *time.Time `json:"last_success_at,omitempty"`
+	LastFailureAt         *time.Time `json:"last_failure_at,omitempty"`
+	CircuitOpenedAt       *time.Time `json:"circuit_opened_at,omitempty"`
+	CircuitOpenUntil      *time.Time `json:"circuit_open_until,omitempty"`
+	CreatedAt             time.Time  `json:"created_at"`
+	UpdatedAt             time.Time  `json:"updated_at"`
+	Site                  Site       `json:"-"`
 }
 
 type GatewayRequestLog struct {
@@ -169,6 +171,44 @@ type SiteQueueTask struct {
 	Site        Site       `json:"-"`
 }
 
+type ChatSession struct {
+	ID              uint          `gorm:"primaryKey" json:"id"`
+	Title           string        `gorm:"size:160;default:'';index" json:"title"`
+	SiteID          *uint         `gorm:"index" json:"site_id,omitempty"`
+	SiteName        string        `gorm:"size:120;default:''" json:"site_name"`
+	Model           string        `gorm:"size:160;default:'';index" json:"model"`
+	Mode            string        `gorm:"size:20;default:'chat';index" json:"mode"`
+	RouteType       string        `gorm:"size:30;default:''" json:"route_type"`
+	KeyFingerprint  string        `gorm:"size:80;default:''" json:"key_fingerprint"`
+	KeyName         string        `gorm:"size:120;default:''" json:"key_name"`
+	ImageSize       string        `gorm:"size:40;default:''" json:"image_size"`
+	ImageWidth      int           `gorm:"default:0" json:"image_width"`
+	ImageHeight     int           `gorm:"default:0" json:"image_height"`
+	MessageCount    int           `gorm:"default:0" json:"message_count"`
+	LastMessageText string        `gorm:"type:text;default:''" json:"last_message_text"`
+	CreatedAt       time.Time     `json:"created_at"`
+	UpdatedAt       time.Time     `json:"updated_at"`
+	Messages        []ChatMessage `gorm:"foreignKey:SessionID;constraint:OnDelete:CASCADE" json:"-"`
+}
+
+type ChatMessage struct {
+	ID              uint        `gorm:"primaryKey" json:"id"`
+	SessionID       uint        `gorm:"index;not null" json:"session_id"`
+	Seq             int         `gorm:"not null;index" json:"seq"`
+	Role            string      `gorm:"size:20;not null;index" json:"role"`
+	Content         string      `gorm:"type:text;default:''" json:"content"`
+	Status          string      `gorm:"size:20;default:'done';index" json:"status"`
+	Mode            string      `gorm:"size:20;default:''" json:"mode"`
+	LatencyMS       *float64    `json:"latency_ms,omitempty"`
+	StatusCode      *int        `json:"status_code,omitempty"`
+	Error           string      `gorm:"type:text;default:''" json:"error"`
+	ReferenceImages JSONMap     `gorm:"type:json" json:"reference_images"`
+	Images          JSONMap     `gorm:"type:json" json:"images"`
+	CreatedAt       time.Time   `json:"created_at"`
+	UpdatedAt       time.Time   `json:"updated_at"`
+	Session         ChatSession `gorm:"foreignKey:SessionID" json:"-"`
+}
+
 func All() []any {
 	return []any{
 		&AdminUser{},
@@ -178,5 +218,7 @@ func All() []any {
 		&GatewayRouteState{},
 		&GatewayRequestLog{},
 		&SiteQueueTask{},
+		&ChatSession{},
+		&ChatMessage{},
 	}
 }

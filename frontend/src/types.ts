@@ -24,6 +24,15 @@ export interface PluginMeta {
   auth_hint: string
 }
 
+export interface FeatureMeta {
+  key: string
+  name: string
+  description: string
+  frontend_path: string
+  default_enabled: boolean
+  enabled: boolean
+}
+
 export interface SitePayload {
   name: string
   base_url: string
@@ -53,6 +62,28 @@ export interface Site extends SitePayload {
   last_run_at: string | null
   created_at: string
   updated_at: string | null
+}
+
+export interface SiteRegistrationBatchPayload extends SitePayload {
+  email_pattern: string
+  password: string
+  count: number
+  start_index: number
+}
+
+export interface SiteRegistrationBatchItem {
+  index: number
+  email: string
+  ok: boolean
+  message: string
+  site?: Site
+  api_key_count: number
+}
+
+export interface SiteRegistrationBatchResult {
+  created_count: number
+  failed_count: number
+  items: SiteRegistrationBatchItem[]
 }
 
 export interface SiteSummary {
@@ -308,6 +339,8 @@ export interface SettingsData {
   database_backup_dir: string
   database_backup_interval_minutes: number
   database_backup_retention: number
+  feature_flags: Record<string, boolean>
+  features: FeatureMeta[]
   desktop_frontend_default_port: number
   desktop_frontend_port: number
   desktop_frontend_url: string
@@ -376,6 +409,8 @@ export interface ModelListItem {
   base_url: string
   key_fingerprint: string
   key_name: string
+  image_generation_path?: string
+  image_edit_path?: string
 }
 
 export interface ModelListResult {
@@ -416,6 +451,84 @@ export interface ChatImageOutput {
   url: string
   b64_json: string
   revised_prompt: string
+}
+
+export interface ChatSession {
+  id: number
+  title: string
+  site_id?: number | null
+  site_name: string
+  model: string
+  mode: 'chat' | 'image' | string
+  route_type: string
+  key_fingerprint: string
+  key_name: string
+  image_size: string
+  image_width: number
+  image_height: number
+  message_count: number
+  last_message_text: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ChatSessionMessage {
+  id: number
+  session_id: number
+  seq: number
+  role: 'system' | 'user' | 'assistant' | string
+  content: string
+  status: 'idle' | 'sending' | 'done' | 'error' | string
+  mode: 'chat' | 'image' | string
+  latency_ms: number | null
+  status_code: number | null
+  error: string
+  reference_images: ChatImageReference[]
+  images: ChatImageReference[]
+  created_at: string
+  updated_at: string
+}
+
+export interface ChatSessionDetail extends ChatSession {
+  messages: ChatSessionMessage[]
+}
+
+export interface ChatSessionListResult {
+  items: ChatSession[]
+  count: number
+}
+
+export interface ChatSessionCreatePayload {
+  title?: string
+  site_id?: number | null
+  site_name?: string
+  model?: string
+  mode?: 'chat' | 'image' | string
+  route_type?: string
+  key_fingerprint?: string
+  key_name?: string
+  image_size?: string
+  image_width?: number
+  image_height?: number
+}
+
+export type ChatSessionUpdatePayload = Partial<ChatSessionCreatePayload>
+
+export interface ChatSessionMessagePayload {
+  role: 'system' | 'user' | 'assistant'
+  content: string
+  status: 'idle' | 'sending' | 'done' | 'error'
+  mode?: 'chat' | 'image' | ''
+  latency_ms?: number | null
+  status_code?: number | null
+  error?: string
+  reference_images?: ChatImageReference[]
+  images?: ChatImageReference[]
+  created_at?: string
+}
+
+export interface ChatSessionAppendPayload {
+  messages: ChatSessionMessagePayload[]
 }
 
 export interface McpTestResult {
@@ -546,6 +659,7 @@ export interface GatewayRoute {
   base_url: string
   request_base_url: string
   request_base_urls?: string[]
+  manual_request_base_urls?: string[]
   last_request_base_url?: string
   site_name_snapshot?: string
   site_base_url_snapshot?: string
@@ -575,6 +689,7 @@ export interface GatewayRoute {
   route_priority_manual?: boolean
   weight: number
   is_enabled: boolean
+  is_enabled_manual?: boolean
   circuit_state: string
   consecutive_failures: number
   active_concurrency: number
@@ -620,6 +735,7 @@ export interface GatewayRouteProbeResult {
 export interface GatewayRouteUpdatePayload {
   route_type: 'claude' | 'codex' | 'gemini'
   supported_models?: string[]
+  manual_request_base_urls?: string[]
 }
 
 export interface GatewayRouteDiagnosticItem {

@@ -52,7 +52,7 @@ func (p *YellowPeach) Meta() schemas.PluginMetaResponse {
 		Key:            "yellowpeach-newapi",
 		Name:           "黄桃 New API 站点",
 		Description:    "适配 NewAPI 面板的登录、资料读取、API Key 同步与签到。",
-		Capabilities:   []string{"checkin", "account_status", "gateway", "api_key_sync"},
+		Capabilities:   []string{"checkin", "account_status", "gateway", "api_key_sync", "account_registration"},
 		AuthEntryLabel: "打开站点登录页",
 		AuthHint:       "推荐填入浏览器中的 session Cookie，其次是后台系统访问令牌；自动登录将在后续版本启用。",
 		CredentialFields: []schemas.FieldDescriptor{
@@ -66,12 +66,15 @@ func (p *YellowPeach) Meta() schemas.PluginMetaResponse {
 			Field("user_agent", "User-Agent", "text", services.DefaultBrowserUserAgent, false, ""),
 		},
 		ConfigFields: []schemas.FieldDescriptor{
+			Field("turnstile_token", "Turnstile Token", "text", "可留空", false, "注册 / 登录接口需要 Turnstile 时填写。"),
 			Field("referer_path", "Referer 路径", "text", "/console/personal", false, ""),
 			Field("quota_per_unit", "额度换算基数", "number", "500000", false, ""),
 			Field("checkin_mode", "签到模式", "text", "default 或 reward_center", false, ""),
 			Field("api_format", "API 格式", "text", "openai / anthropic / gemini", false, ""),
 			Field("api_keys_url", "API Key 列表 URL", "url", "/api/token/?p=0&size=100", false, "NewAPI 默认令牌列表接口；部分自定义站点可在这里改路径。"),
 			Field("token_keys_url", "批量获取 Key URL", "url", "/api/token/batch/keys", false, "当列表接口只返回脱敏 Key 时，使用该接口按 token id 获取完整 Key。"),
+			Field("create_api_key_url", "API Key 创建 URL", "url", "/api/token/", false, "注册后没有可用 Key 时自动创建。"),
+			Field("default_api_key_name", "默认 API Key 名称", "text", "default", false, ""),
 			Field("preferred_api_key_name", "首选 API Key 名称", "text", "default", false, ""),
 			Field("preferred_api_key_id", "首选 API Key ID", "text", "例如 12", false, ""),
 			Field("invite_path", "邀请接口路径", "url", "/api/user/aff", false, "填写后会额外请求该接口解析邀请链接；留空则直接复用资料接口响应。"),
@@ -84,6 +87,74 @@ func (p *YellowPeach) Meta() schemas.PluginMetaResponse {
 			Field("invite_link_template", "邀请链接模板", "text", "/register?aff={code}", false, "支持相对路径或完整 URL，使用 {code} 作为邀请码占位符。"),
 		},
 	}
+}
+
+func (p *YellowPeach) RegisterAccount(ctx context.Context, site models.Site, request AccountRegistrationRequest, timeoutSeconds int) (AccountRegistrationResult, error) {
+	email := strings.TrimSpace(request.Email)
+	password := strings.TrimSpace(request.Password)
+	if email == "" || password == "" {
+		return AccountRegistrationResult{}, errors.New("注册邮箱和密码不能为空")
+	}
+	if strings.TrimSpace(site.BaseURL) == "" {
+		return AccountRegistrationResult{}, errors.New("Base URL 不能为空")
+	}
+
+	turnstile := strings.TrimSpace(stringValue(site.PluginConfig, "turnstile_token", ""))
+	registerURL := strings.TrimRight(site.BaseURL, "/") + "/api/user/register"
+	if turnstile != "" {
+		registerURL += "?turnstile=" + url.QueryEscape(turnstile)
+	}
+	body := map[string]any{"username": email, "password": password}
+	if inviteCode := strings.TrimSpace(stringValue(site.PluginConfig, "invite_code", "")); inviteCode != "" {
+		body["aff_code"] = inviteCode
+	}
+
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar}
+	payload, _, err := p.postSigned(ctx, client, site, registerURL, body, timeoutSeconds)
+	if err != nil {
+		return AccountRegistrationResult{}, err
+	}
+	if !pathBool(payload, "success") {
+		return AccountRegistrationResult{}, errors.New(pathString(payload, "message", "注册失败"))
+	}
+
+	loginSite := site
+	loginSite.Credentials = clonePluginJSON(site.Credentials)
+	loginSite.Credentials["account"] = firstNonEmptyPlugin(strings.TrimSpace(request.AccountName), email)
+	loginSite.Credentials["username"] = email
+	loginSite.Credentials["email"] = email
+	loginSite.Credentials["password"] = password
+	auth, err := p.autoLogin(ctx, loginSite, timeoutSeconds)
+	if err != nil {
+		return AccountRegistrationResult{}, err
+	}
+	updates, primaryKey := p.syncAPIKeys(ctx, loginSite, auth, timeoutSeconds, true)
+	credentials := clonePluginJSON(updates)
+	credentials["account"] = firstNonEmptyPlugin(strings.TrimSpace(request.AccountName), email)
+	credentials["username"] = email
+	credentials["email"] = email
+	credentials["password"] = password
+	credentials["cookie"] = auth.SessionCookie
+	if auth.UserID != "" {
+		credentials["user_id"] = auth.UserID
+	}
+	if primaryKey != "" {
+		credentials["api_key"] = primaryKey
+	}
+	apiCount := apiKeyUpdateCount(credentials)
+	message := "注册并登录成功。"
+	if apiCount > 0 {
+		message = fmt.Sprintf("%s 已同步 %d 个 API Key。", message, apiCount)
+	}
+	return AccountRegistrationResult{
+		Message:      message,
+		Credentials:  credentials,
+		PluginConfig: clonePluginJSON(site.PluginConfig),
+		PrimaryKey:   primaryKey,
+		APIKeyCount:  apiCount,
+		AccountName:  email,
+	}, nil
 }
 
 func (p *YellowPeach) Validate(site models.Site) error {
@@ -146,7 +217,7 @@ func (p *YellowPeach) FetchAccountStatus(ctx context.Context, site models.Site, 
 	if auth.SessionCookie != "" {
 		updates["cookie"] = auth.SessionCookie
 	}
-	keyUpdates, primaryKey := p.syncAPIKeys(ctx, site, auth, timeoutSeconds)
+	keyUpdates, primaryKey := p.listAPIKeys(ctx, site, auth, timeoutSeconds)
 	for key, value := range keyUpdates {
 		updates[key] = value
 	}
@@ -186,7 +257,7 @@ func (p *YellowPeach) SyncAPIKeys(ctx context.Context, site models.Site, timeout
 	if err != nil {
 		return APIKeySyncResult{}, err
 	}
-	updates, primaryKey := p.syncAPIKeys(ctx, site, auth, timeoutSeconds)
+	updates, primaryKey := p.syncAPIKeys(ctx, site, auth, timeoutSeconds, false)
 	if updates == nil {
 		updates = models.JSONMap{}
 	}
@@ -376,11 +447,20 @@ func (p *YellowPeach) autoLogin(ctx context.Context, site models.Site, timeoutSe
 		}
 	}
 
-	if sessionCookie == "" {
-		return yellowpeachAuth{}, errors.New("登录成功但未获得 session Cookie")
+	auth := yellowpeachAuth{
+		SessionCookie: sessionCookie,
+		Authorization: normalizeYPAuthorization(firstNonEmptyPlugin(
+			pathString(payload, "data.access_token", ""),
+			pathString(payload, "data.token", ""),
+			pathString(payload, "data.auth_token", ""),
+			pathString(payload, "access_token", ""),
+			pathString(payload, "token", ""),
+		)),
+		UserID: extractYPUserID(payload),
 	}
-
-	auth := yellowpeachAuth{SessionCookie: sessionCookie, UserID: extractYPUserID(payload)}
+	if auth.SessionCookie == "" && auth.Authorization == "" {
+		return yellowpeachAuth{}, errors.New("登录成功但未获得 session Cookie 或 access_token")
+	}
 	if auth.UserID == "" {
 		auth.UserID = strings.TrimSpace(stringValue(site.Credentials, "user_id", ""))
 	}
@@ -596,7 +676,11 @@ func (p *YellowPeach) requestJSON(ctx context.Context, site models.Site, method,
 	return parsed, raw, nil
 }
 
-func (p *YellowPeach) syncAPIKeys(ctx context.Context, site models.Site, auth yellowpeachAuth, timeoutSeconds int) (models.JSONMap, string) {
+func (p *YellowPeach) listAPIKeys(ctx context.Context, site models.Site, auth yellowpeachAuth, timeoutSeconds int) (models.JSONMap, string) {
+	return p.syncAPIKeys(ctx, site, auth, timeoutSeconds, false)
+}
+
+func (p *YellowPeach) syncAPIKeys(ctx context.Context, site models.Site, auth yellowpeachAuth, timeoutSeconds int, allowCreate bool) (models.JSONMap, string) {
 	apiKeysURL := strings.TrimSpace(stringValue(site.PluginConfig, "api_keys_url", ""))
 	if apiKeysURL == "" {
 		apiKeysURL = "/api/token/?p=0&size=100"
@@ -607,10 +691,33 @@ func (p *YellowPeach) syncAPIKeys(ctx context.Context, site models.Site, auth ye
 	}
 	items := extractTokenItems(payload)
 	if len(items) == 0 {
-		return nil, ""
+		if !allowCreate {
+			return nil, ""
+		}
+		p.createAPIKey(ctx, site, auth, timeoutSeconds)
+		payload, _, err = p.requestJSON(ctx, site, http.MethodGet, apiKeysURL, auth, nil, timeoutSeconds)
+		if err != nil {
+			return nil, ""
+		}
+		items = extractTokenItems(payload)
+		if len(items) == 0 || !newAPITokenItemsHaveUsableKey(items) {
+			return nil, ""
+		}
 	}
 
 	keyByID := p.fetchTokenKeys(ctx, site, auth, tokenItemIDsNeedingKeys(items), timeoutSeconds)
+	if len(keyByID) == 0 && !newAPITokenItemsHaveUsableKey(items) {
+		if !allowCreate {
+			return nil, ""
+		}
+		p.createAPIKey(ctx, site, auth, timeoutSeconds)
+		payload, _, err = p.requestJSON(ctx, site, http.MethodGet, apiKeysURL, auth, nil, timeoutSeconds)
+		if err != nil {
+			return nil, ""
+		}
+		items = extractTokenItems(payload)
+		keyByID = p.fetchTokenKeys(ctx, site, auth, tokenItemIDsNeedingKeys(items), timeoutSeconds)
+	}
 	preferredName := strings.TrimSpace(stringValue(site.PluginConfig, "preferred_api_key_name", ""))
 	preferredID := strings.TrimSpace(stringValue(site.PluginConfig, "preferred_api_key_id", ""))
 	credentialsUpdate := models.JSONMap{}
@@ -659,6 +766,37 @@ func (p *YellowPeach) syncAPIKeys(ctx context.Context, site models.Site, auth ye
 	}
 	credentialsUpdate["api_keys"] = apiKeys
 	return credentialsUpdate, strings.TrimSpace(fmt.Sprint(primary["key"]))
+}
+
+func newAPITokenItemsHaveUsableKey(items []map[string]any) bool {
+	for _, item := range items {
+		key := strings.TrimSpace(fmt.Sprint(firstExistingValue(item, "key", "token", "api_key", "value")))
+		if usableAPIKey(key) {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *YellowPeach) createAPIKey(ctx context.Context, site models.Site, auth yellowpeachAuth, timeoutSeconds int) {
+	target := strings.TrimSpace(stringValue(site.PluginConfig, "create_api_key_url", ""))
+	if target == "" {
+		target = "/api/token/"
+	}
+	name := strings.TrimSpace(stringValue(site.PluginConfig, "default_api_key_name", ""))
+	if name == "" {
+		name = strings.TrimSpace(stringValue(site.Credentials, "account", ""))
+	}
+	if name == "" {
+		name = "default"
+	}
+	body := map[string]any{
+		"name":            name,
+		"expired_time":    -1,
+		"remain_quota":    0,
+		"unlimited_quota": true,
+	}
+	_, _, _ = p.requestJSON(ctx, site, http.MethodPost, target, auth, body, timeoutSeconds)
 }
 
 func (p *YellowPeach) fetchPackageQuota(ctx context.Context, site models.Site, auth yellowpeachAuth, selfPayload map[string]any, timeoutSeconds int) packageQuotaSnapshot {

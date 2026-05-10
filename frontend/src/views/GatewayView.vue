@@ -81,6 +81,7 @@ const routeModelsDialogOpen = ref(false)
 const routeModelsDialogSaving = ref(false)
 const routeModelsDialogRoute = ref<GatewayRoute | null>(null)
 const routeModelsDialogValue = ref<string[]>([])
+const routeModelsDialogRequestURLs = ref('')
 
 function resetAddUpstreamForm() {
   addUpstreamForm.name = ''
@@ -747,7 +748,17 @@ function normalizeGatewayRoute(route: GatewayRoute): GatewayRoute {
     balance_display: route.balance_display || formatBalance(route.last_balance, balanceUnit),
     package_unit: normalizeBalanceUnit(route.package_unit, ''),
     supported_models: normalizeModelList(route.supported_models),
+    manual_request_base_urls: normalizeStringList(route.manual_request_base_urls ?? []),
   }
+}
+
+function normalizeStringList(values: unknown): string[] {
+  const raw = Array.isArray(values)
+    ? values.map((item) => String(item ?? ''))
+    : String(values ?? '').split(/[\n\r\t,，]+/)
+  return raw
+    .map((item) => item.trim())
+    .filter((item, index, source) => item && source.indexOf(item) === index)
 }
 
 function applyActiveRequestSnapshot(items: GatewayActiveRequest[]) {
@@ -944,6 +955,7 @@ function formatLatency(latencyMs: number | null | undefined) {
 
 function routeRequestBaseList(route: GatewayRoute): string[] {
   const raw = [
+    ...(route.manual_request_base_urls ?? []),
     ...(route.request_base_urls ?? []),
     route.request_base_url,
     route.base_url,
@@ -1561,6 +1573,7 @@ async function handleRouteTypeSelect(route: GatewayRoute, value: unknown) {
 function openRouteModelsDialog(route: GatewayRoute) {
   routeModelsDialogRoute.value = route
   routeModelsDialogValue.value = [...normalizeModelList(route.supported_models)]
+  routeModelsDialogRequestURLs.value = normalizeStringList(route.manual_request_base_urls ?? []).join('\n')
   routeModelsDialogOpen.value = true
 }
 
@@ -1574,11 +1587,12 @@ async function saveRouteModelsDialog() {
     const updated = normalizeGatewayRoute(await updateGatewayRouteType(route.id, {
       route_type: route.route_type,
       supported_models: normalizeModelList(routeModelsDialogValue.value),
+      manual_request_base_urls: normalizeStringList(routeModelsDialogRequestURLs.value),
     }))
     routes.value = routes.value.map((item) => (item.id === route.id ? updated : item))
     priorityRoutes.value = priorityRoutes.value.map((item) => (item.id === route.id ? updated : item))
     routeModelsDialogOpen.value = false
-    toast.success('路由支持模型已更新。')
+    toast.success('路由配置已更新。')
   } catch (err) {
     toast.error(err instanceof Error ? err.message : '保存失败')
   } finally {
@@ -2425,7 +2439,7 @@ onBeforeUnmount(() => {
                           </a-menu-item>
                           <a-menu-item key="supported-models" @click="openRouteModelsDialog(asRoute(record))">
                             <ToolOutlined />
-                            <span>支持模型</span>
+                            <span>路由配置</span>
                           </a-menu-item>
                           <a-menu-divider />
                           <a-menu-item key="enable-only" @click="handleEnableOnlyRoute(asRoute(record))">
@@ -2853,12 +2867,20 @@ onBeforeUnmount(() => {
 
       <a-modal
         v-model:open="routeModelsDialogOpen"
-        title="编辑支持模型"
+        title="编辑路由配置"
         width="640px"
         :confirm-loading="routeModelsDialogSaving"
         @ok="saveRouteModelsDialog"
       >
         <a-form layout="vertical">
+          <a-form-item label="路由 API URL">
+            <a-textarea
+              v-model:value="routeModelsDialogRequestURLs"
+              :rows="4"
+              placeholder="每行一个 URL。留空时使用站点管理中的 API URL 或 Base URL。"
+            />
+            <small class="field-help">这里配置的是当前单条路由的请求入口，优先级高于站点级 API URL；适合同一个 Key 的 GPT 和 Claude 走不同 URL。</small>
+          </a-form-item>
           <a-form-item :label="routeModelsDialogRoute ? loadRouteLabel(routeModelsDialogRoute) : '当前路由'">
             <a-select
               v-model:value="routeModelsDialogValue"

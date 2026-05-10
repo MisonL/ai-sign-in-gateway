@@ -314,6 +314,97 @@ func TestYellowPeachSyncsAPIKeysFromTokenEndpoints(t *testing.T) {
 	}
 }
 
+func TestYellowPeachRegisterCreatesAPIKeyWhenNoneExist(t *testing.T) {
+	tokenListCalls := 0
+	createTokenCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/status":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"public_request_signing_key": ""}})
+		case "/api/user/register":
+			_ = json.NewEncoder(w).Encode(map[string]any{"success": true})
+		case "/api/user/login":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"success": true,
+				"data": map[string]any{
+					"token": "access-token",
+					"user":  map[string]any{"id": 42},
+				},
+			})
+		case "/api/user/self":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"success": true,
+				"data":    map[string]any{"id": 42, "email": "user@example.com"},
+			})
+		case "/api/token/":
+			switch r.Method {
+			case http.MethodGet:
+				tokenListCalls++
+				items := []map[string]any{}
+				if tokenListCalls > 1 {
+					items = append(items, map[string]any{"id": 8, "name": "default", "key": "sk-created-newapi", "enabled": true})
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"success": true,
+					"data":    map[string]any{"items": items},
+				})
+			case http.MethodPost:
+				createTokenCalls++
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Fatalf("decode create token body: %v", err)
+				}
+				if strings.TrimSpace(jsonStringForTest(body["name"])) == "" {
+					t.Fatalf("create token name is empty: %#v", body)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"success": true,
+					"data": map[string]any{
+						"id":      8,
+						"name":    body["name"],
+						"key":     "sk-created-newapi",
+						"enabled": true,
+					},
+				})
+			default:
+				http.NotFound(w, r)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	plugin := NewYellowPeach()
+	result, err := plugin.RegisterAccount(context.Background(), models.Site{
+		BaseURL:   server.URL,
+		PluginKey: "yellowpeach-newapi",
+		PluginConfig: models.JSONMap{
+			"api_keys_url": "/api/token/",
+		},
+	}, AccountRegistrationRequest{
+		Email:       "user@example.com",
+		Password:    "pass123456",
+		AccountName: "discovery-user",
+	}, 5)
+	if err != nil {
+		t.Fatalf("RegisterAccount returned error: %v", err)
+	}
+	if createTokenCalls != 1 {
+		t.Fatalf("createTokenCalls = %d", createTokenCalls)
+	}
+	if tokenListCalls < 2 {
+		t.Fatalf("tokenListCalls = %d", tokenListCalls)
+	}
+	if result.PrimaryKey != "sk-created-newapi" || result.APIKeyCount != 1 {
+		t.Fatalf("result key/count = %q/%d", result.PrimaryKey, result.APIKeyCount)
+	}
+	if got := result.Credentials["api_key"]; got != "sk-created-newapi" {
+		t.Fatalf("credentials api_key = %v", got)
+	}
+}
+
 func TestYellowPeachSyncsMaskedAPIKeyFromTokenDetailEndpoint(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -397,6 +488,111 @@ func TestYellowPeachSyncsMaskedAPIKeyFromTokenDetailEndpoint(t *testing.T) {
 	}
 	if len(apiKeys) != 1 || apiKeys[0]["id"] != "25" || apiKeys[0]["key"] != wantKey {
 		t.Fatalf("api_keys = %#v", apiKeys)
+	}
+}
+
+func TestYellowPeachStatusDoesNotCreateAPIKeyWhenListEmpty(t *testing.T) {
+	createCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/user/self":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"success": true,
+				"data": map[string]any{
+					"id":      42,
+					"email":   "user@example.com",
+					"balance": 12.5,
+				},
+			})
+		case "/api/token/":
+			if r.Method == http.MethodPost {
+				createCalls++
+				_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": map[string]any{"key": "sk-created"}})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"success": true,
+				"data": map[string]any{
+					"items": []map[string]any{},
+				},
+			})
+		case "/api/subscription/self":
+			_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": map[string]any{}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	plugin := NewYellowPeach()
+	status, err := plugin.FetchAccountStatus(context.Background(), models.Site{
+		BaseURL:   server.URL,
+		PluginKey: "yellowpeach-newapi",
+		Credentials: models.JSONMap{
+			"cookie":  "session=valid-session",
+			"user_id": "42",
+		},
+		PluginConfig: models.JSONMap{
+			"api_keys_url": "/api/token/",
+		},
+	}, 5)
+	if err != nil {
+		t.Fatalf("FetchAccountStatus returned error: %v", err)
+	}
+	if createCalls != 0 {
+		t.Fatalf("createCalls = %d", createCalls)
+	}
+	if _, ok := status.UpdatedCredentials["api_keys"]; ok {
+		t.Fatalf("unexpected api_keys update: %#v", status.UpdatedCredentials["api_keys"])
+	}
+}
+
+func TestYellowPeachSyncAPIKeysDoesNotCreateAPIKeyWhenListEmpty(t *testing.T) {
+	createCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/token/":
+			if r.Method == http.MethodPost {
+				createCalls++
+				_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": map[string]any{"key": "sk-created"}})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"success": true,
+				"data": map[string]any{
+					"items": []map[string]any{},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	plugin := NewYellowPeach()
+	result, err := plugin.SyncAPIKeys(context.Background(), models.Site{
+		BaseURL:   server.URL,
+		PluginKey: "yellowpeach-newapi",
+		Credentials: models.JSONMap{
+			"access_token": "panel-token",
+		},
+		PluginConfig: models.JSONMap{
+			"api_keys_url": "/api/token/",
+		},
+	}, 5)
+	if err != nil {
+		t.Fatalf("SyncAPIKeys returned error: %v", err)
+	}
+	if createCalls != 0 {
+		t.Fatalf("createCalls = %d", createCalls)
+	}
+	if result.PrimaryKey != "" {
+		t.Fatalf("PrimaryKey = %q", result.PrimaryKey)
+	}
+	if _, ok := result.UpdatedCredentials["api_keys"]; ok {
+		t.Fatalf("unexpected api_keys update: %#v", result.UpdatedCredentials["api_keys"])
 	}
 }
 

@@ -6,12 +6,14 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,12 +22,452 @@ import (
 	"ai-sign-in-gateway/internal/schemas"
 	"ai-sign-in-gateway/internal/services"
 	"github.com/go-chi/chi/v5"
+	"gorm.io/gorm"
 )
 
 func (a *App) ToolRoutes(r chi.Router) {
 	r.Post("/models", a.ModelList)
 	r.Post("/chat-test", a.ChatTest)
 	r.Post("/mcp-test", a.MCPTest)
+	r.Get("/chat-sessions", a.ListChatSessions)
+	r.Post("/chat-sessions", a.CreateChatSession)
+	r.Get("/chat-sessions/{sessionID}", a.GetChatSession)
+	r.Put("/chat-sessions/{sessionID}", a.UpdateChatSession)
+	r.Delete("/chat-sessions/{sessionID}", a.DeleteChatSession)
+	r.Post("/chat-sessions/{sessionID}/messages", a.AppendChatSessionMessages)
+}
+
+func (a *App) ListChatSessions(w http.ResponseWriter, r *http.Request) {
+	limit := chatSessionQueryInt(r, "limit", 50, 1, 200)
+	var count int64
+	if err := a.DB.Model(&models.ChatSession{}).Count(&count).Error; err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	var sessions []models.ChatSession
+	if err := a.DB.Order("updated_at desc, id desc").Limit(limit).Find(&sessions).Error; err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	items := make([]schemas.ChatSessionResponse, 0, len(sessions))
+	for _, session := range sessions {
+		items = append(items, chatSessionResponse(session))
+	}
+	writeJSON(w, http.StatusOK, schemas.ChatSessionListResponse{Items: items, Count: int(count)})
+}
+
+func (a *App) CreateChatSession(w http.ResponseWriter, r *http.Request) {
+	var payload schemas.ChatSessionCreateRequest
+	if err := httpx.Decode(r, &payload); err != nil {
+		writeError(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	session := models.ChatSession{
+		Title:          normalizeChatSessionTitle(payload.Title),
+		SiteID:         payload.SiteID,
+		SiteName:       strings.TrimSpace(payload.SiteName),
+		Model:          strings.TrimSpace(payload.Model),
+		Mode:           normalizeChatModeName(payload.Mode),
+		RouteType:      strings.TrimSpace(payload.RouteType),
+		KeyFingerprint: strings.TrimSpace(payload.KeyFingerprint),
+		KeyName:        strings.TrimSpace(payload.KeyName),
+		ImageSize:      strings.TrimSpace(payload.ImageSize),
+		ImageWidth:     payload.ImageWidth,
+		ImageHeight:    payload.ImageHeight,
+	}
+	if err := a.DB.Create(&session).Error; err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, chatSessionResponse(session))
+}
+
+func (a *App) GetChatSession(w http.ResponseWriter, r *http.Request) {
+	id, ok := chatSessionIDFromRequest(w, r)
+	if !ok {
+		return
+	}
+	detail, err := a.chatSessionDetail(id)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		writeError(w, http.StatusNotFound, "会话不存在")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (a *App) UpdateChatSession(w http.ResponseWriter, r *http.Request) {
+	id, ok := chatSessionIDFromRequest(w, r)
+	if !ok {
+		return
+	}
+	var payload schemas.ChatSessionUpdateRequest
+	if err := httpx.Decode(r, &payload); err != nil {
+		writeError(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	var session models.ChatSession
+	if err := a.DB.First(&session, id).Error; errors.Is(err, gorm.ErrRecordNotFound) {
+		writeError(w, http.StatusNotFound, "会话不存在")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	updates := map[string]any{}
+	if payload.Title != nil {
+		updates["title"] = normalizeChatSessionTitle(*payload.Title)
+	}
+	if payload.SiteID != nil {
+		updates["site_id"] = *payload.SiteID
+	}
+	if payload.SiteName != nil {
+		updates["site_name"] = strings.TrimSpace(*payload.SiteName)
+	}
+	if payload.Model != nil {
+		updates["model"] = strings.TrimSpace(*payload.Model)
+	}
+	if payload.Mode != nil {
+		updates["mode"] = normalizeChatModeName(*payload.Mode)
+	}
+	if payload.RouteType != nil {
+		updates["route_type"] = strings.TrimSpace(*payload.RouteType)
+	}
+	if payload.KeyFingerprint != nil {
+		updates["key_fingerprint"] = strings.TrimSpace(*payload.KeyFingerprint)
+	}
+	if payload.KeyName != nil {
+		updates["key_name"] = strings.TrimSpace(*payload.KeyName)
+	}
+	if payload.ImageSize != nil {
+		updates["image_size"] = strings.TrimSpace(*payload.ImageSize)
+	}
+	if payload.ImageWidth != nil {
+		updates["image_width"] = *payload.ImageWidth
+	}
+	if payload.ImageHeight != nil {
+		updates["image_height"] = *payload.ImageHeight
+	}
+	if len(updates) > 0 {
+		if err := a.DB.Model(&session).Updates(updates).Error; err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	if err := a.DB.First(&session, id).Error; err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, chatSessionResponse(session))
+}
+
+func (a *App) DeleteChatSession(w http.ResponseWriter, r *http.Request) {
+	id, ok := chatSessionIDFromRequest(w, r)
+	if !ok {
+		return
+	}
+	err := a.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("session_id = ?", id).Delete(&models.ChatMessage{}).Error; err != nil {
+			return err
+		}
+		result := tx.Delete(&models.ChatSession{}, id)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	})
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		writeError(w, http.StatusNotFound, "会话不存在")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+}
+
+func (a *App) AppendChatSessionMessages(w http.ResponseWriter, r *http.Request) {
+	id, ok := chatSessionIDFromRequest(w, r)
+	if !ok {
+		return
+	}
+	var payload schemas.ChatSessionMessageRequest
+	if err := httpx.Decode(r, &payload); err != nil {
+		writeError(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	if len(payload.Messages) == 0 {
+		writeError(w, http.StatusBadRequest, "请提供会话消息")
+		return
+	}
+	err := a.DB.Transaction(func(tx *gorm.DB) error {
+		var session models.ChatSession
+		if err := tx.First(&session, id).Error; err != nil {
+			return err
+		}
+		var maxSeq int
+		if err := tx.Model(&models.ChatMessage{}).
+			Where("session_id = ?", id).
+			Select("COALESCE(MAX(seq), 0)").
+			Scan(&maxSeq).Error; err != nil {
+			return err
+		}
+		now := tx.NowFunc()
+		rows := make([]models.ChatMessage, 0, len(payload.Messages))
+		for i, item := range payload.Messages {
+			createdAt := now
+			if item.CreatedAt != nil && !item.CreatedAt.IsZero() {
+				createdAt = item.CreatedAt.UTC()
+			}
+			rows = append(rows, models.ChatMessage{
+				SessionID:       id,
+				Seq:             maxSeq + i + 1,
+				Role:            normalizeChatMessageRole(item.Role),
+				Content:         item.Content,
+				Status:          normalizeChatMessageStatus(item.Status),
+				Mode:            normalizeChatMessageMode(item.Mode),
+				LatencyMS:       item.LatencyMS,
+				StatusCode:      item.StatusCode,
+				Error:           strings.TrimSpace(item.Error),
+				ReferenceImages: chatImageRefsToJSONMap(item.ReferenceImages),
+				Images:          chatImageRefsToJSONMap(item.Images),
+				CreatedAt:       createdAt,
+			})
+		}
+		if err := tx.Create(&rows).Error; err != nil {
+			return err
+		}
+		return refreshChatSessionSummary(tx, id)
+	})
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		writeError(w, http.StatusNotFound, "会话不存在")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	detail, err := a.chatSessionDetail(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func chatSessionIDFromRequest(w http.ResponseWriter, r *http.Request) (uint, bool) {
+	value, err := strconv.ParseUint(chi.URLParam(r, "sessionID"), 10, 64)
+	if err != nil || value == 0 {
+		writeError(w, http.StatusBadRequest, "会话 ID 无效")
+		return 0, false
+	}
+	return uint(value), true
+}
+
+func (a *App) chatSessionDetail(id uint) (schemas.ChatSessionDetailResponse, error) {
+	var session models.ChatSession
+	if err := a.DB.First(&session, id).Error; err != nil {
+		return schemas.ChatSessionDetailResponse{}, err
+	}
+	var messages []models.ChatMessage
+	if err := a.DB.Where("session_id = ?", id).Order("seq asc, id asc").Find(&messages).Error; err != nil {
+		return schemas.ChatSessionDetailResponse{}, err
+	}
+	out := schemas.ChatSessionDetailResponse{
+		ChatSessionResponse: chatSessionResponse(session),
+		Messages:            make([]schemas.ChatSessionMessageResponse, 0, len(messages)),
+	}
+	for _, message := range messages {
+		out.Messages = append(out.Messages, chatMessageResponse(message))
+	}
+	return out, nil
+}
+
+func chatSessionResponse(session models.ChatSession) schemas.ChatSessionResponse {
+	return schemas.ChatSessionResponse{
+		ID:              session.ID,
+		Title:           firstNonEmpty(strings.TrimSpace(session.Title), "新会话"),
+		SiteID:          session.SiteID,
+		SiteName:        session.SiteName,
+		Model:           session.Model,
+		Mode:            normalizeChatModeName(session.Mode),
+		RouteType:       session.RouteType,
+		KeyFingerprint:  session.KeyFingerprint,
+		KeyName:         session.KeyName,
+		ImageSize:       session.ImageSize,
+		ImageWidth:      session.ImageWidth,
+		ImageHeight:     session.ImageHeight,
+		MessageCount:    session.MessageCount,
+		LastMessageText: session.LastMessageText,
+		CreatedAt:       session.CreatedAt,
+		UpdatedAt:       session.UpdatedAt,
+	}
+}
+
+func chatMessageResponse(message models.ChatMessage) schemas.ChatSessionMessageResponse {
+	return schemas.ChatSessionMessageResponse{
+		ID:              message.ID,
+		SessionID:       message.SessionID,
+		Seq:             message.Seq,
+		Role:            normalizeChatMessageRole(message.Role),
+		Content:         message.Content,
+		Status:          normalizeChatMessageStatus(message.Status),
+		Mode:            normalizeChatMessageMode(message.Mode),
+		LatencyMS:       message.LatencyMS,
+		StatusCode:      message.StatusCode,
+		Error:           message.Error,
+		ReferenceImages: chatImageRefsFromJSONMap(message.ReferenceImages),
+		Images:          chatImageRefsFromJSONMap(message.Images),
+		CreatedAt:       message.CreatedAt,
+		UpdatedAt:       message.UpdatedAt,
+	}
+}
+
+func refreshChatSessionSummary(db *gorm.DB, id uint) error {
+	var messageCount int64
+	if err := db.Model(&models.ChatMessage{}).Where("session_id = ?", id).Count(&messageCount).Error; err != nil {
+		return err
+	}
+	var last models.ChatMessage
+	lastText := ""
+	err := db.Where("session_id = ?", id).Order("seq desc, id desc").First(&last).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	if err == nil {
+		lastText = shortenChatSessionText(last.Content, 240)
+		if strings.TrimSpace(lastText) == "" && strings.TrimSpace(last.Error) != "" {
+			lastText = shortenChatSessionText(last.Error, 240)
+		}
+	}
+	return db.Model(&models.ChatSession{}).Where("id = ?", id).Updates(map[string]any{
+		"message_count":     int(messageCount),
+		"last_message_text": lastText,
+	}).Error
+}
+
+func normalizeChatSessionTitle(value string) string {
+	return shortenChatSessionText(firstNonEmpty(strings.TrimSpace(value), "新会话"), 160)
+}
+
+func normalizeChatModeName(value string) string {
+	if strings.EqualFold(strings.TrimSpace(value), "image") {
+		return "image"
+	}
+	return "chat"
+}
+
+func normalizeChatMessageRole(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "system", "assistant", "user":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return "user"
+	}
+}
+
+func normalizeChatMessageStatus(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "idle", "sending", "done", "error":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return "done"
+	}
+}
+
+func normalizeChatMessageMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "image":
+		return "image"
+	case "chat":
+		return "chat"
+	default:
+		return ""
+	}
+}
+
+func chatImageRefsToJSONMap(refs []schemas.ChatTestImageRef) models.JSONMap {
+	items := make([]any, 0, len(refs))
+	for _, ref := range refs {
+		url := strings.TrimSpace(ref.URL)
+		if url == "" {
+			continue
+		}
+		items = append(items, map[string]any{
+			"name": strings.TrimSpace(ref.Name),
+			"url":  url,
+		})
+	}
+	if len(items) == 0 {
+		return models.JSONMap{"items": []any{}}
+	}
+	return models.JSONMap{"items": items}
+}
+
+func chatImageRefsFromJSONMap(value models.JSONMap) []schemas.ChatTestImageRef {
+	if value == nil {
+		return []schemas.ChatTestImageRef{}
+	}
+	raw, ok := value["items"]
+	if !ok || raw == nil {
+		return []schemas.ChatTestImageRef{}
+	}
+	out := []schemas.ChatTestImageRef{}
+	switch items := raw.(type) {
+	case []any:
+		for _, item := range items {
+			if obj, ok := item.(map[string]any); ok {
+				ref := schemas.ChatTestImageRef{
+					Name: strings.TrimSpace(fmt.Sprint(obj["name"])),
+					URL:  strings.TrimSpace(fmt.Sprint(obj["url"])),
+				}
+				if ref.URL != "" {
+					out = append(out, ref)
+				}
+			}
+		}
+	case []map[string]any:
+		for _, obj := range items {
+			ref := schemas.ChatTestImageRef{
+				Name: strings.TrimSpace(fmt.Sprint(obj["name"])),
+				URL:  strings.TrimSpace(fmt.Sprint(obj["url"])),
+			}
+			if ref.URL != "" {
+				out = append(out, ref)
+			}
+		}
+	}
+	return out
+}
+
+func shortenChatSessionText(value string, limit int) string {
+	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	if limit <= 1 {
+		return value[:limit]
+	}
+	return value[:limit-1] + "…"
+}
+
+func chatSessionQueryInt(r *http.Request, key string, fallback, min, max int) int {
+	raw := strings.TrimSpace(r.URL.Query().Get(key))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+	return clampInt(value, min, max, fallback)
 }
 
 func (a *App) ModelList(w http.ResponseWriter, r *http.Request) {
@@ -61,6 +503,8 @@ func (a *App) ModelList(w http.ResponseWriter, r *http.Request) {
 				BaseURL:        candidate.BaseURL,
 				KeyFingerprint: candidate.KeyFingerprint,
 				KeyName:        candidate.KeyName,
+				ImageGenPath:   candidate.ImageGenPath,
+				ImageEditPath:  candidate.ImageEditPath,
 			})
 		}
 	}
@@ -140,12 +584,16 @@ func (a *App) chatImageTest(w http.ResponseWriter, r *http.Request, payload sche
 	if imageSize == "" {
 		imageSize = "1024x1024"
 	}
+	if len(payload.ReferenceImgs) > 5 {
+		writeError(w, http.StatusBadRequest, "参考图最多 5 张")
+		return
+	}
 	var result upstreamResult
 	if len(payload.ReferenceImgs) > 0 {
-		result = openAIImageEditPost(r, payload.BaseURL, payload.APIKey, payload.Model, prompt, imageSize, payload.ReferenceImgs, 120*time.Second, payload.RouteType)
+		result = openAIImageEditPost(r, payload.BaseURL, payload.APIKey, chatImageEditPath(payload), payload.Model, prompt, imageSize, payload.ReferenceImgs, 120*time.Second, payload.RouteType)
 	} else {
-		body := map[string]any{"model": payload.Model, "prompt": prompt, "size": imageSize}
-		result = openAIPost(r, payload.BaseURL, payload.APIKey, "/images/generations", body, 120*time.Second, payload.RouteType)
+		body := map[string]any{"model": payload.Model, "prompt": prompt, "n": 1, "size": imageSize, "quality": "auto"}
+		result = openAIPost(r, payload.BaseURL, payload.APIKey, chatImageGenerationPath(payload), body, 120*time.Second, payload.RouteType)
 	}
 	images := []schemas.ChatTestImageOutput{}
 	revisedPrompt := ""
@@ -243,6 +691,28 @@ func extractImageOutputs(data map[string]any) ([]schemas.ChatTestImageOutput, st
 	return images, revisedPrompt
 }
 
+func chatImageGenerationPath(payload schemas.ChatTestRequest) string {
+	return firstNonEmpty(chatImagePathFromConfig(models.JSONMap{"path": payload.ImageGenPath}, "path"), "/images/generations")
+}
+
+func chatImageEditPath(payload schemas.ChatTestRequest) string {
+	return firstNonEmpty(chatImagePathFromConfig(models.JSONMap{"path": payload.ImageEditPath}, "path"), "/images/edits")
+}
+
+func chatImagePathFromConfig(config models.JSONMap, key string) string {
+	value := strings.TrimSpace(jsonMapString(config, key))
+	if value == "" {
+		return ""
+	}
+	if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
+		return value
+	}
+	if !strings.HasPrefix(value, "/") {
+		value = "/" + value
+	}
+	return value
+}
+
 func (a *App) MCPTest(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, schemas.McpTestResponse{OK: false, Message: "Go MCP 测试待接入。", ToolEvents: []string{}})
 }
@@ -261,12 +731,18 @@ type toolModelCandidate struct {
 	RouteType      string
 	KeyFingerprint string
 	KeyName        string
+	ImageGenPath   string
+	ImageEditPath  string
 }
 
 type toolSiteKey struct {
-	Value     string
-	Name      string
-	RouteType string
+	Value           string
+	Fingerprint     string
+	Name            string
+	RouteType       string
+	RequestBaseURLs []string
+	ImageGenPath    string
+	ImageEditPath   string
 }
 
 func (a *App) toolSite(w http.ResponseWriter, siteID uint) (models.Site, bool) {
@@ -302,6 +778,8 @@ func (a *App) resolveChatTarget(w http.ResponseWriter, payload *schemas.ChatTest
 	payload.BaseURL = candidate.BaseURL
 	payload.APIKey = candidate.APIKey
 	payload.RouteType = candidate.RouteType
+	payload.ImageGenPath = firstNonEmpty(payload.ImageGenPath, candidate.ImageGenPath, chatImagePathFromConfig(site.PluginConfig, "image_generation_path"))
+	payload.ImageEditPath = firstNonEmpty(payload.ImageEditPath, candidate.ImageEditPath, chatImagePathFromConfig(site.PluginConfig, "image_edit_path"))
 	return nil
 }
 
@@ -314,14 +792,16 @@ func openAIPost(r *http.Request, baseURL, apiKey, path string, body any, timeout
 	return openAIRequest(r, http.MethodPost, baseURL, apiKey, path, bytes.NewReader(data), timeout, routeType...)
 }
 
-func openAIImageEditPost(r *http.Request, baseURL, apiKey, model, prompt, size string, images []schemas.ChatTestImageRef, timeout time.Duration, routeType ...string) upstreamResult {
+func openAIImageEditPost(r *http.Request, baseURL, apiKey, path, model, prompt, size string, images []schemas.ChatTestImageRef, timeout time.Duration, routeType ...string) upstreamResult {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	_ = writer.WriteField("model", model)
 	_ = writer.WriteField("prompt", prompt)
+	_ = writer.WriteField("n", "1")
 	if size != "" {
 		_ = writer.WriteField("size", size)
 	}
+	_ = writer.WriteField("quality", "auto")
 	for idx, image := range images {
 		raw, contentType, err := decodeDataImage(image.URL)
 		if err != nil {
@@ -332,7 +812,7 @@ func openAIImageEditPost(r *http.Request, baseURL, apiKey, model, prompt, size s
 			name = fmt.Sprintf("reference-%d.png", idx+1)
 		}
 		header := make(textproto.MIMEHeader)
-		header.Set("Content-Disposition", fmt.Sprintf(`form-data; name="image[]"; filename="%s"`, escapeMultipartFilename(name)))
+		header.Set("Content-Disposition", fmt.Sprintf(`form-data; name="image"; filename="%s"`, escapeMultipartFilename(name)))
 		header.Set("Content-Type", contentType)
 		part, err := writer.CreatePart(header)
 		if err != nil {
@@ -345,7 +825,7 @@ func openAIImageEditPost(r *http.Request, baseURL, apiKey, model, prompt, size s
 	if err := writer.Close(); err != nil {
 		return upstreamResult{message: "图片请求收尾失败：" + err.Error()}
 	}
-	return openAIRequestWithHeaders(r, http.MethodPost, baseURL, apiKey, "/images/edits", bytes.NewReader(body.Bytes()), timeout, map[string]string{"Content-Type": writer.FormDataContentType()}, routeType...)
+	return openAIRequestWithHeaders(r, http.MethodPost, baseURL, apiKey, firstNonEmpty(path, "/images/edits"), bytes.NewReader(body.Bytes()), timeout, map[string]string{"Content-Type": writer.FormDataContentType()}, routeType...)
 }
 
 func openAIRequest(r *http.Request, method, baseURL, apiKey, path string, body io.Reader, timeout time.Duration, routeType ...string) upstreamResult {
@@ -402,21 +882,26 @@ func openAIRequestWithHeaders(r *http.Request, method, baseURL, apiKey, path str
 
 func toolModelCandidates(site models.Site) []toolModelCandidate {
 	keys := toolSiteAPIKeys(site)
-	baseURLs := services.GatewayRequestBaseCandidates(site)
-	if len(baseURLs) == 0 {
-		baseURLs = []string{services.NormalizeBaseURL(site.BaseURL)}
-	}
-	baseURLs = normalizeToolStringList(baseURLs)
 	candidates := []toolModelCandidate{}
 	for _, key := range keys {
 		routeType := firstNonEmpty(key.RouteType, toolInferRouteType(site), "codex")
+		baseURLs := key.RequestBaseURLs
+		if len(baseURLs) == 0 {
+			baseURLs = services.GatewayRequestBaseCandidates(site)
+		}
+		if len(baseURLs) == 0 {
+			baseURLs = []string{services.NormalizeBaseURL(site.BaseURL)}
+		}
+		baseURLs = normalizeToolStringList(baseURLs)
 		for _, baseURL := range baseURLs {
 			candidates = append(candidates, toolModelCandidate{
 				BaseURL:        baseURL,
 				APIKey:         key.Value,
 				RouteType:      routeType,
-				KeyFingerprint: toolFingerprint(key.Value),
+				KeyFingerprint: key.Fingerprint,
 				KeyName:        key.Name,
+				ImageGenPath:   key.ImageGenPath,
+				ImageEditPath:  key.ImageEditPath,
 			})
 		}
 	}
@@ -444,7 +929,6 @@ func pickToolModelCandidate(site models.Site, keyFingerprint, routeType string) 
 
 func toolSiteAPIKeys(site models.Site) []toolSiteKey {
 	keys := []toolSiteKey{}
-	seen := map[string]bool{}
 	if rawKeys, ok := site.Credentials["api_keys"].([]any); ok {
 		for _, item := range rawKeys {
 			obj, ok := item.(map[string]any)
@@ -453,19 +937,127 @@ func toolSiteAPIKeys(site models.Site) []toolSiteKey {
 			}
 			value := strings.TrimSpace(fmt.Sprint(obj["key"]))
 			status := strings.ToLower(strings.TrimSpace(fmt.Sprint(obj["status"])))
-			if value == "" || seen[value] || status == "disabled" || status == "inactive" || status == "revoked" {
+			if value == "" || status == "disabled" || status == "inactive" || status == "revoked" {
 				continue
 			}
 			routeType := toolNormalizeRouteType(firstNonEmpty(fmt.Sprint(obj["route_type"]), fmt.Sprint(obj["api_type"]), fmt.Sprint(obj["api_format"]), fmt.Sprint(obj["type"])))
-			seen[value] = true
-			keys = append(keys, toolSiteKey{Value: value, Name: strings.TrimSpace(fmt.Sprint(obj["name"])), RouteType: routeType})
+			keys = append(keys, toolSiteKey{
+				Value:           value,
+				Name:            strings.TrimSpace(fmt.Sprint(obj["name"])),
+				RouteType:       routeType,
+				RequestBaseURLs: toolAPIKeyRequestBaseURLs(site, obj),
+				ImageGenPath:    chatImagePathFromMap(obj, "image_generation_path"),
+				ImageEditPath:   chatImagePathFromMap(obj, "image_edit_path"),
+			})
 		}
 	}
 	value := strings.TrimSpace(jsonMapString(site.Credentials, "api_key"))
-	if value != "" && !seen[value] {
-		keys = append(keys, toolSiteKey{Value: value, Name: "默认 Key", RouteType: toolInferRouteType(site)})
+	if value != "" && len(keys) == 0 {
+		keys = append(keys, toolSiteKey{Value: value, Fingerprint: toolFingerprint(value), Name: "默认 Key", RouteType: toolInferRouteType(site)})
 	}
+	assignToolSiteKeyFingerprints(keys)
 	return keys
+}
+
+func assignToolSiteKeyFingerprints(keys []toolSiteKey) {
+	byValue := map[string]int{}
+	for _, key := range keys {
+		byValue[key.Value]++
+	}
+	seen := map[string]int{}
+	for idx := range keys {
+		if byValue[keys[idx].Value] <= 1 {
+			keys[idx].Fingerprint = toolFingerprint(keys[idx].Value)
+			continue
+		}
+		signature := strings.Join([]string{
+			toolNormalizeRouteType(keys[idx].RouteType),
+			strings.Join(normalizeToolStringList(keys[idx].RequestBaseURLs), ","),
+			strings.TrimSpace(keys[idx].ImageGenPath),
+			strings.TrimSpace(keys[idx].ImageEditPath),
+			strings.TrimSpace(keys[idx].Name),
+		}, "\x00")
+		fp := toolFingerprint(keys[idx].Value + "\x00" + signature)
+		seen[fp]++
+		if seen[fp] > 1 {
+			fp = toolFingerprint(keys[idx].Value + "\x00" + signature + "\x00" + strconv.Itoa(seen[fp]))
+		}
+		keys[idx].Fingerprint = fp
+	}
+}
+
+func toolAPIKeyRequestBaseURLs(site models.Site, obj map[string]any) []string {
+	raw := []string{}
+	for _, field := range []string{
+		"request_base_urls",
+		"request_base_url",
+		"api_request_urls",
+		"api_request_url",
+		"gateway_request_urls",
+		"gateway_request_url",
+		"endpoint_url",
+		"base_url",
+		"baseURL",
+		"api_base_url",
+		"apiBaseUrl",
+		"api_url",
+		"apiUrl",
+	} {
+		raw = append(raw, stringListFromAny(obj[field])...)
+	}
+	out := []string{}
+	for _, target := range raw {
+		target = strings.TrimSpace(target)
+		if target == "" {
+			continue
+		}
+		joined := target
+		if value, err := services.JoinURL(site.BaseURL, target); err == nil && value != "" {
+			joined = value
+		}
+		joined = services.NormalizeBaseURL(joined)
+		if joined == "" || containsToolString(out, joined) {
+			continue
+		}
+		out = append(out, joined)
+	}
+	return out
+}
+
+func stringListFromAny(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		return normalizeToolStringList(typed)
+	case []any:
+		items := make([]string, 0, len(typed))
+		for _, item := range typed {
+			items = append(items, fmt.Sprint(item))
+		}
+		return normalizeToolStringList(items)
+	case string:
+		return normalizeToolStringList(strings.FieldsFunc(typed, func(r rune) bool {
+			return strings.ContainsRune(",，\n\r\t", r)
+		}))
+	default:
+		if value == nil {
+			return nil
+		}
+		return normalizeToolStringList([]string{fmt.Sprint(value)})
+	}
+}
+
+func chatImagePathFromMap(obj map[string]any, key string) string {
+	if obj == nil {
+		return ""
+	}
+	value := strings.TrimSpace(fmt.Sprint(obj[key]))
+	if value == "" || value == "<nil>" {
+		return ""
+	}
+	if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
+		return value
+	}
+	return strings.TrimLeft(value, "/")
 }
 
 func toolInferRouteType(site models.Site) string {
@@ -536,7 +1128,7 @@ func normalizeModelItems(items []schemas.ModelListItem) []schemas.ModelListItem 
 		if item.ID == "" || item.ID == "<nil>" {
 			continue
 		}
-		key := item.ID + "\x00" + item.RouteType + "\x00" + item.KeyFingerprint + "\x00" + item.BaseURL
+		key := item.ID + "\x00" + item.RouteType + "\x00" + item.KeyFingerprint + "\x00" + item.BaseURL + "\x00" + item.ImageGenPath + "\x00" + item.ImageEditPath
 		if seen[key] {
 			continue
 		}

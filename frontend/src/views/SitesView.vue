@@ -9,6 +9,7 @@ import {
   ShareAltOutlined,
   DollarCircleOutlined,
   MoreOutlined,
+  QuestionCircleOutlined,
 } from '@ant-design/icons-vue'
 import { Modal } from 'ant-design-vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type ComponentPublicInstance } from 'vue'
@@ -18,6 +19,7 @@ import siteEditorGatewayArtwork from '../assets/site-editor-gateway.png'
 import {
   analyzeLocalStorage,
   convertCCSwitchSql,
+  createRegistrationBatchSites,
   createSite,
   deleteSite,
   exportCCSwitchConfig,
@@ -52,6 +54,21 @@ import StatusPill from '../components/StatusPill.vue'
 import { useDebouncedTask } from '../composables/useDebouncedTask'
 import { useTableScrollHeights } from '../composables/useTableScrollHeights'
 import { balanceTone, formatBalance, formatGroupNames, normalizeBalanceUnit, normalizeGroupNames, parseGroupNames } from '../format'
+import {
+  apiKeyImageEditPath,
+  apiKeyImageGenerationPath,
+  apiKeyRequestBaseURLs,
+  apiKeyEntryValue,
+  apiKeyValue,
+  equivalentApiKeyEntryExists,
+  isManualApiKeyEntry,
+  mergeApiKeyEntries,
+  setApiKeyImagePaths,
+  setApiKeyRequestBaseURLs,
+  removeSiteApiKeyCredential,
+  storedApiKeyEntries,
+  type SiteApiKeyRecord,
+} from '../siteApiKeyCredentials'
 import { useToast } from '../toast'
 import type {
   CheckinRun,
@@ -65,6 +82,7 @@ import type {
   SiteGroup,
   SiteInviteRefreshResult,
   SitePayload,
+  SiteRegistrationBatchResult,
   SiteSummary,
   TotpPreview,
 } from '../types'
@@ -121,6 +139,8 @@ const localStorageAnalyzeLoading = ref(false)
 const localStorageRawText = ref('')
 const storageAnalyzeTimer = ref<ReturnType<typeof window.setTimeout> | null>(null)
 const lastAutoAnalyzedStorageRaw = ref('')
+const batchRegisterEnabled = ref(false)
+const batchRegisterResult = ref<SiteRegistrationBatchResult | null>(null)
 
 const { pageTableY, pageTableContainer, modalTableY, drawerTableY } = useTableScrollHeights()
 const tablePageSize = 20
@@ -152,6 +172,8 @@ const checkinConfigForm = reactive<SettingsData>({
   database_backup_dir: '',
   database_backup_interval_minutes: 1440,
   database_backup_retention: 7,
+  feature_flags: {},
+  features: [],
   desktop_frontend_default_port: 3721,
   desktop_frontend_port: 0,
   desktop_frontend_url: '',
@@ -172,22 +194,52 @@ const apiKeyDialogForm = reactive({
   site_name: '',
   request_api_urls: '',
   endpoint_hint: '',
+  image_generation_path: '',
+  image_edit_path: '',
 })
+
+const apiKeyRequestUrlDrafts = reactive<Record<string, string>>({})
+const apiKeyImageGenerationPathDrafts = reactive<Record<string, string>>({})
+const apiKeyImageEditPathDrafts = reactive<Record<string, string>>({})
 
 const manualApiKeyForm = reactive({
   name: '',
   key: '',
   route_type: 'codex',
+  request_base_urls: '',
+  image_generation_path: '',
+  image_edit_path: '',
 })
+
+const batchRegisterForm = reactive({
+  email_pattern: '',
+  password: '',
+  count: 3,
+  start_index: 1,
+})
+
+const emailPatternExamples = [
+  '{n}@example.com',
+  'user+{n}@example.com',
+  'user+{n:03}@example.com',
+  'user+{rand:[0-9]{6}}@example.com',
+  'user+{rand:[a-z]{8}}@example.com',
+  'user+{rand:[A-Z]{8}}@example.com',
+  'user+{rand:[A-Za-z0-9]{10}}@example.com',
+]
 
 type SiteApiKeyEntry = {
   id: string
+  entryIndex: number
   name: string
   key: string
   status: string
   isPrimary: boolean
   source: string
   routeType: string
+  requestBaseURLs: string[]
+  imageGenerationPath: string
+  imageEditPath: string
   isManual: boolean
 }
 
@@ -718,6 +770,7 @@ const showAuthEntryButton = computed(() => {
 })
 const currentPluginCapabilities = computed(() => new Set(currentPlugin.value?.capabilities ?? []))
 const isRelayOnlyEditor = computed(() => currentPluginCapabilities.value.has('relay_only'))
+const canBatchRegisterEditor = computed(() => currentPluginCapabilities.value.has('account_registration'))
 const testActionLabel = computed(() => (isRelayOnlyEditor.value ? '验证出口' : '测试连接'))
 const primaryActionLabel = computed(() => {
   const capabilities = currentPluginCapabilities.value
@@ -1049,7 +1102,17 @@ function openCreateDrawer() {
   testFeedback.value = null
   saveFeedback.value = null
   lastSavedEditorSnapshot.value = ''
+  resetBatchRegisterForm()
   drawerOpen.value = true
+}
+
+function resetBatchRegisterForm() {
+  batchRegisterEnabled.value = false
+  batchRegisterResult.value = null
+  batchRegisterForm.email_pattern = ''
+  batchRegisterForm.password = ''
+  batchRegisterForm.count = 3
+  batchRegisterForm.start_index = 1
 }
 
 async function openEditDrawer(site: Site) {
@@ -1145,6 +1208,62 @@ function normalizeSupportedModels(values: unknown): string[] | null {
   return normalized.length ? normalized : null
 }
 
+function apiKeyDraftKey(entry: Pick<SiteApiKeyEntry, 'id' | 'entryIndex' | 'key'>): string {
+  return `${entry.id || entry.key}:${entry.entryIndex}`
+}
+
+function resetApiKeyRequestUrlDrafts(entries: SiteApiKeyEntry[]) {
+  for (const key of Object.keys(apiKeyRequestUrlDrafts)) {
+    delete apiKeyRequestUrlDrafts[key]
+  }
+  for (const key of Object.keys(apiKeyImageGenerationPathDrafts)) {
+    delete apiKeyImageGenerationPathDrafts[key]
+  }
+  for (const key of Object.keys(apiKeyImageEditPathDrafts)) {
+    delete apiKeyImageEditPathDrafts[key]
+  }
+  for (const entry of entries) {
+    const key = apiKeyDraftKey(entry)
+    apiKeyRequestUrlDrafts[key] = entry.requestBaseURLs.join('\n')
+    apiKeyImageGenerationPathDrafts[key] = entry.imageGenerationPath
+    apiKeyImageEditPathDrafts[key] = entry.imageEditPath
+  }
+}
+
+function apiKeyRequestUrlDraft(entry: SiteApiKeyEntry): string {
+  return apiKeyRequestUrlDrafts[apiKeyDraftKey(entry)] ?? entry.requestBaseURLs.join('\n')
+}
+
+function updateApiKeyRequestUrlDraft(entry: SiteApiKeyEntry, value: string) {
+  const key = apiKeyDraftKey(entry)
+  apiKeyRequestUrlDrafts[key] = value
+  upsertApiKeyDialogSiteCredentials((site, credentials) => setApiKeyRequestBaseURLs({
+    ...credentials,
+    api_keys: mergeApiKeyEntries(storedApiKeyEntriesForEdit({ ...site, credentials })),
+  }, entry.key, value, entry.entryIndex))
+}
+
+function apiKeyImageGenerationPathDraft(entry: SiteApiKeyEntry): string {
+  return apiKeyImageGenerationPathDrafts[apiKeyDraftKey(entry)] ?? entry.imageGenerationPath
+}
+
+function apiKeyImageEditPathDraft(entry: SiteApiKeyEntry): string {
+  return apiKeyImageEditPathDrafts[apiKeyDraftKey(entry)] ?? entry.imageEditPath
+}
+
+function updateApiKeyImagePathDraft(entry: SiteApiKeyEntry, field: 'generation' | 'edit', value: string) {
+  const key = apiKeyDraftKey(entry)
+  if (field === 'generation') {
+    apiKeyImageGenerationPathDrafts[key] = value
+  } else {
+    apiKeyImageEditPathDrafts[key] = value
+  }
+  upsertApiKeyDialogSiteCredentials((site, credentials) => setApiKeyImagePaths({
+    ...credentials,
+    api_keys: mergeApiKeyEntries(storedApiKeyEntriesForEdit({ ...site, credentials })),
+  }, entry.key, apiKeyImageGenerationPathDrafts[key] ?? entry.imageGenerationPath, apiKeyImageEditPathDrafts[key] ?? entry.imageEditPath, entry.entryIndex))
+}
+
 function supportedModelsPreview(values: unknown, limit = 2): string {
   const normalized = normalizeStringList(values)
   if (!normalized.length) {
@@ -1173,41 +1292,7 @@ function defaultApiKeyRouteType(site: Pick<Site, 'plugin_config'>): string {
   return normalizeApiKeyRouteType(config?.gateway_route_type) || normalizeApiKeyRouteType(config?.api_format) || 'codex'
 }
 
-function apiKeyEntryValue(item: Record<string, unknown>, key: string): string {
-  const value = String(item?.[key] ?? '').trim()
-  return value === '<nil>' ? '' : value
-}
-
-function isManualApiKeyEntry(item: Record<string, unknown>): boolean {
-  const source = apiKeyEntryValue(item, 'source').toLowerCase()
-  return source === 'manual' || source === 'custom' || source === 'user' || item?.is_custom === true || item?.manual === true
-}
-
-function storedApiKeyEntries(credentials: Record<string, unknown> | undefined): Record<string, unknown>[] {
-  const raw = credentials?.api_keys
-  if (!Array.isArray(raw)) {
-    return []
-  }
-  return raw
-    .map((item) => (item && typeof item === 'object' ? { ...(item as Record<string, unknown>) } : null))
-    .filter((item): item is Record<string, unknown> => Boolean(item && apiKeyEntryValue(item, 'key')))
-}
-
-function mergeApiKeyEntries(entries: Record<string, unknown>[]): Record<string, unknown>[] {
-  const seen = new Set<string>()
-  const out: Record<string, unknown>[] = []
-  for (const entry of entries) {
-    const key = apiKeyEntryValue(entry, 'key')
-    if (!key || seen.has(key)) {
-      continue
-    }
-    seen.add(key)
-    out.push({ ...entry, key })
-  }
-  return out
-}
-
-function storedApiKeyEntriesForEdit(site: Pick<Site, 'credentials' | 'plugin_config'>): Record<string, unknown>[] {
+function storedApiKeyEntriesForEdit(site: Pick<Site, 'credentials' | 'plugin_config'>): SiteApiKeyRecord[] {
   const credentials = site.credentials as Record<string, unknown>
   const entries = storedApiKeyEntries(credentials)
   const primaryKey = String(credentials?.api_key ?? '').trim()
@@ -1228,11 +1313,6 @@ function storedApiKeyEntriesForEdit(site: Pick<Site, 'credentials' | 'plugin_con
   return entries
 }
 
-function apiKeyValue(site: Pick<Site, 'credentials'>): string {
-  const value = (site.credentials as Record<string, unknown>)?.api_key
-  return typeof value === 'string' ? value.trim() : String(value ?? '').trim()
-}
-
 function siteApiKeyEntries(site: Pick<Site, 'credentials'>): SiteApiKeyEntry[] {
   const credentials = site.credentials as Record<string, unknown>
   const raw = storedApiKeyEntries(credentials)
@@ -1250,31 +1330,39 @@ function siteApiKeyEntries(site: Pick<Site, 'credentials'>): SiteApiKeyEntry[] {
         )
         return {
           id: apiKeyEntryValue(entry, 'id') || `${source || 'api-key'}-${index}`,
+          entryIndex: index,
           name: apiKeyEntryValue(entry, 'name') || `Key ${index + 1}`,
           key,
           status: apiKeyEntryValue(entry, 'status') || 'unknown',
-          isPrimary: Boolean(entry?.is_primary) || key === apiKeyValue(site),
+          isPrimary: Boolean(entry?.is_primary) || key === apiKeyValue(credentials),
           source,
           routeType,
+          requestBaseURLs: apiKeyRequestBaseURLs(entry),
+          imageGenerationPath: apiKeyImageGenerationPath(entry),
+          imageEditPath: apiKeyImageEditPath(entry),
           isManual: isManualApiKeyEntry(entry),
         }
       })
       .filter((item): item is SiteApiKeyEntry => Boolean(item))
   }
 
-  const fallback = apiKeyValue(site)
+  const fallback = apiKeyValue(site.credentials as Record<string, unknown>)
   if (!fallback) {
     return []
   }
   return [
     {
       id: 'primary',
+      entryIndex: 0,
       name: '默认 Key',
       key: fallback,
       status: 'active',
       isPrimary: true,
       source: '',
       routeType: '',
+      requestBaseURLs: [],
+      imageGenerationPath: '',
+      imageEditPath: '',
       isManual: false,
     },
   ]
@@ -1748,9 +1836,15 @@ async function openApiKeyDialog(site: Site) {
     apiKeyDialogForm.site_name = fullSite.name
     apiKeyDialogForm.request_api_urls = requestApiUrlText(fullSite)
     apiKeyDialogForm.endpoint_hint = defaultRequestApiUrl(fullSite)
+    apiKeyDialogForm.image_generation_path = String(fullSite.plugin_config?.image_generation_path ?? '').trim()
+    apiKeyDialogForm.image_edit_path = String(fullSite.plugin_config?.image_edit_path ?? '').trim()
     manualApiKeyForm.name = ''
     manualApiKeyForm.key = ''
     manualApiKeyForm.route_type = defaultApiKeyRouteType(fullSite)
+    manualApiKeyForm.request_base_urls = ''
+    manualApiKeyForm.image_generation_path = ''
+    manualApiKeyForm.image_edit_path = ''
+    resetApiKeyRequestUrlDrafts(siteApiKeyEntries(fullSite))
     apiKeyDialogOpen.value = true
   } catch (err) {
     toast.error(err instanceof Error ? err.message : 'API Key 配置加载失败')
@@ -1830,12 +1924,14 @@ function addManualApiKey() {
     source: 'manual',
     route_type: routeType,
     api_type: routeType,
+    request_base_urls: normalizeStringList(manualApiKeyForm.request_base_urls),
+    image_generation_path: manualApiKeyForm.image_generation_path.trim(),
+    image_edit_path: manualApiKeyForm.image_edit_path.trim(),
   }
   upsertApiKeyDialogSiteCredentials((currentSite, credentials) => {
     const entries = storedApiKeyEntriesForEdit({ ...currentSite, credentials })
-    const exists = entries.some((item) => apiKeyEntryValue(item, 'key') === key)
-    if (exists) {
-      toast.info('已存在相同 API Key，保存后同步接口条目会优先生效。')
+    if (equivalentApiKeyEntryExists(entries, entry)) {
+      toast.info('已存在相同 API Key 配置。')
       return credentials
     }
     const next = mergeApiKeyEntries([...entries, entry])
@@ -1848,23 +1944,19 @@ function addManualApiKey() {
   manualApiKeyForm.name = ''
   manualApiKeyForm.key = ''
   manualApiKeyForm.route_type = defaultApiKeyRouteType(site)
+  manualApiKeyForm.request_base_urls = ''
+  manualApiKeyForm.image_generation_path = ''
+  manualApiKeyForm.image_edit_path = ''
+  resetApiKeyRequestUrlDrafts(siteApiKeyEntries(site))
 }
 
-function removeManualApiKey(entry: SiteApiKeyEntry) {
-  if (!entry.isManual) {
-    return
-  }
-  upsertApiKeyDialogSiteCredentials((_site, credentials) => {
-    const next = storedApiKeyEntries(credentials).filter((item) => apiKeyEntryValue(item, 'key') !== entry.key)
-    const credentialUpdates: Record<string, unknown> = {
-      ...credentials,
-      api_keys: next,
-    }
-    if (apiKeyValue({ credentials }) === entry.key) {
-      credentialUpdates.api_key = apiKeyEntryValue(next[0] ?? {}, 'key')
-    }
-    return credentialUpdates
-  })
+function removeApiKey(entry: SiteApiKeyEntry) {
+  upsertApiKeyDialogSiteCredentials((_site, credentials) => removeSiteApiKeyCredential(credentials, entry.key, entry.entryIndex))
+  const key = apiKeyDraftKey(entry)
+  delete apiKeyRequestUrlDrafts[key]
+  delete apiKeyImageGenerationPathDrafts[key]
+  delete apiKeyImageEditPathDrafts[key]
+  toast.success('API Key 已从本地配置移除，保存后生效。')
 }
 
 async function saveApiKeyDialog() {
@@ -1886,6 +1978,8 @@ async function saveApiKeyDialog() {
       plugin_config: JSON.parse(JSON.stringify(site.plugin_config)),
     }
     payload.plugin_config.api_request_urls = normalizeStringList(apiKeyDialogForm.request_api_urls).join('\n')
+    payload.plugin_config.image_generation_path = apiKeyDialogForm.image_generation_path.trim()
+    payload.plugin_config.image_edit_path = apiKeyDialogForm.image_edit_path.trim()
     const credentials = payload.credentials as Record<string, unknown>
     credentials.api_keys = mergeApiKeyEntries(storedApiKeyEntriesForEdit({
       credentials,
@@ -2535,6 +2629,10 @@ async function persistEditor(options: { keepDrawerOpen?: boolean; showToast?: bo
 async function saveSite() {
   busy.value = true
   try {
+    if (!editingId.value && batchRegisterEnabled.value) {
+      await saveBatchRegisteredSites()
+      return
+    }
     await ensureStorageAnalysisFinished()
     const saved = await persistEditor()
     if (saved) {
@@ -2546,6 +2644,45 @@ async function saveSite() {
   } finally {
     busy.value = false
   }
+}
+
+async function saveBatchRegisteredSites() {
+  if (!canBatchRegisterEditor.value) {
+    toast.error('当前插件不支持批量注册账号。')
+    return
+  }
+  const emailPattern = batchRegisterForm.email_pattern.trim()
+  if (!isValidEmailPattern(emailPattern)) {
+    toast.error('邮箱规则必须包含 {n}、{n:03} 或 {rand:[字符集]{位数}}。')
+    return
+  }
+  if (!batchRegisterForm.password.trim()) {
+    toast.error('请填写注册密码。')
+    return
+  }
+  await ensureStorageAnalysisFinished()
+  const payload = {
+    ...editorPayload(),
+    email_pattern: emailPattern,
+    password: batchRegisterForm.password,
+    count: Number(batchRegisterForm.count) || 1,
+    start_index: Number(batchRegisterForm.start_index) || 1,
+  }
+  const result = await createRegistrationBatchSites(payload)
+  batchRegisterResult.value = result
+  const firstCreated = result.items.find((item) => item.ok && item.site)?.site
+  if (firstCreated) {
+    upsertSite(firstCreated)
+  }
+  drawerOpen.value = false
+  await syncRoutesAfterSiteChange()
+  await reloadDataWithCheckinExtras(firstCreated?.id ?? selectedId.value)
+  const failedText = result.failed_count ? `，失败 ${result.failed_count}` : ''
+  toast.success(`批量注册完成：创建 ${result.created_count}${failedText}。`)
+}
+
+function isValidEmailPattern(value: string) {
+  return /\{n(?::0?\d+)?\}/.test(value) || /\{rand:\[[^\]]+\]\{\d+\}\}/.test(value)
 }
 
 function applySiteHealthResultToEditor(result: Awaited<ReturnType<typeof testSite>>) {
@@ -2783,6 +2920,9 @@ watch(
   () => {
     applyPluginConfigDefaults()
     mismatchAcknowledged.value = false
+    if (!canBatchRegisterEditor.value) {
+      batchRegisterEnabled.value = false
+    }
   },
 )
 
@@ -3267,6 +3407,69 @@ onBeforeUnmount(() => {
                           <h3>基础信息</h3>
                         </div>
 
+                        <div v-if="!editingId && canBatchRegisterEditor" class="nested-form-block site-editor-subblock">
+                          <div class="site-editor-subblock__head site-editor-subblock__head--between">
+                            <h4>批量注册生成账号</h4>
+                            <a-switch
+                              v-model:checked="batchRegisterEnabled"
+                              checked-children="启用"
+                              un-checked-children="关闭"
+                            />
+                          </div>
+                          <a-alert
+                            type="warning"
+                            show-icon
+                            message="仅用于对注册邮箱验证不敏感、且你确认允许批量注册的站点。"
+                            description="保存时会按邮箱规则循环请求注册接口，登录新账号，同步 API Key，并把每个账号创建为一个站点。"
+                            class="site-editor-config-alert"
+                          />
+                          <a-row v-if="batchRegisterEnabled" :gutter="[18, 4]">
+                            <a-col :xs="24" :md="12">
+                              <a-form-item>
+                                <template #label>
+                                  <span class="field-label-help">
+                                    邮箱规则
+                                    <a-tooltip placement="right">
+                                      <template #title>
+                                        <div class="email-pattern-tooltip">
+                                          <div v-for="example in emailPatternExamples" :key="example">{{ example }}</div>
+                                        </div>
+                                      </template>
+                                      <QuestionCircleOutlined class="field-help-icon" />
+                                    </a-tooltip>
+                                  </span>
+                                </template>
+                                <a-input
+                                  v-model:value="batchRegisterForm.email_pattern"
+                                  placeholder="user+{n}@example.com"
+                                />
+                                <small class="field-help">支持序号和随机字符，例如 user+{n:03}@example.com。</small>
+                              </a-form-item>
+                            </a-col>
+                            <a-col :xs="24" :md="12">
+                              <a-form-item label="注册密码">
+                                <a-input-password v-model:value="batchRegisterForm.password" placeholder="所有账号使用同一密码" />
+                              </a-form-item>
+                            </a-col>
+                            <a-col :xs="12" :md="6">
+                              <a-form-item label="请求次数">
+                                <a-input-number v-model:value="batchRegisterForm.count" :min="1" :max="100" style="width: 100%" />
+                              </a-form-item>
+                            </a-col>
+                            <a-col :xs="12" :md="6">
+                              <a-form-item label="起始序号">
+                                <a-input-number v-model:value="batchRegisterForm.start_index" :min="1" style="width: 100%" />
+                              </a-form-item>
+                            </a-col>
+                          </a-row>
+                          <div v-if="batchRegisterResult" class="result-block">
+                            <p>创建 {{ batchRegisterResult.created_count }} 个，失败 {{ batchRegisterResult.failed_count }} 个。</p>
+                            <p v-for="item in batchRegisterResult.items.slice(0, 5)" :key="`${item.index}-${item.email}`">
+                              {{ item.ok ? '成功' : '失败' }} #{{ item.index }} {{ item.email }}：{{ item.message }}
+                            </p>
+                          </div>
+                        </div>
+
                         <a-row :gutter="[18, 4]">
                           <a-col :xs="24" :md="12">
                             <a-form-item label="站点名称">
@@ -3551,7 +3754,7 @@ onBeforeUnmount(() => {
                 {{ primaryActionLabel }}
               </a-button>
               <a-button type="primary" :loading="busy" @click="saveSite">
-                {{ editingSite ? '保存修改' : '创建站点' }}
+                {{ editingSite ? '保存修改' : (batchRegisterEnabled ? '批量注册并创建' : '创建站点') }}
               </a-button>
               <a-button v-if="editingSite" danger :loading="busy" @click="handleDelete(editingSite)">删除站点</a-button>
             </a-space>
@@ -3817,7 +4020,7 @@ onBeforeUnmount(() => {
                 >
                   复制主 Key
                 </a-button>
-                <span class="table-subtitle">接口同步结果会保留，自定义 Key 可在这里添加或删除。</span>
+                <span class="table-subtitle">可删除接口同步或自定义 Key，保存后同步到本地配置。</span>
               </a-space>
               <div v-if="apiKeyDialogEntries.length" class="api-key-dialog-list">
                 <div
@@ -3835,14 +4038,7 @@ onBeforeUnmount(() => {
                     </a-space>
                     <a-space size="small">
                       <a-button size="small" @click="copyApiKeyFromDialog(entry.key)">复制</a-button>
-                      <a-button
-                        v-if="entry.isManual"
-                        size="small"
-                        danger
-                        @click="removeManualApiKey(entry)"
-                      >
-                        删除
-                      </a-button>
+                      <a-button size="small" danger @click="removeApiKey(entry)">删除</a-button>
                     </a-space>
                   </div>
                   <a-input-password
@@ -3851,6 +4047,25 @@ onBeforeUnmount(() => {
                     visibility-toggle
                     placeholder="当前 API Key 为空"
                   />
+                  <a-textarea
+                    class="api-key-dialog-item__urls"
+                    :value="apiKeyRequestUrlDraft(entry)"
+                    :rows="2"
+                    placeholder="当前 Key 专用请求 URL，每行一个；留空使用下方站点级 URL"
+                    @update:value="(value) => updateApiKeyRequestUrlDraft(entry, value)"
+                  />
+                  <div class="api-key-dialog-item__paths">
+                    <a-input
+                      :value="apiKeyImageGenerationPathDraft(entry)"
+                      placeholder="当前 Key 生图 Path，可留空"
+                      @update:value="(value) => updateApiKeyImagePathDraft(entry, 'generation', value)"
+                    />
+                    <a-input
+                      :value="apiKeyImageEditPathDraft(entry)"
+                      placeholder="当前 Key 编辑 Path，可留空"
+                      @update:value="(value) => updateApiKeyImagePathDraft(entry, 'edit', value)"
+                    />
+                  </div>
                 </div>
               </div>
               <a-empty v-else description="当前站点未配置 API Key" />
@@ -3872,9 +4087,22 @@ onBeforeUnmount(() => {
                 autocomplete="new-password"
                 @press-enter="addManualApiKey"
               />
+              <a-textarea
+                v-model:value="manualApiKeyForm.request_base_urls"
+                :rows="2"
+                placeholder="当前 Key 专用请求 URL，可留空"
+              />
+              <a-input
+                v-model:value="manualApiKeyForm.image_generation_path"
+                placeholder="生图 Path，可留空"
+              />
+              <a-input
+                v-model:value="manualApiKeyForm.image_edit_path"
+                placeholder="编辑 Path，可留空"
+              />
               <a-button type="primary" @click="addManualApiKey">添加</a-button>
             </div>
-            <small class="field-help">保存后自定义 Key 会与接口同步 Key 同时存在；如果值相同，下次同步时保留接口返回条目。</small>
+            <small class="field-help">保存后自定义 Key 会与接口同步 Key 同时存在；专用 URL 优先于站点级 URL，适合同一站点 Claude/GPT 走不同 API URL。</small>
           </a-form-item>
           <a-form-item label="请求 API URL 列表">
             <a-textarea
@@ -3884,6 +4112,26 @@ onBeforeUnmount(() => {
             />
             <small class="field-help">留空时会继续使用当前默认出口或站点 Base URL。</small>
           </a-form-item>
+          <a-row :gutter="16">
+            <a-col :xs="24" :md="12">
+              <a-form-item label="图片生成 Path">
+                <a-input
+                  v-model:value="apiKeyDialogForm.image_generation_path"
+                  placeholder="/images/generations"
+                />
+                <small class="field-help">纯文本生图接口路径，留空使用默认值。</small>
+              </a-form-item>
+            </a-col>
+            <a-col :xs="24" :md="12">
+              <a-form-item label="图片编辑 Path">
+                <a-input
+                  v-model:value="apiKeyDialogForm.image_edit_path"
+                  placeholder="/images/edits"
+                />
+                <small class="field-help">参考图编辑/融合接口路径，留空使用默认值。</small>
+              </a-form-item>
+            </a-col>
+          </a-row>
           <a-form-item label="当前生效顺序">
             <div class="tag-list">
               <a-tag v-for="url in apiKeyDialogPreviewUrls" :key="url" color="processing">
@@ -4270,6 +4518,64 @@ onBeforeUnmount(() => {
 
 .field-help {
   color: #7b8aa9;
+}
+
+.field-label-help {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.field-help-icon {
+  color: #7b8aa9;
+  cursor: help;
+  font-size: 13px;
+}
+
+.api-key-dialog-list {
+  display: grid;
+  gap: 10px;
+}
+
+.api-key-dialog-item {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(130, 156, 232, 0.24);
+  border-radius: 8px;
+  background: rgba(248, 251, 255, 0.72);
+}
+
+.api-key-dialog-item__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.api-key-dialog-item__urls {
+  font-size: 12px;
+}
+
+.api-key-dialog-item__paths {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.manual-api-key-editor {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) 150px minmax(180px, 1.4fr) minmax(200px, 1.6fr) minmax(140px, 1fr) minmax(140px, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+}
+
+.email-pattern-tooltip {
+  display: grid;
+  gap: 4px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .site-editor-shell :deep(.ant-form-item) {
@@ -4910,6 +5216,17 @@ onBeforeUnmount(() => {
 
   .sites-list-toolbar__search {
     width: min(100%, 360px);
+  }
+
+  .api-key-dialog-item__head,
+  .api-key-dialog-item__paths,
+  .manual-api-key-editor {
+    grid-template-columns: 1fr;
+  }
+
+  .api-key-dialog-item__head {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 </style>

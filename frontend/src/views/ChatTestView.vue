@@ -1,18 +1,38 @@
 <script setup lang="ts">
 import {
+  DeleteOutlined,
   ClearOutlined,
   DownOutlined,
   LockOutlined,
+  PlusOutlined,
   PaperClipOutlined,
+  ReloadOutlined,
   SendOutlined,
   UnlockOutlined,
 } from '@ant-design/icons-vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, type ComponentPublicInstance } from 'vue'
-import { ApiError, getSites, listToolModels, testChat } from '../api'
+import {
+  ApiError,
+  appendChatSessionMessages,
+  createChatSession,
+  deleteChatSession,
+  getChatSession,
+  getSites,
+  listChatSessions,
+  listToolModels,
+  testChat,
+  updateChatSession,
+} from '../api'
 import ShellLayout from '../components/ShellLayout.vue'
 import sessionPicArtwork from '../assets/design/session-pic.png'
 import { useToast } from '../toast'
-import type { ChatImageReference, ChatRequestMessage, ChatResult, ModelListItem, Site } from '../types'
+import {
+  chatSessionMessageToView,
+  chatSessionPreview,
+  normalizeChatSessionTitle,
+  viewMessageToChatSessionPayload,
+} from '../chatSessionState'
+import type { ChatImageReference, ChatRequestMessage, ChatResult, ChatSession, ModelListItem, Site } from '../types'
 
 type MessageRole = 'system' | 'user' | 'assistant'
 type MessageStatus = 'idle' | 'sending' | 'done' | 'error'
@@ -51,10 +71,15 @@ const sites = ref<Site[]>([])
 const selectedSiteId = ref<string>()
 const loading = ref(false)
 const modelsLoading = ref(false)
+const sessionsLoading = ref(false)
+const restoringSession = ref(false)
+const deletingSessionIds = ref<number[]>([])
 const modelItems = ref<ModelListItem[]>([])
 const modelLoadMessage = ref('')
 const modelLoadError = ref(false)
 const messages = ref<ChatMessage[]>([])
+const chatSessions = ref<ChatSession[]>([])
+const activeSessionId = ref<number | null>(null)
 const referenceImages = ref<ChatImageReference[]>([])
 const fileInput = ref<HTMLInputElement | null>(null)
 const scrollBody = ref<HTMLElement | null>(null)
@@ -64,6 +89,7 @@ const detectedImageRatio = ref('1:1')
 const lockedImageRatio = ref('')
 const activityTimers = new Map<string, number>()
 let siteModelLoadRequest = 0
+const maxReferenceImages = 5
 
 const selectedSite = computed(() =>
   sites.value.find((item) => String(item.id) === selectedSiteId.value) ?? null,
@@ -108,6 +134,7 @@ const imageRatioPresets = [
 ]
 const imageRatioTooltip = computed(() => (imageRatioLocked.value ? `已锁定 ${form.image_width}:${form.image_height}` : '锁定当前宽高比'))
 const activeImageRatio = computed(() => (imageRatioLocked.value ? lockedImageRatio.value : detectedImageRatio.value))
+const activeSession = computed(() => chatSessions.value.find((item) => item.id === activeSessionId.value) ?? null)
 
 function newID(prefix = 'msg') {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -135,6 +162,16 @@ function routeTypeLabel(routeType: string) {
 
 function shortFingerprint(value: string) {
   return value ? `Key ${value.slice(0, 8)}` : ''
+}
+
+function formatSessionTime(value: string) {
+  if (!value) return ''
+  return new Date(value).toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 }
 
 function clampImageDimension(value: unknown) {
@@ -232,7 +269,7 @@ function chooseDefaultModel(items: ModelListItem[]) {
   )
 }
 
-async function applySelectedSite() {
+async function applySelectedSite(preferredModel?: Pick<ModelListItem, 'id' | 'route_type' | 'key_fingerprint'>) {
   const requestID = ++siteModelLoadRequest
   const site = selectedSite.value
   modelItems.value = []
@@ -251,8 +288,16 @@ async function applySelectedSite() {
     }
     modelItems.value = result.items ?? []
     modelLoadMessage.value = modelListMessage(result.message, result.status_code)
+    const restored = preferredModel
+      ? modelItems.value.find((item) =>
+        item.id === preferredModel.id &&
+        item.route_type === preferredModel.route_type &&
+        item.key_fingerprint === preferredModel.key_fingerprint)
+      : null
     const preferred = chooseDefaultModel(modelItems.value)
-    form.model_key = preferred ? modelOptionValue(preferred) : undefined
+    form.model_key = restored
+      ? modelOptionValue(restored)
+      : (preferred ? modelOptionValue(preferred) : undefined)
     if (!result.ok) {
       modelLoadError.value = true
       toast.error(modelLoadMessage.value || '模型列表加载失败')
@@ -269,6 +314,10 @@ async function applySelectedSite() {
       modelsLoading.value = false
     }
   }
+}
+
+function handleSiteChange() {
+  void applySelectedSite()
 }
 
 function modelListMessage(message: string, statusCode?: number | null) {
@@ -335,7 +384,7 @@ function addReferenceImages(event: Event) {
   if (imageFiles.length !== files.length) {
     toast.error('只能添加图片文件。')
   }
-  const remaining = Math.max(0, 6 - referenceImages.value.length)
+  const remaining = Math.max(0, maxReferenceImages - referenceImages.value.length)
   imageFiles.slice(0, remaining).forEach((file) => {
     void fileToDataURL(file)
       .then((url) => {
@@ -344,7 +393,7 @@ function addReferenceImages(event: Event) {
       .catch((err) => toast.error(err instanceof Error ? err.message : '图片读取失败'))
   })
   if (imageFiles.length > remaining) {
-    toast.info('最多保留 6 张参考图。')
+    toast.info(`最多保留 ${maxReferenceImages} 张参考图。`)
   }
 }
 
@@ -356,6 +405,125 @@ function clearConversation() {
   stopAllActivityTimers()
   messages.value = []
   referenceImages.value = []
+}
+
+function currentSessionPayload(title?: string) {
+  const model = selectedModel.value
+  const site = selectedSite.value
+  return {
+    title: normalizeChatSessionTitle(title ?? messages.value.find((item) => item.role === 'user' && item.content.trim())?.content ?? form.input),
+    site_id: selectedSiteId.value ? Number(selectedSiteId.value) : null,
+    site_name: site?.name ?? '',
+    model: model?.id ?? '',
+    mode: activeMode.value,
+    route_type: model?.route_type ?? '',
+    key_fingerprint: model?.key_fingerprint ?? '',
+    key_name: model?.key_name ?? '',
+    image_size: form.image_size,
+    image_width: form.image_width,
+    image_height: form.image_height,
+  }
+}
+
+async function loadChatSessions() {
+  sessionsLoading.value = true
+  try {
+    const result = await listChatSessions(80)
+    chatSessions.value = result.items
+    if (activeSessionId.value && !chatSessions.value.some((item) => item.id === activeSessionId.value)) {
+      activeSessionId.value = null
+    }
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '会话历史加载失败')
+  } finally {
+    sessionsLoading.value = false
+  }
+}
+
+async function ensureActiveSession(titleSeed: string) {
+  if (activeSessionId.value) {
+    return activeSessionId.value
+  }
+  const session = await createChatSession(currentSessionPayload(titleSeed))
+  activeSessionId.value = session.id
+  chatSessions.value = [session, ...chatSessions.value.filter((item) => item.id !== session.id)]
+  return session.id
+}
+
+async function refreshActiveSessionMeta() {
+  if (!activeSessionId.value) return
+  try {
+    const session = await updateChatSession(activeSessionId.value, currentSessionPayload(activeSession.value?.title))
+    chatSessions.value = [session, ...chatSessions.value.filter((item) => item.id !== session.id)]
+  } catch {
+    await loadChatSessions()
+  }
+}
+
+function startNewSession() {
+  stopAllActivityTimers()
+  activeSessionId.value = null
+  messages.value = []
+  referenceImages.value = []
+  form.input = ''
+}
+
+async function restoreChatSession(id: number) {
+  if (loading.value) {
+    toast.error('请求发送中，稍后再切换会话。')
+    return
+  }
+  restoringSession.value = true
+  try {
+    const detail = await getChatSession(id)
+    stopAllActivityTimers()
+    activeSessionId.value = detail.id
+    messages.value = detail.messages.map((item) => chatSessionMessageToView(item))
+    referenceImages.value = []
+    if (detail.image_width > 0) form.image_width = detail.image_width
+    if (detail.image_height > 0) form.image_height = detail.image_height
+    syncImageSizeFromDimensions()
+    detectImageRatio()
+    if (detail.site_id) {
+      selectedSiteId.value = String(detail.site_id)
+      const preferredModel = detail.model
+        ? {
+          id: detail.model,
+          mode: detail.mode || 'chat',
+          route_type: detail.route_type,
+          key_fingerprint: detail.key_fingerprint,
+          key_name: detail.key_name,
+          base_url: '',
+        }
+        : undefined
+      await applySelectedSite(preferredModel)
+    }
+    await scrollToBottom()
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '会话恢复失败')
+  } finally {
+    restoringSession.value = false
+  }
+}
+
+async function removeChatSession(session: ChatSession) {
+  if (loading.value && activeSessionId.value === session.id) {
+    toast.error('当前会话请求发送中，稍后再删除。')
+    return
+  }
+  deletingSessionIds.value = [...deletingSessionIds.value, session.id]
+  try {
+    await deleteChatSession(session.id)
+    chatSessions.value = chatSessions.value.filter((item) => item.id !== session.id)
+    if (activeSessionId.value === session.id) {
+      startNewSession()
+    }
+    toast.success('会话已删除。')
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '会话删除失败')
+  } finally {
+    deletingSessionIds.value = deletingSessionIds.value.filter((id) => id !== session.id)
+  }
 }
 
 function toRequestMessages(): ChatRequestMessage[] {
@@ -436,6 +604,14 @@ async function sendMessage() {
   }
   const imageSize = form.image_size
   const refs = referenceImages.value.map((item) => ({ ...item }))
+  let sessionID: number
+  try {
+    sessionID = await ensureActiveSession(content || '图片会话')
+    await refreshActiveSessionMeta()
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '会话创建失败')
+    return
+  }
   const userMessage: ChatMessage = {
     id: newID('user'),
     role: 'user',
@@ -472,6 +648,8 @@ async function sendMessage() {
       messages: requestMessages,
       reference_images: refs,
       image_size: requestMode === 'image' ? imageSize : undefined,
+      image_generation_path: requestMode === 'image' ? model.image_generation_path : undefined,
+      image_edit_path: requestMode === 'image' ? model.image_edit_path : undefined,
     })
     assistantMessage.status = result.ok ? 'done' : 'error'
     assistantMessage.statusCode = result.status_code
@@ -494,6 +672,18 @@ async function sendMessage() {
     finishMessageActivity(assistantMessage, 'Error')
     toast.error(assistantMessage.content)
   } finally {
+    try {
+      const persisted = await appendChatSessionMessages(sessionID, {
+        messages: [
+          viewMessageToChatSessionPayload(userMessage),
+          viewMessageToChatSessionPayload(assistantMessage),
+        ],
+      })
+      const { messages: _messages, ...session } = persisted
+      chatSessions.value = [session, ...chatSessions.value.filter((item) => item.id !== session.id)]
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '会话保存失败')
+    }
     loading.value = false
     await scrollToBottom()
   }
@@ -518,6 +708,7 @@ async function loadSites() {
 
 onMounted(() => {
   void loadSites()
+  void loadChatSessions()
 })
 
 onBeforeUnmount(() => {
@@ -582,7 +773,7 @@ onBeforeUnmount(() => {
               show-search
               option-filter-prop="label"
               placeholder="选择站点"
-              @change="applySelectedSite"
+              @change="handleSiteChange"
             >
               <template #suffixIcon><DownOutlined /></template>
             </a-select>
@@ -655,11 +846,63 @@ onBeforeUnmount(() => {
                 <SendOutlined />
                 <span>{{ loading ? '发送中' : '发送请求' }}</span>
               </button>
-              <span class="session-footnote">{{ referenceImages.length }}/6 张参考图</span>
+              <span class="session-footnote">{{ referenceImages.length }}/{{ maxReferenceImages }} 张参考图</span>
             </div>
           </div>
         </footer>
       </main>
+
+      <aside class="session-sidebar">
+        <div class="session-sidebar__header">
+          <div>
+            <strong>会话历史</strong>
+            <span>{{ chatSessions.length }} 条记录</span>
+          </div>
+          <div class="session-sidebar__actions">
+            <button type="button" title="新建会话" @click="startNewSession">
+              <PlusOutlined />
+            </button>
+            <button type="button" title="刷新历史" :disabled="sessionsLoading" @click="loadChatSessions">
+              <ReloadOutlined />
+            </button>
+          </div>
+        </div>
+
+        <div class="session-sidebar__list" :class="{ 'is-loading': sessionsLoading || restoringSession }">
+          <div
+            v-for="session in chatSessions"
+            :key="session.id"
+            class="session-history-item"
+            :class="{ 'is-active': session.id === activeSessionId }"
+          >
+            <button type="button" class="session-history-item__main" @click="restoreChatSession(session.id)">
+              <span class="session-history-item__title">{{ session.title }}</span>
+              <span class="session-history-item__preview">{{ chatSessionPreview(session.last_message_text) }}</span>
+              <span class="session-history-item__meta">
+                <span>{{ session.model || '未选模型' }}</span>
+                <span>{{ formatSessionTime(session.updated_at) }}</span>
+              </span>
+            </button>
+            <a-popconfirm
+              title="确认删除该会话？"
+              ok-text="删除"
+              cancel-text="保留"
+              @confirm="removeChatSession(session)"
+            >
+              <button
+                type="button"
+                class="session-history-delete"
+                :disabled="deletingSessionIds.includes(session.id)"
+                title="删除会话"
+              >
+                <DeleteOutlined />
+              </button>
+            </a-popconfirm>
+          </div>
+
+          <a-empty v-if="!chatSessions.length && !sessionsLoading" description="暂无会话" />
+        </div>
+      </aside>
     </div>
   </ShellLayout>
 </template>
@@ -676,7 +919,7 @@ onBeforeUnmount(() => {
 
 .chat-workbench {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) 292px;
   height: 100vh;
   min-height: 0;
   overflow: hidden;
@@ -686,12 +929,164 @@ onBeforeUnmount(() => {
     linear-gradient(180deg, #edf5ff 0%, #eaf3ff 42%, #e4efff 100%);
 }
 
+.session-sidebar {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid rgba(137, 174, 232, 0.28);
+  background: rgba(247, 251, 255, 0.82);
+  backdrop-filter: blur(18px);
+}
+
+.session-sidebar__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 16px 14px 12px;
+  border-bottom: 1px solid rgba(137, 174, 232, 0.2);
+}
+
+.session-sidebar__header strong {
+  display: block;
+  color: #0d3679;
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+.session-sidebar__header span {
+  display: block;
+  margin-top: 2px;
+  color: #6b7fa5;
+  font-size: 12px;
+}
+
+.session-sidebar__actions {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.session-sidebar__actions button,
+.session-history-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(137, 174, 232, 0.32);
+  background: rgba(255, 255, 255, 0.78);
+  color: #2f5288;
+  cursor: pointer;
+}
+
+.session-sidebar__actions button {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+}
+
+.session-sidebar__actions button:disabled,
+.session-history-delete:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.session-sidebar__list {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px;
+}
+
+.session-sidebar__list.is-loading {
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.session-history-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+}
+
+.session-history-item:hover,
+.session-history-item.is-active {
+  border-color: rgba(37, 99, 235, 0.18);
+  background: rgba(232, 241, 255, 0.86);
+}
+
+.session-history-item__main {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 6px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-history-item__title,
+.session-history-item__preview {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-history-item__title {
+  color: #183b73;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.session-history-item__preview {
+  color: #536b93;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.session-history-item__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: #8a9bb7;
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.session-history-item__meta span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-history-delete {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 8px;
+  color: #9f3a3a;
+  font-size: 12px;
+}
+
 .session-toolbar__select {
+  flex: 1 1 240px;
   width: clamp(220px, 24vw, 420px);
   min-width: 0;
 }
 
 .session-toolbar__select--model {
+  flex-basis: 320px;
   width: clamp(240px, 28vw, 480px);
 }
 
@@ -871,6 +1266,7 @@ onBeforeUnmount(() => {
 
 .session-composer__controls {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   width: min(1180px, calc(100vw - 48px));
@@ -953,8 +1349,8 @@ onBeforeUnmount(() => {
 }
 
 .session-composer__image-size {
-  flex: 0 1 466px;
-  min-width: 360px;
+  flex: 1 0 592px;
+  min-width: min(100%, 592px);
 }
 
 .session-attachment {
@@ -1160,7 +1556,7 @@ onBeforeUnmount(() => {
 
 @media (max-width: 1180px) {
   .chat-workbench {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) 260px;
   }
 
   .session-toolbar__select {
@@ -1181,10 +1577,6 @@ onBeforeUnmount(() => {
     width: min(100%, calc(100vw - 40px));
   }
 
-  .session-composer__controls {
-    flex-wrap: wrap;
-  }
-
   .session-composer__image-size {
     min-width: 560px;
   }
@@ -1196,6 +1588,13 @@ onBeforeUnmount(() => {
     height: auto;
     min-height: 100vh;
     overflow: visible;
+  }
+
+  .session-sidebar {
+    order: -1;
+    max-height: 360px;
+    border-left: 0;
+    border-bottom: 1px solid rgba(137, 174, 232, 0.28);
   }
 
   .session-toolbar__select,

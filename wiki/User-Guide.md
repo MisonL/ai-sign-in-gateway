@@ -98,6 +98,8 @@
 
 普通对话模型走 OpenAI 兼容 `/chat/completions`。`gpt-image-*`、`dall-e*`、`imagen` 等图片模型走图片生成/编辑接口。
 
+API 供应商站点可配置 `image_generation_path` / `image_edit_path` 覆盖纯文本生图和参考图编辑接口路径；客户端仍可统一请求 `/api/gateway/v1/images/generations` 或 `/api/gateway/v1/images/edits`，网关会按命中的站点配置转到对应上游路径。
+
 图片模型支持 `1:1`、`3:4`、`4:3`、`16:9`、`9:16` 快捷比例和自定义宽高；选择比例会设置最小 100 基准尺寸并锁定比例，解锁后手动输入会自动识别常见比例但不会重新锁定。
 
 只有图片模型可以添加参考图；普通对话模型会阻止参考图输入，避免把图片发给不支持图片输入的上游。

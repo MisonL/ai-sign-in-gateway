@@ -192,6 +192,9 @@ const (
 	gatewayRateLimitCooldownSeconds   = 5 * 60
 	gatewayConcurrencyCooldownSeconds = 60
 	gatewayQuotaCooldownSeconds       = 24 * 60 * 60
+
+	maxGatewayRequestBodyBytes  int64 = 128 << 20
+	maxGatewayResponseBodyBytes int64 = 128 << 20
 )
 
 type gatewayUpstreamFailureKind string
@@ -310,6 +313,19 @@ func (e GatewayModelNotSupportedError) Error() string {
 	return fmt.Sprintf("没有支持模型 %q 的 %s 网关路由，请检查路由 supported_models 配置", model, routeType)
 }
 
+type GatewayBodyTooLargeError struct {
+	Kind  string
+	Limit int64
+}
+
+func (e GatewayBodyTooLargeError) Error() string {
+	kind := strings.TrimSpace(e.Kind)
+	if kind == "" {
+		kind = "网关请求体"
+	}
+	return fmt.Sprintf("%s过大，最大允许 %d 字节", kind, e.Limit)
+}
+
 type GatewayProbeResult struct {
 	Route      GatewayRoute
 	OK         bool
@@ -340,6 +356,17 @@ type gatewayRouteFilterResult struct {
 	RouteType  string
 }
 
+var defaultCodexGatewaySupportedModels = []string{
+	"gpt-5.3-codex",
+	"gpt-5.3-codex-spark",
+	"gpt-5.4",
+	"gpt-5.4-mini",
+	"gpt-5.4-nano",
+	"gpt-5.4-pro",
+	"gpt-5.5",
+	"gpt-5.5-pro",
+}
+
 // ----------------------------- discovery / sync -----------------------------
 
 func SyncGatewayRoutes(db *gorm.DB) (int, error) {
@@ -356,11 +383,13 @@ func SyncGatewayRoutes(db *gorm.DB) (int, error) {
 	count := 0
 	for _, site := range sites {
 		activeFingerprints := map[string]bool{}
+		manualDisabledFingerprints := disabledGatewayRouteFingerprints(site)
 		for _, key := range siteAPIKeys(site) {
-			fp := fingerprint(key.Value)
+			fp := key.Fingerprint
 			activeFingerprints[fp] = true
 			routeType := firstNonEmpty(key.RouteType, inferRouteType(site))
 			explicitSupportedModels := explicitSupportedModelsForSiteKey(site, key)
+			requestBaseCandidates := gatewayRouteRequestBaseCandidatesForKey(site, key)
 			var state models.GatewayRouteState
 			err := db.Where("site_id = ? AND key_fingerprint = ?", site.ID, fp).First(&state).Error
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -381,18 +410,24 @@ func SyncGatewayRoutes(db *gorm.DB) (int, error) {
 					KeySource:           key.Source,
 					SiteNameSnapshot:    site.Name,
 					SiteBaseURLSnapshot: site.BaseURL,
-					SiteAPIURLSnapshot:  marshalStringSlice(GatewayRequestBaseCandidates(site)),
+					SiteAPIURLSnapshot:  marshalStringSlice(requestBaseCandidates),
 					RouteType:           routeType,
 					SupportedModels:     EncodeGatewaySupportedModels(supportedModels),
 					ModelProbeStatus:    modelProbeStatus,
 					GroupName:           site.GroupName,
 					RoutePriority:       intValue(site.PluginConfig, "gateway_priority", 100),
 					Weight:              intValue(site.PluginConfig, "gateway_weight", 1),
-					IsEnabled:           true,
+					IsEnabled:           !manualDisabledFingerprints[fp],
+					IsEnabledManual:     manualDisabledFingerprints[fp],
 					CircuitState:        "closed",
 				}
 				if err := db.Create(&state).Error; err != nil {
 					return count, err
+				}
+				if manualDisabledFingerprints[fp] {
+					if err := db.Model(&state).Updates(map[string]any{"is_enabled": false, "is_enabled_manual": true}).Error; err != nil {
+						return count, err
+					}
 				}
 			} else if err != nil {
 				return count, err
@@ -401,8 +436,15 @@ func SyncGatewayRoutes(db *gorm.DB) (int, error) {
 				state.KeySource = key.Source
 				state.SiteNameSnapshot = site.Name
 				state.SiteBaseURLSnapshot = site.BaseURL
-				state.SiteAPIURLSnapshot = marshalStringSlice(GatewayRequestBaseCandidates(site))
+				state.SiteAPIURLSnapshot = marshalStringSlice(requestBaseCandidates)
+				if state.LastRequestBaseURL != "" && !containsString(requestBaseCandidates, NormalizeBaseURL(state.LastRequestBaseURL)) {
+					state.LastRequestBaseURL = ""
+				}
 				state.GroupName = site.GroupName
+				if manualDisabledFingerprints[state.KeyFingerprint] {
+					state.IsEnabled = false
+					state.IsEnabledManual = true
+				}
 				if !state.RoutePriorityManual {
 					state.RoutePriority = intValue(site.PluginConfig, "gateway_priority", state.RoutePriority)
 				}
@@ -413,12 +455,6 @@ func SyncGatewayRoutes(db *gorm.DB) (int, error) {
 				if len(explicitSupportedModels) > 0 {
 					state.SupportedModels = EncodeGatewaySupportedModels(explicitSupportedModels)
 					state.ModelProbeStatus = "key_metadata"
-				} else if len(GatewayRouteSupportedModels(state)) == 0 {
-					defaultModels := defaultGatewaySupportedModels(state.RouteType)
-					state.SupportedModels = EncodeGatewaySupportedModels(defaultModels)
-					if len(defaultModels) > 0 && strings.TrimSpace(state.ModelProbeStatus) == "" {
-						state.ModelProbeStatus = "default"
-					}
 				}
 				if err := db.Save(&state).Error; err != nil {
 					return count, err
@@ -461,7 +497,39 @@ func cleanupDisabledSiteGatewayRoutes(db *gorm.DB) error {
 	if len(disabledSiteIDs) == 0 {
 		return nil
 	}
-	return db.Where("site_id IN ?", disabledSiteIDs).Delete(&models.GatewayRouteState{}).Error
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := persistDisabledGatewayRoutesBeforeDelete(tx, disabledSiteIDs); err != nil {
+			return err
+		}
+		return tx.Where("site_id IN ?", disabledSiteIDs).Delete(&models.GatewayRouteState{}).Error
+	})
+}
+
+func persistDisabledGatewayRoutesBeforeDelete(tx *gorm.DB, siteIDs []uint) error {
+	siteIDs = uniqueUintValues(siteIDs)
+	if len(siteIDs) == 0 {
+		return nil
+	}
+	var states []models.GatewayRouteState
+	if err := tx.Where("site_id IN ? AND (is_enabled = ? OR is_enabled_manual = ?)", siteIDs, false, true).Find(&states).Error; err != nil {
+		return err
+	}
+	bySite := map[uint][]string{}
+	for _, state := range states {
+		fingerprint := strings.TrimSpace(state.KeyFingerprint)
+		if fingerprint == "" || containsString(bySite[state.SiteID], fingerprint) {
+			continue
+		}
+		bySite[state.SiteID] = append(bySite[state.SiteID], fingerprint)
+	}
+	for siteID, fingerprints := range bySite {
+		for _, fingerprint := range fingerprints {
+			if err := updateSiteManualDisabledGatewayRoute(tx, siteID, fingerprint, true); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func ListGatewayRoutes(db *gorm.DB, group string, includeDisabled bool) ([]GatewayRoute, error) {
@@ -1076,7 +1144,7 @@ func ProxyGatewayRequest(ctx context.Context, db *gorm.DB, r *http.Request, targ
 func ProxyGatewayRequestWithOptions(ctx context.Context, db *gorm.DB, r *http.Request, targetPath string, opts ProxyGatewayOptions, policy GatewayPolicy) (GatewayProxyResult, error) {
 	policy = normalizePolicy(policy)
 
-	body, err := io.ReadAll(r.Body)
+	body, err := readGatewayRequestBody(r)
 	if err != nil {
 		return GatewayProxyResult{}, err
 	}
@@ -1163,7 +1231,8 @@ func ProxyGatewayRequestWithOptions(ctx context.Context, db *gorm.DB, r *http.Re
 }
 
 func proxyGatewayAttempt(ctx context.Context, db *gorm.DB, r *http.Request, body []byte, route GatewayRoute, targetPath string, opts ProxyGatewayOptions, policy GatewayPolicy, streaming bool, attempt int, requestedModel string) (GatewayProxyResult, bool, error) {
-	upstreamURL, err := targetURL(route.RequestBaseURL, targetPath, r.URL.RawQuery, route.State.RouteType)
+	upstreamTargetPath := gatewayUpstreamTargetPath(route, targetPath)
+	upstreamURL, err := targetURL(route.RequestBaseURL, upstreamTargetPath, r.URL.RawQuery, route.State.RouteType)
 	if err != nil {
 		return GatewayProxyResult{Route: route, Error: err.Error()}, true, err
 	}
@@ -1232,8 +1301,13 @@ func proxyGatewayAttempt(ctx context.Context, db *gorm.DB, r *http.Request, body
 		return GatewayProxyResult{Route: route, StatusCode: statusCode, Header: resp.Header.Clone(), LatencyMS: actualLatency, Success: true, ActualModel: requestedModel}, false, nil
 	}
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, readErr := readGatewayResponseBody(resp)
 	_ = resp.Body.Close()
+	if readErr != nil {
+		reason := readErr.Error()
+		UpdateRouteFailure(db, &route.State, reason, latency, &statusCode, policy)
+		return GatewayProxyResult{Route: route, StatusCode: statusCode, Header: resp.Header.Clone(), LatencyMS: latency, Success: false, Error: reason, ActualModel: requestedModel}, true, nil
+	}
 
 	if is2xx {
 		usage := ExtractGatewayUsage(respBody)
@@ -1269,6 +1343,46 @@ func proxyGatewayAttempt(ctx context.Context, db *gorm.DB, r *http.Request, body
 	}
 	UpdateRouteFailure(db, &route.State, reason, latency, &statusCode, policy)
 	return GatewayProxyResult{Route: route, StatusCode: statusCode, Header: resp.Header.Clone(), Body: respBody, LatencyMS: latency, Success: false, Error: reason, ActualModel: firstNonEmpty(ExtractGatewayModelFromResponseBody(respBody), requestedModel)}, shouldFallbackGatewayFailure(statusCode, reason, policy.FailureRetryMode), nil
+}
+
+func gatewayUpstreamTargetPath(route GatewayRoute, targetPath string) string {
+	normalized := normalizeGatewayTargetPath(targetPath)
+	switch normalized {
+	case "images/generations":
+		if path := gatewayImagePathForRoute(route, "image_generation_path"); path != "" {
+			return path
+		}
+		if path := gatewayImagePathFromConfig(route.Site.PluginConfig, "image_generation_path"); path != "" {
+			return path
+		}
+	case "images/edits":
+		if path := gatewayImagePathForRoute(route, "image_edit_path"); path != "" {
+			return path
+		}
+		if path := gatewayImagePathFromConfig(route.Site.PluginConfig, "image_edit_path"); path != "" {
+			return path
+		}
+	}
+	return targetPath
+}
+
+func gatewayImagePathForRoute(route GatewayRoute, key string) string {
+	siteKey, ok := siteKeyForFingerprint(route.Site, route.State.KeyFingerprint)
+	if !ok {
+		return ""
+	}
+	return gatewayImagePathFromConfig(siteKey.Config, key)
+}
+
+func gatewayImagePathFromConfig(config models.JSONMap, key string) string {
+	value := strings.TrimSpace(stringMapValue(config, key, ""))
+	if value == "" {
+		return ""
+	}
+	if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
+		return value
+	}
+	return strings.TrimLeft(value, "/")
 }
 
 func shouldServeGatewayModelProbe(method, targetPath, strategy string) bool {
@@ -1420,6 +1534,38 @@ func streamBody(w http.ResponseWriter, src io.Reader) (int, error) {
 			return written, err
 		}
 	}
+}
+
+func readGatewayRequestBody(r *http.Request) ([]byte, error) {
+	if r == nil || r.Body == nil || r.Body == http.NoBody {
+		return nil, nil
+	}
+	if r.ContentLength > maxGatewayRequestBodyBytes {
+		return nil, GatewayBodyTooLargeError{Kind: "网关请求体", Limit: maxGatewayRequestBodyBytes}
+	}
+	return readLimitedGatewayBody(r.Body, maxGatewayRequestBodyBytes, "网关请求体过大")
+}
+
+func readGatewayResponseBody(resp *http.Response) ([]byte, error) {
+	if resp == nil || resp.Body == nil || resp.Body == http.NoBody {
+		return nil, nil
+	}
+	if resp.ContentLength > maxGatewayResponseBodyBytes {
+		return nil, GatewayBodyTooLargeError{Kind: "上游响应体", Limit: maxGatewayResponseBodyBytes}
+	}
+	return readLimitedGatewayBody(resp.Body, maxGatewayResponseBodyBytes, "上游响应体过大")
+}
+
+func readLimitedGatewayBody(src io.Reader, limit int64, label string) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(src, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > limit {
+		kind := strings.TrimSuffix(label, "过大")
+		return nil, GatewayBodyTooLargeError{Kind: kind, Limit: limit}
+	}
+	return body, nil
 }
 
 func isStreamingRequest(r *http.Request, body []byte) bool {
@@ -1876,6 +2022,10 @@ func GatewayRequestBaseCandidates(site models.Site) []string {
 	raw = append(raw, stringMapValue(site.PluginConfig, "gateway_request_url", ""))
 	raw = append(raw, stringMapValue(site.PluginConfig, "endpoint_url", ""))
 	raw = append(raw, site.BaseURL)
+	return normalizeRequestBaseURLCandidates(site.BaseURL, raw)
+}
+
+func normalizeRequestBaseURLCandidates(baseURL string, raw []string) []string {
 	out := []string{}
 	for _, target := range raw {
 		target = strings.TrimSpace(target)
@@ -1883,7 +2033,7 @@ func GatewayRequestBaseCandidates(site models.Site) []string {
 			continue
 		}
 		joined := target
-		if value, err := JoinURL(site.BaseURL, target); err == nil && value != "" {
+		if value, err := JoinURL(baseURL, target); err == nil && value != "" {
 			joined = value
 		}
 		joined = NormalizeBaseURL(joined)
@@ -1896,6 +2046,10 @@ func GatewayRequestBaseCandidates(site models.Site) []string {
 }
 
 func GatewayRouteRequestBase(state models.GatewayRouteState, site models.Site) string {
+	manual := GatewayRouteManualRequestBaseURLs(state, site)
+	if len(manual) > 0 {
+		return manual[0]
+	}
 	if strings.TrimSpace(state.LastRequestBaseURL) != "" {
 		return NormalizeBaseURL(state.LastRequestBaseURL)
 	}
@@ -1907,8 +2061,9 @@ func GatewayRouteRequestBase(state models.GatewayRouteState, site models.Site) s
 }
 
 func GatewayRouteRequestBaseCandidates(state models.GatewayRouteState, site models.Site) []string {
-	if site.ID != 0 {
-		return GatewayRequestBaseCandidates(site)
+	manual := GatewayRouteManualRequestBaseURLs(state, site)
+	if len(manual) > 0 {
+		return manual
 	}
 	var snapshot []string
 	if err := json.Unmarshal([]byte(strings.TrimSpace(state.SiteAPIURLSnapshot)), &snapshot); err == nil {
@@ -1917,11 +2072,44 @@ func GatewayRouteRequestBaseCandidates(state models.GatewayRouteState, site mode
 			return snapshot
 		}
 	}
+	if site.ID != 0 {
+		return GatewayRequestBaseCandidates(site)
+	}
 	base := NormalizeBaseURL(state.SiteBaseURLSnapshot)
 	if base == "" {
 		return nil
 	}
 	return []string{base}
+}
+
+func GatewayRouteManualRequestBaseURLs(state models.GatewayRouteState, site models.Site) []string {
+	var raw []string
+	if err := json.Unmarshal([]byte(strings.TrimSpace(state.ManualRequestBaseURLs)), &raw); err != nil {
+		raw = normalizeStringList(strings.FieldsFunc(state.ManualRequestBaseURLs, func(r rune) bool {
+			return strings.ContainsRune(",，\n\r\t", r)
+		}))
+	}
+	out := []string{}
+	base := strings.TrimSpace(site.BaseURL)
+	if base == "" {
+		base = strings.TrimSpace(state.SiteBaseURLSnapshot)
+	}
+	for _, target := range raw {
+		target = strings.TrimSpace(target)
+		if target == "" {
+			continue
+		}
+		joined := target
+		if value, err := JoinURL(base, target); err == nil && value != "" {
+			joined = value
+		}
+		joined = NormalizeBaseURL(joined)
+		if joined == "" || containsString(out, joined) {
+			continue
+		}
+		out = append(out, joined)
+	}
+	return out
 }
 
 func GatewayRouteSiteLabel(route GatewayRoute) string {
@@ -1963,16 +2151,18 @@ func gatewayRouteBasesInOrder(route GatewayRoute) []string {
 
 type siteKey struct {
 	Value           string
+	Fingerprint     string
 	Name            string
 	Source          string
 	RouteType       string
 	SupportedModels []string
+	RequestBaseURLs []string
+	Config          models.JSONMap
 }
 
 func siteAPIKeys(site models.Site) []siteKey {
 	rawKeys, ok := site.Credentials["api_keys"].([]any)
 	keys := []siteKey{}
-	seen := map[string]bool{}
 	if ok {
 		for _, item := range rawKeys {
 			obj, ok := item.(map[string]any)
@@ -1981,26 +2171,98 @@ func siteAPIKeys(site models.Site) []siteKey {
 			}
 			value := strings.TrimSpace(fmt.Sprint(obj["key"]))
 			status := strings.ToLower(strings.TrimSpace(fmt.Sprint(obj["status"])))
-			if value == "" || seen[value] || status == "disabled" || status == "inactive" || status == "revoked" {
+			if value == "" || status == "disabled" || status == "inactive" || status == "revoked" {
 				continue
 			}
-			seen[value] = true
 			keys = append(keys, siteKey{
 				Value:           value,
 				Name:            strings.TrimSpace(fmt.Sprint(obj["name"])),
 				Source:          "site.credentials.api_keys",
 				RouteType:       routeTypeFromAny(obj["route_type"], obj["api_type"], obj["api_format"], obj["type"]),
 				SupportedModels: stringListAnyValue(obj, "supported_models"),
+				RequestBaseURLs: apiKeyRequestBaseURLs(site, obj),
+				Config:          cloneSiteKeyConfig(obj),
 			})
 		}
 	}
 	if len(keys) == 0 {
 		value := strings.TrimSpace(stringMapValue(site.Credentials, "api_key", ""))
 		if value != "" {
-			keys = append(keys, siteKey{Value: value, Source: "site.credentials.api_key", RouteType: inferRouteType(site)})
+			keys = append(keys, siteKey{Value: value, Fingerprint: fingerprint(value), Source: "site.credentials.api_key", RouteType: inferRouteType(site), RequestBaseURLs: GatewayRequestBaseCandidates(site), Config: models.JSONMap{}})
 		}
 	}
+	assignSiteKeyFingerprints(keys)
 	return keys
+}
+
+func assignSiteKeyFingerprints(keys []siteKey) {
+	byValue := map[string]int{}
+	for _, key := range keys {
+		byValue[key.Value]++
+	}
+	seen := map[string]int{}
+	for idx := range keys {
+		if byValue[keys[idx].Value] <= 1 {
+			keys[idx].Fingerprint = fingerprint(keys[idx].Value)
+			continue
+		}
+		signature := siteKeyRouteSignature(keys[idx])
+		fp := fingerprint(keys[idx].Value + "\x00" + signature)
+		seen[fp]++
+		if seen[fp] > 1 {
+			fp = fingerprint(keys[idx].Value + "\x00" + signature + "\x00" + strconv.Itoa(seen[fp]))
+		}
+		keys[idx].Fingerprint = fp
+	}
+}
+
+func siteKeyRouteSignature(key siteKey) string {
+	parts := []string{
+		normalizeRouteType(key.RouteType),
+		strings.Join(normalizeStringList(key.SupportedModels), ","),
+		strings.Join(normalizeStringList(key.RequestBaseURLs), ","),
+		strings.TrimSpace(stringMapValue(key.Config, "image_generation_path", "")),
+		strings.TrimSpace(stringMapValue(key.Config, "image_edit_path", "")),
+		strings.TrimSpace(key.Name),
+	}
+	return strings.Join(parts, "\x00")
+}
+
+func cloneSiteKeyConfig(obj map[string]any) models.JSONMap {
+	out := models.JSONMap{}
+	for key, value := range obj {
+		out[key] = value
+	}
+	return out
+}
+
+func gatewayRouteRequestBaseCandidatesForKey(site models.Site, key siteKey) []string {
+	if len(key.RequestBaseURLs) > 0 {
+		return key.RequestBaseURLs
+	}
+	return GatewayRequestBaseCandidates(site)
+}
+
+func apiKeyRequestBaseURLs(site models.Site, obj map[string]any) []string {
+	raw := []string{}
+	for _, field := range []string{
+		"request_base_urls",
+		"request_base_url",
+		"api_request_urls",
+		"api_request_url",
+		"gateway_request_urls",
+		"gateway_request_url",
+		"endpoint_url",
+		"base_url",
+		"baseURL",
+		"api_base_url",
+		"apiBaseUrl",
+		"api_url",
+		"apiUrl",
+	} {
+		raw = append(raw, stringListAnyValue(obj, field)...)
+	}
+	return normalizeRequestBaseURLCandidates(site.BaseURL, raw)
 }
 
 func explicitSupportedModelsForSiteKey(_ models.Site, key siteKey) []string {
@@ -2014,7 +2276,7 @@ func defaultGatewaySupportedModels(routeType string) []string {
 	if normalizeRouteType(routeType) != "codex" {
 		return nil
 	}
-	return []string{"gpt-5.4", "gpt-5.5"}
+	return append([]string{}, defaultCodexGatewaySupportedModels...)
 }
 
 func stringListAnyValue(m map[string]any, key string) []string {
@@ -2077,6 +2339,117 @@ func StringListMapValue(m models.JSONMap, key string) []string {
 	return stringListMapValue(m, key)
 }
 
+func disabledGatewayRouteFingerprints(site models.Site) map[string]bool {
+	out := map[string]bool{}
+	for _, value := range stringListMapValue(site.PluginConfig, "gateway_disabled_route_fingerprints") {
+		out[value] = true
+	}
+	return out
+}
+
+func SetGatewayRouteManualEnabled(db *gorm.DB, routeID uint, enabled bool) (models.GatewayRouteState, error) {
+	var state models.GatewayRouteState
+	err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.First(&state, routeID).Error; err != nil {
+			return err
+		}
+		if err := updateSiteManualDisabledGatewayRoute(tx, state.SiteID, state.KeyFingerprint, !enabled); err != nil {
+			return err
+		}
+		state.IsEnabled = enabled
+		state.IsEnabledManual = !enabled
+		return tx.Save(&state).Error
+	})
+	return state, err
+}
+
+func SetGatewayRoutesManualDisabled(db *gorm.DB, routeIDs []uint, disabled bool) error {
+	uniqueRouteIDs := uniqueUintValues(routeIDs)
+	if len(uniqueRouteIDs) == 0 {
+		return nil
+	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		var states []models.GatewayRouteState
+		if err := tx.Where("id IN ?", uniqueRouteIDs).Find(&states).Error; err != nil {
+			return err
+		}
+		for _, state := range states {
+			if err := updateSiteManualDisabledGatewayRoute(tx, state.SiteID, state.KeyFingerprint, disabled); err != nil {
+				return err
+			}
+		}
+		return tx.Model(&models.GatewayRouteState{}).
+			Where("id IN ?", uniqueRouteIDs).
+			Updates(map[string]any{"is_enabled": !disabled, "is_enabled_manual": disabled}).Error
+	})
+}
+
+func updateSiteManualDisabledGatewayRoute(tx *gorm.DB, siteID uint, fingerprint string, disabled bool) error {
+	fingerprint = strings.TrimSpace(fingerprint)
+	if fingerprint == "" {
+		return nil
+	}
+	var site models.Site
+	if err := tx.First(&site, siteID).Error; err != nil {
+		return err
+	}
+	config := cloneGatewayJSONMap(site.PluginConfig)
+	values := stringListMapValue(config, "gateway_disabled_route_fingerprints")
+	next := removeStringValue(values, fingerprint)
+	if disabled {
+		next = append(next, fingerprint)
+	}
+	if len(next) == 0 {
+		delete(config, "gateway_disabled_route_fingerprints")
+	} else {
+		config["gateway_disabled_route_fingerprints"] = next
+	}
+	return tx.Model(&models.Site{}).Where("id = ?", site.ID).Update("plugin_config", config).Error
+}
+
+func uniqueUintValues(values []uint) []uint {
+	out := []uint{}
+	seen := map[uint]bool{}
+	for _, value := range values {
+		if value == 0 || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
+}
+
+func removeStringValue(values []string, target string) []string {
+	out := []string{}
+	for _, value := range values {
+		if value == target || containsString(out, value) {
+			continue
+		}
+		out = append(out, value)
+	}
+	return out
+}
+
+func cloneGatewayJSONMap(value models.JSONMap) models.JSONMap {
+	if value == nil {
+		return models.JSONMap{}
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		clone := models.JSONMap{}
+		for key, item := range value {
+			clone[key] = item
+		}
+		return clone
+	}
+	var clone models.JSONMap
+	if err := json.Unmarshal(data, &clone); err != nil || clone == nil {
+		return models.JSONMap{}
+	}
+	return clone
+}
+
 func NormalizeStringList(values []string) []string {
 	return normalizeStringList(values)
 }
@@ -2114,11 +2487,20 @@ func unmarshalStringSlice(value string) []string {
 
 func apiKeyForFingerprint(site models.Site, fp string) string {
 	for _, key := range siteAPIKeys(site) {
-		if fingerprint(key.Value) == fp {
+		if key.Fingerprint == fp {
 			return key.Value
 		}
 	}
 	return ""
+}
+
+func siteKeyForFingerprint(site models.Site, fp string) (siteKey, bool) {
+	for _, key := range siteAPIKeys(site) {
+		if key.Fingerprint == fp {
+			return key, true
+		}
+	}
+	return siteKey{}, false
 }
 
 func GatewayRouteAPIKeyForState(state models.GatewayRouteState) string {
@@ -2143,6 +2525,10 @@ func GatewayRouteSupportedModels(state models.GatewayRouteState) []string {
 
 func EncodeGatewaySupportedModels(models []string) string {
 	return marshalStringSlice(models)
+}
+
+func EncodeGatewayRequestBaseURLs(values []string) string {
+	return marshalStringSlice(values)
 }
 
 func GatewaySupportedModelsBySite(db *gorm.DB, siteIDs []uint, includeDisabled bool) (map[uint][]string, error) {
@@ -2295,13 +2681,49 @@ func filterRoutesBySupportedModel(routes []GatewayRoute, model string) []Gateway
 	for _, route := range routes {
 		supported := GatewayRouteSupportedModels(route.State)
 		for _, candidate := range supported {
-			if normalizeModelID(candidate) == model {
+			if gatewayModelMatchesSupported(candidate, model) {
 				exact = append(exact, route)
 				break
 			}
 		}
 	}
 	return exact
+}
+
+func gatewayModelMatchesSupported(supported, requested string) bool {
+	supported = normalizeModelID(supported)
+	requested = normalizeModelID(requested)
+	if supported == "" || requested == "" {
+		return false
+	}
+	if supported == requested {
+		return true
+	}
+	return supported == stripTrailingModelDateVersion(requested)
+}
+
+func stripTrailingModelDateVersion(model string) string {
+	model = normalizeModelID(model)
+	if !hasTrailingModelDateVersion(model) {
+		return model
+	}
+	return model[:len(model)-11]
+}
+
+func hasTrailingModelDateVersion(model string) bool {
+	if len(model) < 12 {
+		return false
+	}
+	suffix := model[len(model)-11:]
+	if suffix[0] != '-' || suffix[5] != '-' || suffix[8] != '-' {
+		return false
+	}
+	for _, idx := range []int{1, 2, 3, 4, 6, 7, 9, 10} {
+		if suffix[idx] < '0' || suffix[idx] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func firstNonEmpty(values ...string) string {

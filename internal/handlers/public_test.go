@@ -226,6 +226,31 @@ func TestGatewayProxyRejectsMissingGatewayAPIKey(t *testing.T) {
 	}
 }
 
+func TestGatewayProxyRejectsOversizedRequestWith413(t *testing.T) {
+	db, err := database.Open(config.Config{DatabaseURL: "sqlite:///" + t.TempDir() + "/gateway_oversized_request.db"})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close(db) })
+	if err := migrations.Apply(db); err != nil {
+		t.Fatalf("migrations: %v", err)
+	}
+	if err := db.Create(&models.SystemSetting{ID: 1, GatewayAPIKey: "gateway-key"}).Error; err != nil {
+		t.Fatalf("create settings: %v", err)
+	}
+
+	router := NewRouter(db, config.Config{})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/chat/completions", strings.NewReader(`{}`))
+	req.ContentLength = 1 << 62
+	req.Header.Set("Authorization", "Bearer gateway-key")
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestGatewayProxyReturnsUnifiedErrorWhenAllRoutesFail(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "upstream secret failure", http.StatusBadRequest)

@@ -20,6 +20,9 @@ func Apply(db *gorm.DB) error {
 	} else if err := addMissingColumns(db); err != nil {
 		return err
 	}
+	if err := ensureChatSessionTables(db); err != nil {
+		return err
+	}
 	return ensureIndexes(db)
 }
 
@@ -64,6 +67,7 @@ func addMissingColumns(db *gorm.DB) error {
 		{table: "gateway_route_states", column: "site_name_snapshot", statement: "ALTER TABLE gateway_route_states ADD COLUMN site_name_snapshot TEXT NOT NULL DEFAULT ''"},
 		{table: "gateway_route_states", column: "site_base_url_snapshot", statement: "ALTER TABLE gateway_route_states ADD COLUMN site_base_url_snapshot TEXT NOT NULL DEFAULT ''"},
 		{table: "gateway_route_states", column: "site_api_url_snapshot", statement: "ALTER TABLE gateway_route_states ADD COLUMN site_api_url_snapshot TEXT NOT NULL DEFAULT '[]'"},
+		{table: "gateway_route_states", column: "manual_request_base_urls", statement: "ALTER TABLE gateway_route_states ADD COLUMN manual_request_base_urls TEXT NOT NULL DEFAULT '[]'"},
 		{table: "gateway_route_states", column: "last_request_base_url", statement: "ALTER TABLE gateway_route_states ADD COLUMN last_request_base_url TEXT NOT NULL DEFAULT ''"},
 		{table: "gateway_route_states", column: "last_balance", statement: "ALTER TABLE gateway_route_states ADD COLUMN last_balance FLOAT"},
 		{table: "gateway_route_states", column: "balance_unit", statement: "ALTER TABLE gateway_route_states ADD COLUMN balance_unit TEXT NOT NULL DEFAULT ''"},
@@ -75,6 +79,7 @@ func addMissingColumns(db *gorm.DB) error {
 		{table: "gateway_route_states", column: "model_probe_message", statement: "ALTER TABLE gateway_route_states ADD COLUMN model_probe_message TEXT NOT NULL DEFAULT ''"},
 		{table: "gateway_route_states", column: "model_probe_updated_at", statement: "ALTER TABLE gateway_route_states ADD COLUMN model_probe_updated_at DATETIME"},
 		{table: "gateway_route_states", column: "route_priority_manual", statement: "ALTER TABLE gateway_route_states ADD COLUMN route_priority_manual BOOLEAN NOT NULL DEFAULT 0"},
+		{table: "gateway_route_states", column: "is_enabled_manual", statement: "ALTER TABLE gateway_route_states ADD COLUMN is_enabled_manual BOOLEAN NOT NULL DEFAULT 0"},
 	}
 	for _, patch := range patches {
 		if db.Migrator().HasColumn(patch.table, patch.column) {
@@ -98,6 +103,52 @@ func isDuplicateColumnErr(err error) bool {
 	return strings.Contains(msg, "duplicate column name") || strings.Contains(msg, "already exists")
 }
 
+func ensureChatSessionTables(db *gorm.DB) error {
+	statements := []string{
+		`CREATE TABLE IF NOT EXISTS chat_sessions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			title TEXT NOT NULL DEFAULT '',
+			site_id INTEGER,
+			site_name TEXT NOT NULL DEFAULT '',
+			model TEXT NOT NULL DEFAULT '',
+			mode TEXT NOT NULL DEFAULT 'chat',
+			route_type TEXT NOT NULL DEFAULT '',
+			key_fingerprint TEXT NOT NULL DEFAULT '',
+			key_name TEXT NOT NULL DEFAULT '',
+			image_size TEXT NOT NULL DEFAULT '',
+			image_width INTEGER NOT NULL DEFAULT 0,
+			image_height INTEGER NOT NULL DEFAULT 0,
+			message_count INTEGER NOT NULL DEFAULT 0,
+			last_message_text TEXT NOT NULL DEFAULT '',
+			created_at DATETIME,
+			updated_at DATETIME
+		)`,
+		`CREATE TABLE IF NOT EXISTS chat_messages (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id INTEGER NOT NULL,
+			seq INTEGER NOT NULL,
+			role TEXT NOT NULL,
+			content TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'done',
+			mode TEXT NOT NULL DEFAULT '',
+			latency_ms FLOAT,
+			status_code INTEGER,
+			error TEXT NOT NULL DEFAULT '',
+			reference_images JSON NOT NULL DEFAULT '{}',
+			images JSON NOT NULL DEFAULT '{}',
+			created_at DATETIME,
+			updated_at DATETIME,
+			CONSTRAINT fk_chat_sessions_messages FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+		)`,
+	}
+	for _, statement := range statements {
+		if err := db.Exec(statement).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func ensureIndexes(db *gorm.DB) error {
 	statements := []string{
 		"CREATE INDEX IF NOT EXISTS ix_gateway_route_states_route_type ON gateway_route_states (route_type)",
@@ -110,6 +161,11 @@ func ensureIndexes(db *gorm.DB) error {
 		"CREATE INDEX IF NOT EXISTS ix_gateway_request_logs_model ON gateway_request_logs (model)",
 		"CREATE INDEX IF NOT EXISTS ix_gateway_request_logs_requested_model ON gateway_request_logs (requested_model)",
 		"CREATE INDEX IF NOT EXISTS ix_gateway_request_logs_actual_model ON gateway_request_logs (actual_model)",
+		"CREATE INDEX IF NOT EXISTS ix_chat_sessions_updated_at ON chat_sessions (updated_at)",
+		"CREATE INDEX IF NOT EXISTS ix_chat_sessions_site_id ON chat_sessions (site_id)",
+		"CREATE INDEX IF NOT EXISTS ix_chat_sessions_model ON chat_sessions (model)",
+		"CREATE INDEX IF NOT EXISTS ix_chat_messages_session_seq ON chat_messages (session_id, seq)",
+		"CREATE INDEX IF NOT EXISTS ix_chat_messages_role ON chat_messages (role)",
 	}
 	for _, statement := range statements {
 		if err := db.Exec(statement).Error; err != nil {

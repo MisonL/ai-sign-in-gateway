@@ -84,6 +84,17 @@ func stripSiteSupportedModels(config models.JSONMap) models.JSONMap {
 	return next
 }
 
+func preserveManualSitePluginConfig(next, previous models.JSONMap) models.JSONMap {
+	out := cloneJSONMap(nonNilJSON(next))
+	if value, ok := previous["gateway_disabled_route_fingerprints"]; ok {
+		out["gateway_disabled_route_fingerprints"] = value
+	}
+	if value, ok := previous["include_in_checkin"]; ok {
+		out["include_in_checkin"] = value
+	}
+	return out
+}
+
 func normalizePluginConfigBalanceUnits(config models.JSONMap) {
 	if config == nil {
 		return
@@ -317,25 +328,108 @@ func mergeCredentialUpdates(site *models.Site, updates models.JSONMap) models.JS
 func mergeAPIKeyLists(existingValue any, syncedValue any) []map[string]any {
 	synced := apiKeyListFromAny(syncedValue)
 	existing := apiKeyListFromAny(existingValue)
+	existingByIdentity := map[string]map[string]any{}
+	existingByValue := map[string]map[string]any{}
+	for _, item := range existing {
+		identity := apiKeyEntryIdentity(item)
+		value := apiKeyEntryValue(item)
+		if identity == "" {
+			continue
+		}
+		existingByIdentity[identity] = item
+		if value != "" {
+			existingByValue[value] = item
+		}
+	}
 	merged := make([]map[string]any, 0, len(synced)+len(existing))
 	seen := map[string]bool{}
 	for _, item := range synced {
-		key := apiKeyEntryKey(item)
+		key := apiKeyEntryIdentity(item)
 		if key == "" || seen[key] {
 			continue
 		}
 		seen[key] = true
+		existingItem := existingByIdentity[key]
+		if existingItem == nil {
+			existingItem = existingByValue[apiKeyEntryValue(item)]
+		}
+		preserveLocalAPIKeyRequestBaseURLs(item, existingItem)
 		merged = append(merged, item)
 	}
 	for _, item := range existing {
-		key := apiKeyEntryKey(item)
-		if key == "" || seen[key] || !isManualAPIKeyEntry(item) {
+		key := apiKeyEntryIdentity(item)
+		if key == "" || seen[key] || !isManualAPIKeyEntry(item) || syncedAPIKeyEquivalentSeen(synced, item) {
 			continue
 		}
 		seen[key] = true
 		merged = append(merged, item)
 	}
 	return merged
+}
+
+func syncedAPIKeyEquivalentSeen(synced []map[string]any, existing map[string]any) bool {
+	signature := apiKeyEntryConfigSignature(existing)
+	if signature == "" {
+		return false
+	}
+	for _, item := range synced {
+		if apiKeyEntryConfigSignature(item) == signature {
+			return true
+		}
+	}
+	return false
+}
+
+func preserveLocalAPIKeyRequestBaseURLs(target map[string]any, existing map[string]any) {
+	if target == nil || existing == nil || apiKeyHasRequestBaseURLs(target) {
+		return
+	}
+	for _, key := range []string{
+		"request_base_urls",
+		"request_base_url",
+		"api_request_urls",
+		"api_request_url",
+		"gateway_request_urls",
+		"gateway_request_url",
+		"endpoint_url",
+		"base_url",
+		"baseURL",
+		"api_base_url",
+		"apiBaseUrl",
+		"api_url",
+		"apiUrl",
+	} {
+		if value, ok := existing[key]; ok && fmt.Sprint(value) != "" && fmt.Sprint(value) != "<nil>" {
+			target["request_base_urls"] = value
+			return
+		}
+	}
+}
+
+func apiKeyHasRequestBaseURLs(item map[string]any) bool {
+	if item == nil {
+		return false
+	}
+	for _, key := range []string{
+		"request_base_urls",
+		"request_base_url",
+		"api_request_urls",
+		"api_request_url",
+		"gateway_request_urls",
+		"gateway_request_url",
+		"endpoint_url",
+		"base_url",
+		"baseURL",
+		"api_base_url",
+		"apiBaseUrl",
+		"api_url",
+		"apiUrl",
+	} {
+		if value, ok := item[key]; ok && fmt.Sprint(value) != "" && fmt.Sprint(value) != "<nil>" {
+			return true
+		}
+	}
+	return false
 }
 
 func apiKeyListFromAny(value any) []map[string]any {
@@ -382,12 +476,114 @@ func cloneStringAnyMap(value map[string]any) map[string]any {
 	return out
 }
 
-func apiKeyEntryKey(item map[string]any) string {
+func apiKeyEntryValue(item map[string]any) string {
 	value := strings.TrimSpace(fmt.Sprint(item["key"]))
 	if value == "<nil>" {
 		return ""
 	}
 	return value
+}
+
+func apiKeyEntryIdentity(item map[string]any) string {
+	id := strings.TrimSpace(fmt.Sprint(item["id"]))
+	if id != "" && id != "<nil>" {
+		return "id:" + id
+	}
+	value := apiKeyEntryValue(item)
+	if value == "" {
+		return ""
+	}
+	signature := apiKeyEntryConfigSignature(item)
+	if signature == "" {
+		return "key:" + value
+	}
+	return "config:" + signature
+}
+
+func apiKeyEntryConfigSignature(item map[string]any) string {
+	value := apiKeyEntryValue(item)
+	if value == "" {
+		return ""
+	}
+	parts := []string{
+		value,
+		apiKeyRouteType(item),
+		strings.Join(apiKeyRequestBaseURLValues(item), "\n"),
+		strings.TrimSpace(fmt.Sprint(item["image_generation_path"])),
+		strings.TrimSpace(fmt.Sprint(item["image_edit_path"])),
+	}
+	return strings.Join(parts, "\x00")
+}
+
+func apiKeyRouteType(item map[string]any) string {
+	for _, key := range []string{"route_type", "api_type", "api_format", "type"} {
+		value := strings.ToLower(strings.TrimSpace(fmt.Sprint(item[key])))
+		if value != "" && value != "<nil>" {
+			return value
+		}
+	}
+	return ""
+}
+
+func apiKeyRequestBaseURLValues(item map[string]any) []string {
+	out := []string{}
+	for _, key := range []string{
+		"request_base_urls",
+		"request_base_url",
+		"api_request_urls",
+		"api_request_url",
+		"gateway_request_urls",
+		"gateway_request_url",
+		"endpoint_url",
+		"base_url",
+		"baseURL",
+		"api_base_url",
+		"apiBaseUrl",
+		"api_url",
+		"apiUrl",
+	} {
+		out = append(out, apiKeyStringList(item[key])...)
+	}
+	normalized := []string{}
+	for _, value := range out {
+		value = strings.TrimSpace(value)
+		if value == "" || value == "<nil>" || containsAPIKeyString(normalized, value) {
+			continue
+		}
+		normalized = append(normalized, value)
+	}
+	return normalized
+}
+
+func apiKeyStringList(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		return typed
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, fmt.Sprint(item))
+		}
+		return out
+	case string:
+		return strings.FieldsFunc(typed, func(r rune) bool {
+			return strings.ContainsRune(",，\n\r\t", r)
+		})
+	default:
+		if value == nil {
+			return nil
+		}
+		return []string{fmt.Sprint(value)}
+	}
+}
+
+func containsAPIKeyString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func isManualAPIKeyEntry(item map[string]any) bool {

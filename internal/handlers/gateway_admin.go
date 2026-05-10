@@ -1125,6 +1125,10 @@ func (a *App) UpdateGatewayRouteType(w http.ResponseWriter, r *http.Request) {
 	if payload.SupportedModels != nil {
 		state.SupportedModels = services.EncodeGatewaySupportedModels(*payload.SupportedModels)
 	}
+	if payload.ManualRequestBaseURLs != nil {
+		state.ManualRequestBaseURLs = services.EncodeGatewayRequestBaseURLs(*payload.ManualRequestBaseURLs)
+		state.LastRequestBaseURL = ""
+	}
 	if err := a.DB.Save(&state).Error; err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1328,7 +1332,10 @@ func (a *App) GatewayProxy(w http.ResponseWriter, r *http.Request) {
 		var nonRetryableUpstream services.GatewayNonRetryableUpstreamError
 		var maxAttemptsExceeded services.GatewayMaxAttemptsExceededError
 		var modelNotSupported services.GatewayModelNotSupportedError
-		if errors.As(err, &modelNotSupported) {
+		var bodyTooLarge services.GatewayBodyTooLargeError
+		if errors.As(err, &bodyTooLarge) {
+			status = http.StatusRequestEntityTooLarge
+		} else if errors.As(err, &modelNotSupported) {
 			status = http.StatusBadRequest
 		} else if errors.As(err, &allRoutesFailed) || errors.As(err, &maxAttemptsExceeded) || strings.Contains(err.Error(), "没有可用") {
 			status = http.StatusServiceUnavailable
@@ -1410,53 +1417,54 @@ func gatewayRouteResponse(route services.GatewayRoute) map[string]any {
 		successRate = round2(float64(state.SuccessCount) / float64(state.RequestCount) * 100)
 	}
 	out := map[string]any{
-		"id":                     state.ID,
-		"site_id":                state.SiteID,
-		"site_name":              services.GatewayRouteSiteLabel(route),
-		"base_url":               firstNonEmpty(route.Site.BaseURL, state.SiteBaseURLSnapshot),
-		"request_base_url":       route.RequestBaseURL,
-		"request_base_urls":      services.GatewayRouteRequestBaseCandidates(state, route.Site),
-		"last_request_base_url":  state.LastRequestBaseURL,
-		"site_name_snapshot":     state.SiteNameSnapshot,
-		"site_base_url_snapshot": state.SiteBaseURLSnapshot,
-		"site_missing":           route.Site.ID == 0,
-		"has_api_key":            route.APIKey != "",
-		"group_name":             state.GroupName,
-		"last_balance":           services.GatewayRouteBalance(route),
-		"balance_display":        balanceDisplayWithUnit(services.GatewayRouteBalance(route), services.GatewayRouteBalanceUnit(route)),
-		"balance_unit":           services.GatewayRouteBalanceUnit(route),
-		"balance_probe_url":      services.GatewayRouteBalanceProbeURL(route),
-		"package_display":        packageDisplay(route.Site),
-		"checkin_status":         route.Site.LastStatus,
-		"key_name":               state.KeyName,
-		"key_fingerprint":        state.KeyFingerprint,
-		"key_source":             state.KeySource,
-		"route_type":             state.RouteType,
-		"route_type_manual":      state.RouteTypeManual,
-		"supported_models":       services.GatewayRouteSupportedModels(state),
-		"model_probe_status":     state.ModelProbeStatus,
-		"model_probe_message":    state.ModelProbeMessage,
-		"model_probe_updated_at": state.ModelProbeUpdatedAt,
-		"route_priority":         state.RoutePriority,
-		"route_priority_manual":  state.RoutePriorityManual,
-		"weight":                 state.Weight,
-		"is_enabled":             state.IsEnabled,
-		"circuit_state":          state.CircuitState,
-		"consecutive_failures":   state.ConsecutiveFailures,
-		"active_concurrency":     services.RouteActiveCount(state.ID),
-		"request_count":          state.RequestCount,
-		"success_count":          state.SuccessCount,
-		"failure_count":          state.FailureCount,
-		"avg_latency_ms":         state.AvgLatencyMS,
-		"ewma_latency_ms":        state.EWMALatencyMS,
-		"last_latency_ms":        state.LastLatencyMS,
-		"success_rate":           successRate,
-		"last_status_code":       state.LastStatusCode,
-		"last_error":             state.LastError,
-		"last_used_at":           state.LastUsedAt,
-		"last_success_at":        state.LastSuccessAt,
-		"last_failure_at":        state.LastFailureAt,
-		"circuit_open_until":     state.CircuitOpenUntil,
+		"id":                       state.ID,
+		"site_id":                  state.SiteID,
+		"site_name":                services.GatewayRouteSiteLabel(route),
+		"base_url":                 firstNonEmpty(route.Site.BaseURL, state.SiteBaseURLSnapshot),
+		"request_base_url":         route.RequestBaseURL,
+		"request_base_urls":        services.GatewayRouteRequestBaseCandidates(state, route.Site),
+		"manual_request_base_urls": services.GatewayRouteManualRequestBaseURLs(state, route.Site),
+		"last_request_base_url":    state.LastRequestBaseURL,
+		"site_name_snapshot":       state.SiteNameSnapshot,
+		"site_base_url_snapshot":   state.SiteBaseURLSnapshot,
+		"site_missing":             route.Site.ID == 0,
+		"has_api_key":              route.APIKey != "",
+		"group_name":               state.GroupName,
+		"last_balance":             services.GatewayRouteBalance(route),
+		"balance_display":          balanceDisplayWithUnit(services.GatewayRouteBalance(route), services.GatewayRouteBalanceUnit(route)),
+		"balance_unit":             services.GatewayRouteBalanceUnit(route),
+		"balance_probe_url":        services.GatewayRouteBalanceProbeURL(route),
+		"package_display":          packageDisplay(route.Site),
+		"checkin_status":           route.Site.LastStatus,
+		"key_name":                 state.KeyName,
+		"key_fingerprint":          state.KeyFingerprint,
+		"key_source":               state.KeySource,
+		"route_type":               state.RouteType,
+		"route_type_manual":        state.RouteTypeManual,
+		"supported_models":         services.GatewayRouteSupportedModels(state),
+		"model_probe_status":       state.ModelProbeStatus,
+		"model_probe_message":      state.ModelProbeMessage,
+		"model_probe_updated_at":   state.ModelProbeUpdatedAt,
+		"route_priority":           state.RoutePriority,
+		"route_priority_manual":    state.RoutePriorityManual,
+		"weight":                   state.Weight,
+		"is_enabled":               state.IsEnabled,
+		"circuit_state":            state.CircuitState,
+		"consecutive_failures":     state.ConsecutiveFailures,
+		"active_concurrency":       services.RouteActiveCount(state.ID),
+		"request_count":            state.RequestCount,
+		"success_count":            state.SuccessCount,
+		"failure_count":            state.FailureCount,
+		"avg_latency_ms":           state.AvgLatencyMS,
+		"ewma_latency_ms":          state.EWMALatencyMS,
+		"last_latency_ms":          state.LastLatencyMS,
+		"success_rate":             successRate,
+		"last_status_code":         state.LastStatusCode,
+		"last_error":               state.LastError,
+		"last_used_at":             state.LastUsedAt,
+		"last_success_at":          state.LastSuccessAt,
+		"last_failure_at":          state.LastFailureAt,
+		"circuit_open_until":       state.CircuitOpenUntil,
 	}
 	for key, value := range packageQuotaMap(route.Site) {
 		out[key] = value

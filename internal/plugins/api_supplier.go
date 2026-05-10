@@ -31,6 +31,8 @@ func (p *APISupplier) Meta() schemas.PluginMetaResponse {
 			Field("api_format", "API 格式", "text", "openai / anthropic / gemini / general", false, ""),
 			Field("endpoint_url", "出口地址", "url", "https://example.com/v1", false, ""),
 			Field("api_request_urls", "API 请求候选", "textarea", "https://api-a.example.com\nhttps://api-b.example.com/v1", false, "可填多个候选 URL，每行一个；网关请求会按顺序尝试。"),
+			Field("image_generation_path", "图片生成 Path", "text", "/images/generations", false, "可选。纯文本生图接口路径，留空默认 /images/generations。"),
+			Field("image_edit_path", "图片编辑 Path", "text", "/images/edits", false, "可选。参考图编辑/融合接口路径，留空默认 /images/edits。"),
 			Field("preferred_model", "默认模型", "text", "claude-sonnet-4-6 / gemini-2.5-pro", false, ""),
 		},
 		AuthEntryLabel: "打开供应商站点",

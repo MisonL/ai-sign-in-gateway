@@ -10,8 +10,15 @@ import type {
   CheckinRun,
   ChatImageReference,
   ChatRequestMessage,
+  ChatSession,
+  ChatSessionAppendPayload,
+  ChatSessionCreatePayload,
+  ChatSessionDetail,
+  ChatSessionListResult,
+  ChatSessionUpdatePayload,
   DuplicateSiteGroup,
   DuplicateSiteMergeResult,
+  FeatureMeta,
   GatewayActiveRequest,
   GatewayLog,
   GatewayOverview,
@@ -40,6 +47,8 @@ import type {
   SiteHealth,
   SiteInviteRefreshResult,
   SitePayload,
+  SiteRegistrationBatchPayload,
+  SiteRegistrationBatchResult,
   SiteSummary,
   TotpPreview,
 } from './types'
@@ -75,7 +84,7 @@ function extractErrorMessage(data: unknown): string {
   return '请求失败'
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
   headers.set('Content-Type', 'application/json')
 
@@ -163,7 +172,7 @@ function filenameFromDisposition(disposition: string | null, fallback: string): 
   return match?.[1] || fallback
 }
 
-async function requestDownload(path: string, fallbackFilename: string): Promise<{ blob: Blob; filename: string }> {
+export async function requestDownload(path: string, fallbackFilename: string): Promise<{ blob: Blob; filename: string }> {
   const headers = new Headers()
   const token = getToken()
   if (token) {
@@ -250,6 +259,10 @@ export function getOverview(): Promise<OverviewData> {
 
 export function getPlugins(): Promise<PluginMeta[]> {
   return request('/plugins')
+}
+
+export function getFeatures(): Promise<FeatureMeta[]> {
+  return request('/features')
 }
 
 export function getSites(): Promise<Site[]> {
@@ -353,6 +366,15 @@ export function exportCCSwitchConfig(options: { site_ids?: number[]; only_enable
 
 export function createSite(payload: SitePayload): Promise<Site> {
   return request('/sites', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function createRegistrationBatchSites(
+  payload: SiteRegistrationBatchPayload,
+): Promise<SiteRegistrationBatchResult> {
+  return request('/sites/register-batch', {
     method: 'POST',
     body: JSON.stringify(payload),
   })
@@ -579,8 +601,45 @@ export function testChat(payload: {
   messages?: ChatRequestMessage[]
   reference_images?: ChatImageReference[]
   image_size?: string
+  image_generation_path?: string
+  image_edit_path?: string
 }): Promise<ChatResult> {
   return request('/tools/chat-test', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function listChatSessions(limit = 50): Promise<ChatSessionListResult> {
+  return request(`/tools/chat-sessions?limit=${encodeURIComponent(String(limit))}`)
+}
+
+export function createChatSession(payload: ChatSessionCreatePayload): Promise<ChatSession> {
+  return request('/tools/chat-sessions', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function getChatSession(id: number): Promise<ChatSessionDetail> {
+  return request(`/tools/chat-sessions/${encodeURIComponent(String(id))}`)
+}
+
+export function updateChatSession(id: number, payload: ChatSessionUpdatePayload): Promise<ChatSession> {
+  return request(`/tools/chat-sessions/${encodeURIComponent(String(id))}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function deleteChatSession(id: number): Promise<{ status: string }> {
+  return request(`/tools/chat-sessions/${encodeURIComponent(String(id))}`, {
+    method: 'DELETE',
+  })
+}
+
+export function appendChatSessionMessages(id: number, payload: ChatSessionAppendPayload): Promise<ChatSessionDetail> {
+  return request(`/tools/chat-sessions/${encodeURIComponent(String(id))}/messages`, {
     method: 'POST',
     body: JSON.stringify(payload),
   })
@@ -647,7 +706,7 @@ export function getGatewayRoutes(options?: { group?: string; includeDisabled?: b
   return request(`/gateway-admin/routes${suffix}`)
 }
 
-export function toggleGatewayRoute(id: number): Promise<{ id: number; is_enabled: boolean; circuit_state: string }> {
+export function toggleGatewayRoute(id: number): Promise<{ id: number; is_enabled: boolean; is_enabled_manual?: boolean; circuit_state: string }> {
   return request(`/gateway-admin/routes/${id}/toggle`, {
     method: 'POST',
   })

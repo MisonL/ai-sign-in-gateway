@@ -5,7 +5,10 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -136,5 +139,31 @@ func TestShellHandlerPassesGatewayRootV1ToAPI(t *testing.T) {
 	}
 	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/json" {
 		t.Fatalf("status=%d content-type=%q body=%s", rec.Code, rec.Header().Get("Content-Type"), rec.Body.String())
+	}
+}
+
+func TestServeFrontendRejectsSiblingPrefixTraversal(t *testing.T) {
+	root := t.TempDir()
+	dist := filepath.Join(root, "dist")
+	sibling := filepath.Join(root, "dist-outside")
+	if err := os.MkdirAll(dist, 0o755); err != nil {
+		t.Fatalf("create dist: %v", err)
+	}
+	if err := os.MkdirAll(sibling, 0o755); err != nil {
+		t.Fatalf("create sibling: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dist, "index.html"), []byte("index"), 0o600); err != nil {
+		t.Fatalf("write index: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sibling, "outside.txt"), []byte("outside"), 0o600); err != nil {
+		t.Fatalf("write outside: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/../dist-outside/outside.txt", nil)
+	serveFrontend(dist, rec, req)
+
+	if rec.Code == http.StatusOK || strings.Contains(rec.Body.String(), "outside") {
+		t.Fatalf("serveFrontend escaped dist: status=%d body=%q", rec.Code, rec.Body.String())
 	}
 }

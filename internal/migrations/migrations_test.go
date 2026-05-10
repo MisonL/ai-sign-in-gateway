@@ -73,8 +73,11 @@ func TestApplyAddsGatewayModelColumnsToExistingSchema(t *testing.T) {
 		{"gateway_route_states", "model_probe_status"},
 		{"gateway_route_states", "model_probe_message"},
 		{"gateway_route_states", "model_probe_updated_at"},
+		{"gateway_route_states", "manual_request_base_urls"},
 		{"gateway_request_logs", "requested_model"},
 		{"gateway_request_logs", "actual_model"},
+		{"chat_sessions", "last_message_text"},
+		{"chat_messages", "reference_images"},
 	} {
 		if !db.Migrator().HasColumn(item.table, item.column) {
 			t.Fatalf("missing column %s.%s", item.table, item.column)

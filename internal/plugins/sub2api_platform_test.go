@@ -153,6 +153,175 @@ func TestSub2APIStatusSyncsAPIKeySupportedModels(t *testing.T) {
 	}
 }
 
+func TestSub2APIStatusDoesNotCreateAPIKeyWhenListEmpty(t *testing.T) {
+	createCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/auth/me":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"email":   "user@example.com",
+					"balance": 8.5,
+				},
+			})
+		case "/api/v1/keys":
+			if r.Method == http.MethodPost {
+				createCalls++
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"key": "sk-created"}})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{}})
+		case "/api/v1/subscriptions/progress", "/api/v1/subscriptions/summary":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	plugin := NewSub2API()
+	status, err := plugin.FetchAccountStatus(context.Background(), models.Site{
+		BaseURL:   server.URL,
+		PluginKey: "sub2api-platform",
+		Credentials: models.JSONMap{
+			"access_token": "valid-access-token",
+		},
+		PluginConfig: models.JSONMap{
+			"api_keys_url": "/api/v1/keys",
+		},
+	}, 5)
+	if err != nil {
+		t.Fatalf("FetchAccountStatus returned error: %v", err)
+	}
+	if createCalls != 0 {
+		t.Fatalf("createCalls = %d", createCalls)
+	}
+	if _, ok := status.UpdatedCredentials["api_keys"]; ok {
+		t.Fatalf("unexpected api_keys update: %#v", status.UpdatedCredentials["api_keys"])
+	}
+}
+
+func TestSub2APISyncAPIKeysDoesNotCreateAPIKeyWhenListEmpty(t *testing.T) {
+	createCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/keys":
+			if r.Method == http.MethodPost {
+				createCalls++
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"key": "sk-created"}})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	plugin := NewSub2API()
+	result, err := plugin.SyncAPIKeys(context.Background(), models.Site{
+		BaseURL:   server.URL,
+		PluginKey: "sub2api-platform",
+		Credentials: models.JSONMap{
+			"access_token": "valid-access-token",
+		},
+		PluginConfig: models.JSONMap{
+			"api_keys_url": "/api/v1/keys",
+		},
+	}, 5)
+	if err != nil {
+		t.Fatalf("SyncAPIKeys returned error: %v", err)
+	}
+	if createCalls != 0 {
+		t.Fatalf("createCalls = %d", createCalls)
+	}
+	if result.PrimaryKey != "" {
+		t.Fatalf("PrimaryKey = %q", result.PrimaryKey)
+	}
+	if _, ok := result.UpdatedCredentials["api_keys"]; ok {
+		t.Fatalf("unexpected api_keys update: %#v", result.UpdatedCredentials["api_keys"])
+	}
+}
+
+func TestSub2APIRegisterCreatesAPIKeyWhenNoneExist(t *testing.T) {
+	keyListCalls := 0
+	createKeyCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/auth/register":
+			_ = json.NewEncoder(w).Encode(map[string]any{"success": true})
+		case "/api/v1/auth/login":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"access_token":  "valid-access-token",
+					"refresh_token": "valid-refresh-token",
+				},
+			})
+		case "/api/v1/keys":
+			if got := r.Header.Get("Authorization"); got != "Bearer valid-access-token" {
+				t.Fatalf("Authorization = %q", got)
+			}
+			switch r.Method {
+			case http.MethodGet:
+				keyListCalls++
+				items := []map[string]any{}
+				if keyListCalls > 1 {
+					items = append(items, map[string]any{"id": "created-1", "name": "default", "key": "sk-created-sub2api", "status": "active"})
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"items": items}})
+			case http.MethodPost:
+				createKeyCalls++
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Fatalf("decode create key body: %v", err)
+				}
+				if strings.TrimSpace(jsonStringForTest(body["name"])) == "" {
+					t.Fatalf("create key name is empty: %#v", body)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"data": map[string]any{"id": "created-1", "name": body["name"], "key": "sk-created-sub2api", "status": "active"},
+				})
+			default:
+				http.NotFound(w, r)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	plugin := NewSub2API()
+	result, err := plugin.RegisterAccount(context.Background(), models.Site{
+		BaseURL:   server.URL,
+		PluginKey: "sub2api-platform",
+		PluginConfig: models.JSONMap{
+			"api_keys_url": "/api/v1/keys",
+		},
+	}, AccountRegistrationRequest{
+		Email:       "user@example.com",
+		Password:    "pass123456",
+		AccountName: "discovery-user",
+	}, 5)
+	if err != nil {
+		t.Fatalf("RegisterAccount returned error: %v", err)
+	}
+	if createKeyCalls != 1 {
+		t.Fatalf("createKeyCalls = %d", createKeyCalls)
+	}
+	if keyListCalls < 2 {
+		t.Fatalf("keyListCalls = %d", keyListCalls)
+	}
+	if result.PrimaryKey != "sk-created-sub2api" || result.APIKeyCount != 1 {
+		t.Fatalf("result key/count = %q/%d", result.PrimaryKey, result.APIKeyCount)
+	}
+	if got := result.Credentials["api_key"]; got != "sk-created-sub2api" {
+		t.Fatalf("credentials api_key = %v", got)
+	}
+}
+
 func TestSub2APIStatusPersistsRefreshedTokens(t *testing.T) {
 	refreshCalls := 0
 	loginCalls := 0

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -10,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"ai-sign-in-gateway/internal/models"
 	"ai-sign-in-gateway/internal/plugins"
@@ -18,6 +20,178 @@ import (
 	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm"
 )
+
+func TestCreateRegistrationBatchSitesSub2APICreatesSites(t *testing.T) {
+	requests := map[string]int{}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests[r.URL.Path]++
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/auth/register":
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode register body: %v", err)
+			}
+			if !strings.HasPrefix(fmt.Sprint(body["email"]), "user+") {
+				t.Fatalf("register email = %v", body["email"])
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"success": true})
+		case "/api/v1/auth/login":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{"access_token": "access-" + fmt.Sprint(requests[r.URL.Path]), "refresh_token": "refresh-token"},
+			})
+		case "/api/v1/keys":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]any{{"id": 1, "name": "default", "key": "sk-test", "status": "active"}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	db, err := gorm.Open(sqlite.Open("file:sites-register-batch?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(models.All()...); err != nil {
+		t.Fatalf("auto migrate: %v", err)
+	}
+	app := &App{DB: db, PluginManager: plugins.NewManager()}
+	payload := map[string]any{
+		"name":          "sub2api",
+		"base_url":      upstream.URL,
+		"plugin_key":    "sub2api-platform",
+		"is_enabled":    true,
+		"email_pattern": "user+{n}@example.com",
+		"password":      "pass123456",
+		"count":         2,
+		"start_index":   3,
+		"credentials":   map[string]any{},
+		"plugin_config": map[string]any{"api_keys_url": "/api/v1/keys"},
+	}
+	data, _ := json.Marshal(payload)
+	rec := httptest.NewRecorder()
+	app.CreateRegistrationBatchSites(rec, httptest.NewRequest(http.MethodPost, "/api/sites/register-batch", bytes.NewReader(data)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		CreatedCount int `json:"created_count"`
+		FailedCount  int `json:"failed_count"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.CreatedCount != 2 || response.FailedCount != 0 {
+		t.Fatalf("response = %+v", response)
+	}
+	var sites []models.Site
+	if err := db.Order("name asc").Find(&sites).Error; err != nil {
+		t.Fatalf("list sites: %v", err)
+	}
+	if len(sites) != 2 {
+		t.Fatalf("site count = %d", len(sites))
+	}
+	if got := jsonMapString(sites[0].Credentials, "email"); got != "user+3@example.com" {
+		t.Fatalf("first email = %q", got)
+	}
+	if got := jsonMapString(sites[0].Credentials, "api_key"); got != "sk-test" {
+		t.Fatalf("first api_key = %q", got)
+	}
+}
+
+func TestListSitesOrdersByCreatedAt(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:sites-created-order?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(models.All()...); err != nil {
+		t.Fatalf("auto migrate: %v", err)
+	}
+	older := time.Now().UTC().Add(-2 * time.Hour)
+	newer := time.Now().UTC().Add(-1 * time.Hour)
+	sites := []models.Site{
+		{Name: "newer", BaseURL: "https://newer.example", PluginKey: "http-relay-station", IsEnabled: true, Credentials: models.JSONMap{}, PluginConfig: models.JSONMap{}, CreatedAt: newer, UpdatedAt: older},
+		{Name: "older", BaseURL: "https://older.example", PluginKey: "http-relay-station", IsEnabled: true, Credentials: models.JSONMap{}, PluginConfig: models.JSONMap{}, CreatedAt: older, UpdatedAt: newer},
+	}
+	for _, site := range sites {
+		if err := db.Create(&site).Error; err != nil {
+			t.Fatalf("create site: %v", err)
+		}
+	}
+
+	app := &App{DB: db, PluginManager: plugins.NewManager()}
+	rec := httptest.NewRecorder()
+	app.ListSites(rec, httptest.NewRequest(http.MethodGet, "/api/sites", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var payload []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(payload) != 2 {
+		t.Fatalf("payload len = %d", len(payload))
+	}
+	if payload[0]["name"] != "older" || payload[1]["name"] != "newer" {
+		t.Fatalf("site order = %v, %v", payload[0]["name"], payload[1]["name"])
+	}
+}
+
+func TestUpdateSitePreservesManualCheckinParticipation(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:sites-preserve-checkin-participation?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(models.All()...); err != nil {
+		t.Fatalf("auto migrate: %v", err)
+	}
+	site := models.Site{
+		Name:      "manual-checkin",
+		BaseURL:   "https://manual-checkin.example",
+		PluginKey: "http-relay-station",
+		IsEnabled: true,
+		Credentials: models.JSONMap{
+			"api_key": "route-key",
+		},
+		PluginConfig: models.JSONMap{
+			"include_in_checkin": false,
+		},
+	}
+	if err := db.Create(&site).Error; err != nil {
+		t.Fatalf("create site: %v", err)
+	}
+
+	payload := map[string]any{
+		"name":             "manual-checkin-updated",
+		"base_url":         site.BaseURL,
+		"plugin_key":       site.PluginKey,
+		"group_name":       "",
+		"supported_models": nil,
+		"is_enabled":       true,
+		"notes":            "",
+		"credentials":      map[string]any{"api_key": "route-key"},
+		"plugin_config":    map[string]any{"checkin_path": "/checkin"},
+	}
+	data, _ := json.Marshal(payload)
+	app := &App{DB: db, PluginManager: plugins.NewManager()}
+	rec := httptest.NewRecorder()
+	app.UpdateSite(rec, siteRequestWithIDAndBody(site.ID, http.MethodPut, data))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var stored models.Site
+	if err := db.First(&stored, site.ID).Error; err != nil {
+		t.Fatalf("reload site: %v", err)
+	}
+	if includeInCheckin(stored) {
+		t.Fatalf("include_in_checkin was not preserved: %#v", stored.PluginConfig)
+	}
+	if got := strings.TrimSpace(fmt.Sprint(stored.PluginConfig["checkin_path"])); got != "/checkin" {
+		t.Fatalf("checkin_path = %q", got)
+	}
+}
 
 func TestRefreshOneSiteUsesBalanceProbeForRelayOnlySites(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -382,6 +556,152 @@ func TestMergeAPIKeyListsUsesSyncedEntryWhenManualKeyMatches(t *testing.T) {
 	}
 }
 
+func TestMergeAPIKeyListsPreservesLocalRequestBaseURLsForSyncedKey(t *testing.T) {
+	merged := mergeAPIKeyLists(
+		[]any{
+			map[string]any{
+				"id":                "remote-previous",
+				"name":              "previous",
+				"key":               "sk-same",
+				"source":            "api",
+				"status":            "active",
+				"request_base_urls": []any{"https://claude.example/v1"},
+			},
+		},
+		[]map[string]any{
+			{"id": "remote-next", "name": "next", "key": "sk-same", "source": "api", "status": "active"},
+		},
+	)
+	if len(merged) != 1 {
+		t.Fatalf("merged len = %d", len(merged))
+	}
+	urls, ok := merged[0]["request_base_urls"].([]any)
+	if !ok {
+		t.Fatalf("request_base_urls type = %T", merged[0]["request_base_urls"])
+	}
+	if len(urls) != 1 || urls[0] != "https://claude.example/v1" {
+		t.Fatalf("request_base_urls = %#v", urls)
+	}
+}
+
+func TestMergeAPIKeyListsKeepsSyncedSameKeyDifferentIDs(t *testing.T) {
+	merged := mergeAPIKeyLists(
+		[]any{
+			map[string]any{
+				"id":                "remote-gpt",
+				"name":              "gpt",
+				"key":               "sk-shared",
+				"source":            "api",
+				"status":            "active",
+				"request_base_urls": []any{"https://gpt.example/v1"},
+			},
+			map[string]any{
+				"id":                "remote-claude",
+				"name":              "claude",
+				"key":               "sk-shared",
+				"source":            "api",
+				"status":            "active",
+				"request_base_urls": []any{"https://claude.example/v1"},
+			},
+		},
+		[]map[string]any{
+			{"id": "remote-gpt", "name": "gpt", "key": "sk-shared", "source": "api", "status": "active"},
+			{"id": "remote-claude", "name": "claude", "key": "sk-shared", "source": "api", "status": "active"},
+		},
+	)
+	if len(merged) != 2 {
+		t.Fatalf("merged len = %d", len(merged))
+	}
+	if got := strings.TrimSpace(fmt.Sprint(merged[0]["id"])); got != "remote-gpt" {
+		t.Fatalf("merged[0].id = %q", got)
+	}
+	if got := strings.TrimSpace(fmt.Sprint(merged[1]["id"])); got != "remote-claude" {
+		t.Fatalf("merged[1].id = %q", got)
+	}
+	firstURLs, ok := merged[0]["request_base_urls"].([]any)
+	if !ok || len(firstURLs) != 1 || firstURLs[0] != "https://gpt.example/v1" {
+		t.Fatalf("merged[0].request_base_urls = %#v", merged[0]["request_base_urls"])
+	}
+	secondURLs, ok := merged[1]["request_base_urls"].([]any)
+	if !ok || len(secondURLs) != 1 || secondURLs[0] != "https://claude.example/v1" {
+		t.Fatalf("merged[1].request_base_urls = %#v", merged[1]["request_base_urls"])
+	}
+}
+
+func TestMergeAPIKeyListsKeepsManualSameKeyWithDistinctRoutingConfig(t *testing.T) {
+	merged := mergeAPIKeyLists(
+		[]any{
+			map[string]any{
+				"id":                "remote-gpt",
+				"name":              "gpt",
+				"key":               "sk-shared",
+				"source":            "api",
+				"status":            "active",
+				"route_type":        "gpt",
+				"request_base_urls": []any{"https://gpt.example/v1"},
+			},
+			map[string]any{
+				"id":                "manual-claude",
+				"name":              "claude",
+				"key":               "sk-shared",
+				"source":            "manual",
+				"status":            "active",
+				"route_type":        "claude",
+				"request_base_urls": []any{"https://claude.example/v1"},
+			},
+		},
+		[]map[string]any{
+			{"id": "remote-gpt", "name": "gpt", "key": "sk-shared", "source": "api", "status": "active", "route_type": "gpt"},
+		},
+	)
+	if len(merged) != 2 {
+		t.Fatalf("merged len = %d", len(merged))
+	}
+	if got := strings.TrimSpace(fmt.Sprint(merged[1]["id"])); got != "manual-claude" {
+		t.Fatalf("merged[1].id = %q", got)
+	}
+	if got := strings.TrimSpace(fmt.Sprint(merged[1]["route_type"])); got != "claude" {
+		t.Fatalf("merged[1].route_type = %q", got)
+	}
+	urls, ok := merged[1]["request_base_urls"].([]any)
+	if !ok || len(urls) != 1 || urls[0] != "https://claude.example/v1" {
+		t.Fatalf("merged[1].request_base_urls = %#v", merged[1]["request_base_urls"])
+	}
+}
+
+func TestMergeAPIKeyListsKeepsNoIDSameKeyWithDistinctRoutingConfig(t *testing.T) {
+	merged := mergeAPIKeyLists(
+		nil,
+		[]map[string]any{
+			{
+				"name":              "gpt",
+				"key":               "sk-shared",
+				"source":            "manual",
+				"status":            "active",
+				"route_type":        "gpt",
+				"request_base_urls": []any{"https://gpt.example/v1"},
+			},
+			{
+				"name":              "claude",
+				"key":               "sk-shared",
+				"source":            "manual",
+				"status":            "active",
+				"route_type":        "claude",
+				"request_base_urls": []any{"https://claude.example/v1"},
+			},
+		},
+	)
+	if len(merged) != 2 {
+		t.Fatalf("merged len = %d", len(merged))
+	}
+	if got := strings.TrimSpace(fmt.Sprint(merged[0]["route_type"])); got != "gpt" {
+		t.Fatalf("merged[0].route_type = %q", got)
+	}
+	if got := strings.TrimSpace(fmt.Sprint(merged[1]["route_type"])); got != "claude" {
+		t.Fatalf("merged[1].route_type = %q", got)
+	}
+}
+
 func TestListSitesRedactsCredentialsAndGetSiteReturnsFullCredentials(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:sites-redaction?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
@@ -522,7 +842,11 @@ func testGatewayRouteFingerprint(value string) string {
 }
 
 func siteRequestWithID(siteID uint) *http.Request {
-	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/sites/%d", siteID), nil)
+	return siteRequestWithIDAndBody(siteID, http.MethodGet, nil)
+}
+
+func siteRequestWithIDAndBody(siteID uint, method string, body []byte) *http.Request {
+	req := httptest.NewRequest(method, fmt.Sprintf("/api/sites/%d", siteID), bytes.NewReader(body))
 	routeContext := chi.NewRouteContext()
 	routeContext.URLParams.Add("siteID", fmt.Sprint(siteID))
 	return req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, routeContext))

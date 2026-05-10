@@ -16,6 +16,7 @@ import (
 	"ai-sign-in-gateway/internal/httpx"
 	"ai-sign-in-gateway/internal/models"
 	"ai-sign-in-gateway/internal/plugins"
+	"ai-sign-in-gateway/internal/registrationpattern"
 	"ai-sign-in-gateway/internal/schemas"
 	"ai-sign-in-gateway/internal/services"
 	"github.com/go-chi/chi/v5"
@@ -31,6 +32,7 @@ type siteGroupPayload struct {
 func (a *App) SiteRoutes(r chi.Router) {
 	r.Get("/", a.ListSites)
 	r.Post("/", a.CreateSite)
+	r.Post("/register-batch", a.CreateRegistrationBatchSites)
 	r.Get("/groups", a.ListSiteGroups)
 	r.Post("/groups", a.CreateSiteGroup)
 	r.Put("/groups", a.RenameSiteGroup)
@@ -247,6 +249,112 @@ func (a *App) CreateSite(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, siteResponseWithSupportedModels(site, true, modelsBySite[site.ID]))
 }
 
+func (a *App) CreateRegistrationBatchSites(w http.ResponseWriter, r *http.Request) {
+	var payload schemas.SiteRegistrationBatchCreate
+	if err := httpx.Decode(r, &payload); err != nil {
+		writeError(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	if strings.TrimSpace(payload.Name) == "" || strings.TrimSpace(payload.BaseURL) == "" || strings.TrimSpace(payload.PluginKey) == "" {
+		writeError(w, http.StatusBadRequest, "站点名称、地址和插件不能为空")
+		return
+	}
+	if payload.Count < 1 || payload.Count > 100 {
+		writeError(w, http.StatusBadRequest, "请求次数必须在 1 到 100 之间")
+		return
+	}
+	if err := registrationpattern.Validate(payload.EmailPattern); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if strings.TrimSpace(payload.Password) == "" {
+		writeError(w, http.StatusBadRequest, "注册密码不能为空")
+		return
+	}
+	plugin, err := a.PluginManager.Get(payload.PluginKey)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	registrar, ok := plugin.(plugins.AccountRegistrar)
+	if !ok || !containsFold(plugin.Meta().Capabilities, "account_registration") {
+		writeError(w, http.StatusBadRequest, "当前插件不支持批量注册账号")
+		return
+	}
+
+	settings, _ := a.systemSettings()
+	timeout := siteRequestTimeoutSeconds(settings.RequestTimeout)
+	startIndex := payload.StartIndex
+	if startIndex <= 0 {
+		startIndex = 1
+	}
+	out := schemas.SiteRegistrationBatchResponse{Items: []schemas.SiteRegistrationBatchItem{}}
+	for i := 0; i < payload.Count; i++ {
+		index := startIndex + i
+		email, err := registrationpattern.Format(payload.EmailPattern, index)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		item := schemas.SiteRegistrationBatchItem{Index: index, Email: email}
+		if email == "" {
+			item.Message = "邮箱为空"
+			out.FailedCount++
+			out.Items = append(out.Items, item)
+			continue
+		}
+
+		draft := models.Site{
+			Name:         fmt.Sprintf("%s-%d", strings.TrimSpace(payload.Name), index),
+			BaseURL:      payload.BaseURL,
+			PluginKey:    payload.PluginKey,
+			GroupName:    payload.GroupName,
+			IsEnabled:    payload.IsEnabled,
+			Notes:        payload.Notes,
+			Credentials:  nonNilJSON(payload.Credentials),
+			PluginConfig: stripSiteSupportedModels(payload.PluginConfig),
+		}
+		opCtx, cancel := siteOperationContext(r.Context(), timeout)
+		result, err := registrar.RegisterAccount(opCtx, draft, plugins.AccountRegistrationRequest{
+			Email:       email,
+			Password:    payload.Password,
+			AccountName: draft.Name,
+		}, timeout)
+		cancel()
+		if err != nil {
+			item.Message = err.Error()
+			out.FailedCount++
+			out.Items = append(out.Items, item)
+			continue
+		}
+		draft.Credentials = mergeJSON(draft.Credentials, result.Credentials)
+		draft.PluginConfig = mergeJSON(draft.PluginConfig, result.PluginConfig)
+		if err := plugin.Validate(draft); err != nil {
+			item.Message = err.Error()
+			out.FailedCount++
+			out.Items = append(out.Items, item)
+			continue
+		}
+		if err := a.DB.Create(&draft).Error; err != nil {
+			item.Message = err.Error()
+			out.FailedCount++
+			out.Items = append(out.Items, item)
+			continue
+		}
+		item.OK = true
+		item.Message = result.Message
+		item.APIKeyCount = result.APIKeyCount
+		response := siteResponseWithSupportedModels(draft, true, nil)
+		item.Site = &response
+		out.CreatedCount++
+		out.Items = append(out.Items, item)
+	}
+	if out.CreatedCount > 0 {
+		_, _ = services.SyncGatewayRoutes(a.DB)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 func (a *App) UpdateSite(w http.ResponseWriter, r *http.Request) {
 	site, ok := a.getSite(w, chi.URLParam(r, "siteID"))
 	if !ok {
@@ -263,8 +371,9 @@ func (a *App) UpdateSite(w http.ResponseWriter, r *http.Request) {
 	site.GroupName = payload.GroupName
 	site.IsEnabled = payload.IsEnabled
 	site.Notes = payload.Notes
+	previousPluginConfig := cloneJSONMap(nonNilJSON(site.PluginConfig))
 	site.Credentials = nonNilJSON(payload.Credentials)
-	site.PluginConfig = stripSiteSupportedModels(payload.PluginConfig)
+	site.PluginConfig = preserveManualSitePluginConfig(stripSiteSupportedModels(payload.PluginConfig), previousPluginConfig)
 	if plugin, err := a.PluginManager.Get(site.PluginKey); err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
