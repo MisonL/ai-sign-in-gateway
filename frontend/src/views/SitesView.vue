@@ -205,7 +205,7 @@ const apiKeyImageEditPathDrafts = reactive<Record<string, string>>({})
 const manualApiKeyForm = reactive({
   name: '',
   key: '',
-  route_type: 'codex',
+  route_type: 'gpt',
   request_base_urls: '',
   image_generation_path: '',
   image_edit_path: '',
@@ -1281,7 +1281,10 @@ function normalizeApiKeyRouteType(value: unknown): string {
   if (normalized === 'gemini' || normalized === 'google') {
     return 'gemini'
   }
-  if (['codex', 'gpt', 'openai', 'chatgpt'].includes(normalized)) {
+  if (['gpt', 'openai', 'chatgpt', 'chat', 'chat_completions', 'chat-completions'].includes(normalized)) {
+    return 'gpt'
+  }
+  if (['codex', 'response', 'responses'].includes(normalized)) {
     return 'codex'
   }
   return ''
@@ -1289,7 +1292,7 @@ function normalizeApiKeyRouteType(value: unknown): string {
 
 function defaultApiKeyRouteType(site: Pick<Site, 'plugin_config'>): string {
   const config = site.plugin_config as Record<string, unknown>
-  return normalizeApiKeyRouteType(config?.gateway_route_type) || normalizeApiKeyRouteType(config?.api_format) || 'codex'
+  return normalizeApiKeyRouteType(config?.gateway_route_type) || normalizeApiKeyRouteType(config?.api_format) || 'gpt'
 }
 
 function storedApiKeyEntriesForEdit(site: Pick<Site, 'credentials' | 'plugin_config'>): SiteApiKeyRecord[] {
@@ -1436,7 +1439,8 @@ const manualApiKeyEntries = computed(() =>
 )
 
 const apiKeyRouteTypeOptions = [
-  { label: 'GPT / Codex', value: 'codex' },
+  { label: 'GPT Chat', value: 'gpt' },
+  { label: 'Codex Responses', value: 'codex' },
   { label: 'Claude', value: 'claude' },
   { label: 'Gemini', value: 'gemini' },
 ]

@@ -404,7 +404,7 @@ export interface RuntimeDatabaseBackupNowResult extends RuntimeDatabaseBackupsRe
 
 export interface ModelListItem {
   id: string
-  route_type: 'claude' | 'codex' | 'gemini' | string
+  route_type: 'claude' | 'gpt' | 'codex' | 'gemini' | string
   mode: 'chat' | 'image' | string
   base_url: string
   key_fingerprint: string
@@ -680,7 +680,7 @@ export interface GatewayRoute {
   key_name: string
   key_fingerprint: string
   key_source: string
-  route_type: 'claude' | 'codex' | 'gemini'
+  route_type: 'claude' | 'gpt' | 'codex' | 'gemini'
   route_type_manual?: boolean
   model_probe_status?: 'default' | 'key_metadata' | 'success' | 'failed' | ''
   model_probe_message?: string
@@ -733,7 +733,7 @@ export interface GatewayRouteProbeResult {
 }
 
 export interface GatewayRouteUpdatePayload {
-  route_type: 'claude' | 'codex' | 'gemini'
+  route_type: 'claude' | 'gpt' | 'codex' | 'gemini'
   supported_models?: string[]
   manual_request_base_urls?: string[]
 }
@@ -802,7 +802,7 @@ export interface GatewayActiveRequest {
   route_strategy: string
   attempt_index: number
   is_stream: boolean
-  route_type: 'claude' | 'codex' | 'gemini' | string
+  route_type: 'claude' | 'gpt' | 'codex' | 'gemini' | string
   requested_model?: string
   actual_model?: string
   request_base_url: string

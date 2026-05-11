@@ -1122,7 +1122,7 @@ func SelectGatewayRoute(db *gorm.DB, group, routeType string, policy GatewayPoli
 		return GatewayRoute{}, err
 	}
 	policy = normalizePolicy(policy)
-	filtered, err := filterGatewayRoutesByRequest(routes, group, routeType, nil)
+	filtered, err := filterGatewayRoutesByRequest(routes, group, routeType, "", nil)
 	if err != nil {
 		return GatewayRoute{}, err
 	}
@@ -1149,7 +1149,7 @@ func ProxyGatewayRequestWithOptions(ctx context.Context, db *gorm.DB, r *http.Re
 		return GatewayProxyResult{}, err
 	}
 	if strings.TrimSpace(opts.RouteType) == "" {
-		opts.RouteType = InferGatewayRouteTypeFromRequestBody(body)
+		opts.RouteType = InferGatewayRouteTypeForRequest(targetPath, body)
 	}
 	if shouldServeGatewayModelProbe(r.Method, targetPath, opts.ModelProbeStrategy) {
 		return gatewayModelProbeResponse(db, opts, policy)
@@ -1164,7 +1164,7 @@ func ProxyGatewayRequestWithOptions(ctx context.Context, db *gorm.DB, r *http.Re
 	if err != nil {
 		return GatewayProxyResult{}, err
 	}
-	filtered, err := filterGatewayRoutesByRequest(routes, opts.Group, opts.RouteType, body)
+	filtered, err := filterGatewayRoutesByRequest(routes, opts.Group, opts.RouteType, targetPath, body)
 	if err != nil {
 		return GatewayProxyResult{}, err
 	}
@@ -2273,7 +2273,8 @@ func explicitSupportedModelsForSiteKey(_ models.Site, key siteKey) []string {
 }
 
 func defaultGatewaySupportedModels(routeType string) []string {
-	if normalizeRouteType(routeType) != "codex" {
+	rt := normalizeRouteType(routeType)
+	if rt != "codex" && rt != "gpt" {
 		return nil
 	}
 	return append([]string{}, defaultCodexGatewaySupportedModels...)
@@ -2578,14 +2579,16 @@ func inferRouteType(site models.Site) string {
 	if routeType := routeTypeFromAny(stringMapValue(site.PluginConfig, "api_format", "")); routeType != "" {
 		return routeType
 	}
-	return "codex"
+	return "gpt"
 }
 
 func normalizeRouteType(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "claude", "anthropic":
 		return "claude"
-	case "codex", "gpt", "openai", "chatgpt":
+	case "gpt", "openai", "chatgpt", "chat", "chat_completions", "chat-completions":
+		return "gpt"
+	case "codex", "response", "responses":
 		return "codex"
 	case "gemini", "google":
 		return "gemini"
@@ -2602,6 +2605,28 @@ func routeTypeFromAny(values ...any) string {
 		}
 	}
 	return ""
+}
+
+func InferGatewayRouteTypeFromTargetPath(targetPath string) string {
+	switch normalizeGatewayTargetPath(targetPath) {
+	case "chat/completions", "completions":
+		return "gpt"
+	case "responses":
+		return "codex"
+	default:
+		return ""
+	}
+}
+
+func InferGatewayRouteTypeForRequest(targetPath string, body []byte) string {
+	fromBody := InferGatewayRouteTypeFromRequestBody(body)
+	if fromBody == "claude" || fromBody == "gemini" || fromBody == "codex" {
+		return fromBody
+	}
+	if fromPath := InferGatewayRouteTypeFromTargetPath(targetPath); fromPath != "" {
+		return fromPath
+	}
+	return fromBody
 }
 
 func ExtractGatewayModelFromRequestBody(body []byte) string {
@@ -2624,10 +2649,11 @@ func InferGatewayRouteTypeFromRequestBody(body []byte) string {
 		return "gemini"
 	case strings.Contains(model, "gpt") ||
 		strings.Contains(model, "openai") ||
-		strings.Contains(model, "codex") ||
 		strings.HasPrefix(model, "o1") ||
 		strings.HasPrefix(model, "o3") ||
 		strings.HasPrefix(model, "o4"):
+		return "gpt"
+	case strings.Contains(model, "codex"):
 		return "codex"
 	default:
 		return ""
@@ -2642,14 +2668,14 @@ func normalizeModelID(value string) string {
 	return value
 }
 
-func filterGatewayRoutesByRequest(routes []GatewayRoute, group, routeType string, body []byte) (gatewayRouteFilterResult, error) {
+func filterGatewayRoutesByRequest(routes []GatewayRoute, group, routeType, targetPath string, body []byte) (gatewayRouteFilterResult, error) {
 	result := gatewayRouteFilterResult{
 		Candidates: routes,
 		RouteType:  normalizeRouteType(routeType),
 		Model:      normalizeModelID(ExtractGatewayModelFromRequestBody(body)),
 	}
-	if result.RouteType == "" && len(body) > 0 {
-		result.RouteType = InferGatewayRouteTypeFromRequestBody(body)
+	if result.RouteType == "" {
+		result.RouteType = InferGatewayRouteTypeForRequest(targetPath, body)
 	}
 	filtered := routes
 	if result.RouteType != "" {

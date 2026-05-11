@@ -154,6 +154,12 @@ function routeTypeLabel(routeType: string) {
   if (routeType === 'claude') {
     return 'Claude'
   }
+  if (routeType === 'gpt') {
+    return 'GPT Chat'
+  }
+  if (routeType === 'codex') {
+    return 'Codex Responses'
+  }
   if (routeType === 'gemini') {
     return 'Gemini'
   }

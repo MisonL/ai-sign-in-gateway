@@ -558,8 +558,13 @@ func (a *App) ChatTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	messages := buildChatCompletionMessages(payload)
+	path := "/chat/completions"
 	body := map[string]any{"model": payload.Model, "messages": messages, "temperature": 0.2}
-	result := openAIPost(r, payload.BaseURL, payload.APIKey, "/chat/completions", body, 30*time.Second, payload.RouteType)
+	if toolNormalizeRouteType(payload.RouteType) == "codex" {
+		path = "/responses"
+		body = map[string]any{"model": payload.Model, "input": chatMessagesToResponsesInput(messages), "temperature": 0.2}
+	}
+	result := openAIPost(r, payload.BaseURL, payload.APIKey, path, body, 30*time.Second, payload.RouteType)
 	output := ""
 	if result.data != nil {
 		output = extractChatOutput(result.data)
@@ -645,6 +650,34 @@ func buildChatCompletionMessages(payload schemas.ChatTestRequest) []map[string]a
 }
 
 func extractChatOutput(data map[string]any) string {
+	if text, ok := data["output_text"].(string); ok && strings.TrimSpace(text) != "" {
+		return text
+	}
+	if output, ok := data["output"].([]any); ok {
+		parts := []string{}
+		for _, item := range output {
+			obj, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			content, ok := obj["content"].([]any)
+			if !ok {
+				continue
+			}
+			for _, part := range content {
+				partObj, ok := part.(map[string]any)
+				if !ok {
+					continue
+				}
+				if text, ok := partObj["text"].(string); ok && strings.TrimSpace(text) != "" {
+					parts = append(parts, text)
+				}
+			}
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, "\n")
+		}
+	}
 	if choices, ok := data["choices"].([]any); ok && len(choices) > 0 {
 		if choice, ok := choices[0].(map[string]any); ok {
 			if message, ok := choice["message"].(map[string]any); ok {
@@ -666,6 +699,21 @@ func extractChatOutput(data map[string]any) string {
 		}
 	}
 	return ""
+}
+
+func chatMessagesToResponsesInput(messages []map[string]any) []map[string]any {
+	out := make([]map[string]any, 0, len(messages))
+	for _, message := range messages {
+		role := strings.TrimSpace(fmt.Sprint(message["role"]))
+		if role != "assistant" && role != "system" && role != "user" {
+			role = "user"
+		}
+		out = append(out, map[string]any{
+			"role":    role,
+			"content": message["content"],
+		})
+	}
+	return out
 }
 
 func extractImageOutputs(data map[string]any) ([]schemas.ChatTestImageOutput, string) {
@@ -1064,7 +1112,7 @@ func toolInferRouteType(site models.Site) string {
 	return firstNonEmpty(
 		toolNormalizeRouteType(jsonMapString(site.PluginConfig, "gateway_route_type")),
 		toolNormalizeRouteType(jsonMapString(site.PluginConfig, "api_format")),
-		"codex",
+		"gpt",
 	)
 }
 
@@ -1074,7 +1122,9 @@ func toolNormalizeRouteType(value string) string {
 		return "claude"
 	case "gemini", "google":
 		return "gemini"
-	case "codex", "gpt", "openai", "chatgpt":
+	case "gpt", "openai", "chatgpt", "chat", "chat_completions", "chat-completions":
+		return "gpt"
+	case "codex", "response", "responses":
 		return "codex"
 	default:
 		return ""

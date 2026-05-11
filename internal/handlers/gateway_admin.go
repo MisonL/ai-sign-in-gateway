@@ -1112,7 +1112,7 @@ func (a *App) UpdateGatewayRouteType(w http.ResponseWriter, r *http.Request) {
 	}
 	routeType := normalizeGatewayRouteType(payload.RouteType)
 	if routeType == "" {
-		writeError(w, http.StatusBadRequest, "route_type 必须是 claude/codex(gpt)/gemini")
+		writeError(w, http.StatusBadRequest, "route_type 必须是 claude/gpt/codex/gemini")
 		return
 	}
 	var state models.GatewayRouteState
@@ -1481,7 +1481,9 @@ func normalizeGatewayRouteType(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "claude", "anthropic":
 		return "claude"
-	case "codex", "gpt", "openai", "chatgpt":
+	case "gpt", "openai", "chatgpt", "chat", "chat_completions", "chat-completions":
+		return "gpt"
+	case "codex", "response", "responses":
 		return "codex"
 	case "gemini", "google":
 		return "gemini"

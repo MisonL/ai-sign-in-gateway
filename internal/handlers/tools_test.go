@@ -309,6 +309,62 @@ func TestChatImageGenerationMatchesGPTImageContract(t *testing.T) {
 	}
 }
 
+func TestChatTestCodexRouteUsesResponsesContract(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s", r.Method)
+		}
+		if r.URL.Path != "/v1/responses" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer codex-key" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode upstream body: %v", err)
+		}
+		if payload["model"] != "gpt-5.5" {
+			t.Fatalf("model = %#v", payload["model"])
+		}
+		if _, ok := payload["messages"]; ok {
+			t.Fatalf("responses payload contains chat messages: %#v", payload)
+		}
+		if _, ok := payload["input"]; !ok {
+			t.Fatalf("responses payload missing input: %#v", payload)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"output_text":"response ok"}`))
+	}))
+	defer upstream.Close()
+
+	body, _ := json.Marshal(map[string]any{
+		"base_url":   upstream.URL,
+		"api_key":    "codex-key",
+		"route_type": "codex",
+		"model":      "gpt-5.5",
+		"mode":       "chat",
+		"prompt":     "ping",
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/tools/chat-test", bytes.NewReader(body))
+	(&App{}).ChatTest(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		OK     bool   `json:"ok"`
+		Output string `json:"output"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !response.OK || response.Output != "response ok" {
+		t.Fatalf("response = %+v body = %s", response, rec.Body.String())
+	}
+}
+
 func TestChatImageEditUsesRepeatedImageMultipartField(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -580,7 +636,7 @@ func TestToolModelCandidatesAllowSameKeyDifferentURLs(t *testing.T) {
 	for _, item := range response.Items {
 		seen[item.ID] = item
 	}
-	if seen["gpt-5.5"].RouteType != "codex" || seen["gpt-5.5"].BaseURL != gpt.URL {
+	if seen["gpt-5.5"].RouteType != "gpt" || seen["gpt-5.5"].BaseURL != gpt.URL {
 		t.Fatalf("gpt item = %+v", seen["gpt-5.5"])
 	}
 	if seen["claude-3-7-sonnet"].RouteType != "claude" || seen["claude-3-7-sonnet"].BaseURL != claude.URL {

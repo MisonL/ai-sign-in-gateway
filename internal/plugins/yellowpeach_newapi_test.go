@@ -312,6 +312,9 @@ func TestYellowPeachSyncsAPIKeysFromTokenEndpoints(t *testing.T) {
 	if apiKeys[0]["route_type"] != "claude" {
 		t.Fatalf("first route_type = %v", apiKeys[0]["route_type"])
 	}
+	if apiKeys[1]["route_type"] != "gpt" {
+		t.Fatalf("second route_type = %v", apiKeys[1]["route_type"])
+	}
 }
 
 func TestYellowPeachRegisterCreatesAPIKeyWhenNoneExist(t *testing.T) {

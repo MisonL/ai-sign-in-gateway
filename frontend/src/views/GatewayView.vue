@@ -259,13 +259,15 @@ const priorityDialogColumns = [
 
 const routeTypeOptions: Array<{ label: string; value: GatewayRoute['route_type'] }> = [
   { label: 'Claude', value: 'claude' },
-  { label: 'GPT', value: 'codex' },
+  { label: 'GPT Chat', value: 'gpt' },
+  { label: 'Codex Responses', value: 'codex' },
   { label: 'Gemini', value: 'gemini' },
 ]
 
 const routeTypeFilterOptions: Array<{ label: string; value: GatewayRoute['route_type'] }> = [
   { label: 'Claude', value: 'claude' },
-  { label: 'GPT', value: 'codex' },
+  { label: 'GPT Chat', value: 'gpt' },
+  { label: 'Codex Responses', value: 'codex' },
   { label: 'Gemini', value: 'gemini' },
 ]
 
@@ -1564,7 +1566,7 @@ async function handleRouteTypeChange(route: GatewayRoute, routeType: GatewayRout
 }
 
 async function handleRouteTypeSelect(route: GatewayRoute, value: unknown) {
-  if (value !== 'claude' && value !== 'codex' && value !== 'gemini') {
+  if (value !== 'claude' && value !== 'gpt' && value !== 'codex' && value !== 'gemini') {
     return
   }
   await handleRouteTypeChange(route, value)
@@ -2799,14 +2801,15 @@ onBeforeUnmount(() => {
                 <a-select
                   v-model:value="addUpstreamForm.api_format"
                   :options="[
-                    { label: 'OpenAI / Codex', value: 'openai' },
+                    { label: 'OpenAI / GPT Chat', value: 'openai' },
+                    { label: 'Codex / Responses', value: 'codex' },
                     { label: 'Anthropic / Claude', value: 'anthropic' },
                     { label: 'Gemini', value: 'gemini' },
                     { label: '通用 (general)', value: 'general' },
                   ]"
                 />
                 <small class="field-help">
-                  决定路由分类（claude / codex / gemini）。
+                  决定路由分类（claude / gpt / codex / gemini）。
                 </small>
               </a-form-item>
             </a-col>
@@ -4164,6 +4167,11 @@ onBeforeUnmount(() => {
   color: #c2410c !important;
 }
 
+.route-type-select--gpt :deep(.ant-select-selector) {
+  background: #ecfdf5 !important;
+  color: #047857 !important;
+}
+
 .route-type-select--codex :deep(.ant-select-selector) {
   background: #eff6ff !important;
   color: #1d4ed8 !important;
@@ -4188,6 +4196,11 @@ onBeforeUnmount(() => {
 .route-type-option--claude {
   background: #fff7ed;
   color: #c2410c;
+}
+
+.route-type-option--gpt {
+  background: #ecfdf5;
+  color: #047857;
 }
 
 .route-type-option--codex {

@@ -887,7 +887,7 @@ func routeTypeFromAPIKeyItem(item map[string]any, site models.Site) string {
 			return routeType
 		}
 	}
-	return "codex"
+	return "gpt"
 }
 
 func apiKeySupportedModelsFromItem(item map[string]any) []string {
@@ -960,8 +960,11 @@ func normalizeAPIKeyRouteType(value string) string {
 	if strings.Contains(value, "gemini") || strings.Contains(value, "google") {
 		return "gemini"
 	}
-	if strings.Contains(value, "codex") || strings.Contains(value, "openai") || strings.Contains(value, "gpt") || strings.Contains(value, "chatgpt") {
+	if strings.Contains(value, "codex") || strings.Contains(value, "response") {
 		return "codex"
+	}
+	if strings.Contains(value, "openai") || strings.Contains(value, "gpt") || strings.Contains(value, "chatgpt") || strings.Contains(value, "chat") {
+		return "gpt"
 	}
 	return ""
 }

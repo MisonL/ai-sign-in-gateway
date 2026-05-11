@@ -21,7 +21,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func expectedDefaultCodexSupportedModelsCSV() string {
+func expectedDefaultOpenAISupportedModelsCSV() string {
 	return strings.Join([]string{
 		"gpt-5.3-codex",
 		"gpt-5.3-codex-spark",
@@ -1087,11 +1087,101 @@ func TestGatewayRouteTypeUsesPerAPIKeyMetadata(t *testing.T) {
 	for _, state := range states {
 		byName[state.KeyName] = state.RouteType
 	}
-	if byName["gpt-plus"] != "codex" {
+	if byName["gpt-plus"] != "gpt" {
 		t.Fatalf("gpt-plus route type = %q", byName["gpt-plus"])
 	}
 	if byName["claude-plus"] != "claude" {
 		t.Fatalf("claude-plus route type = %q", byName["claude-plus"])
+	}
+}
+
+func TestGatewayGPTChatAndCodexResponsesUseDifferentAPIKeyRoutes(t *testing.T) {
+	gptHits := 0
+	gpt := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.Error(w, "unexpected gpt path "+r.URL.Path, http.StatusBadGateway)
+			return
+		}
+		gptHits++
+		if got := r.Header.Get("Authorization"); got != "Bearer shared-key" {
+			t.Fatalf("gpt Authorization = %q", got)
+		}
+		_, _ = w.Write([]byte(`{"provider":"gpt-chat"}`))
+	}))
+	defer gpt.Close()
+
+	codexHits := 0
+	codex := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			http.Error(w, "unexpected codex path "+r.URL.Path, http.StatusBadGateway)
+			return
+		}
+		codexHits++
+		if got := r.Header.Get("Authorization"); got != "Bearer shared-key" {
+			t.Fatalf("codex Authorization = %q", got)
+		}
+		_, _ = w.Write([]byte(`{"provider":"codex-response"}`))
+	}))
+	defer codex.Close()
+
+	db := newGatewayTestDB(t)
+	site := models.Site{
+		Name:      "gpt-codex-request-modes",
+		BaseURL:   "https://panel.example",
+		PluginKey: "api-supplier",
+		IsEnabled: true,
+		Credentials: models.JSONMap{
+			"api_keys": []any{
+				map[string]any{
+					"name":              "shared-gpt-chat",
+					"key":               "shared-key",
+					"status":            "active",
+					"route_type":        "gpt",
+					"supported_models":  []any{"gpt-5.5"},
+					"request_base_urls": []any{gpt.URL},
+				},
+				map[string]any{
+					"name":              "shared-codex-response",
+					"key":               "shared-key",
+					"status":            "active",
+					"route_type":        "codex",
+					"supported_models":  []any{"gpt-5.5"},
+					"request_base_urls": []any{codex.URL},
+				},
+			},
+		},
+		PluginConfig: models.JSONMap{"api_format": "openai"},
+	}
+	if err := db.Create(&site).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count, err := SyncGatewayRoutes(db); err != nil || count != 2 {
+		t.Fatalf("SyncGatewayRoutes count=%d err=%v", count, err)
+	}
+
+	chatBody := []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"ping"}]}`)
+	chatReq := httptest.NewRequest(http.MethodPost, "/api/gateway/v1/chat/completions", bytes.NewReader(chatBody))
+	chatReq.Header.Set("Content-Type", "application/json")
+	chatResult, err := ProxyGatewayRequest(chatReq.Context(), db, chatReq, "chat/completions", "", "", GatewayPolicy{RequestTimeout: 5, MaxAttempts: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(chatResult.Body), `"provider":"gpt-chat"`) {
+		t.Fatalf("chat body = %s", chatResult.Body)
+	}
+
+	responseBody := []byte(`{"model":"gpt-5.5","input":"ping"}`)
+	responseReq := httptest.NewRequest(http.MethodPost, "/api/gateway/v1/responses", bytes.NewReader(responseBody))
+	responseReq.Header.Set("Content-Type", "application/json")
+	responseResult, err := ProxyGatewayRequest(responseReq.Context(), db, responseReq, "responses", "", "", GatewayPolicy{RequestTimeout: 5, MaxAttempts: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(responseResult.Body), `"provider":"codex-response"`) {
+		t.Fatalf("response body = %s", responseResult.Body)
+	}
+	if gptHits != 1 || codexHits != 1 {
+		t.Fatalf("hits gpt=%d codex=%d", gptHits, codexHits)
 	}
 }
 
@@ -1609,7 +1699,7 @@ func TestGatewaySupportedModelsIgnoreSiteLevelManualConfig(t *testing.T) {
 	if err := db.First(&state).Error; err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(GatewayRouteSupportedModels(state), ","); got != expectedDefaultCodexSupportedModelsCSV() {
+	if got := strings.Join(GatewayRouteSupportedModels(state), ","); got != expectedDefaultOpenAISupportedModelsCSV() {
 		t.Fatalf("supported models = %q", got)
 	}
 }
@@ -1722,9 +1812,9 @@ func TestGatewayProxyRewritesImageEditPathFromSiteConfig(t *testing.T) {
 	}
 }
 
-func TestGatewaySupportedModelsDefaultForCodexRoutes(t *testing.T) {
+func TestGatewaySupportedModelsDefaultForOpenAIRoutes(t *testing.T) {
 	db := newGatewayTestDB(t)
-	createTypedGatewaySite(t, db, "codex-default", "https://codex.example", "codex-key", "openai")
+	createTypedGatewaySite(t, db, "gpt-default", "https://gpt.example", "gpt-key", "openai")
 	if count, err := SyncGatewayRoutes(db); err != nil || count != 1 {
 		t.Fatalf("SyncGatewayRoutes count=%d err=%v", count, err)
 	}
@@ -1733,8 +1823,8 @@ func TestGatewaySupportedModelsDefaultForCodexRoutes(t *testing.T) {
 	if err := db.First(&state).Error; err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(GatewayRouteSupportedModels(state), ","); got != expectedDefaultCodexSupportedModelsCSV() {
-		t.Fatalf("default codex supported models = %q", got)
+	if got := strings.Join(GatewayRouteSupportedModels(state), ","); got != expectedDefaultOpenAISupportedModelsCSV() {
+		t.Fatalf("default OpenAI supported models = %q", got)
 	}
 }
 
@@ -1779,7 +1869,7 @@ func TestGatewayProbeFailureKeepsPreviousSupportedModels(t *testing.T) {
 	}
 }
 
-func TestGatewayProbeEmptyModelsDefaultsCodexSupportedModels(t *testing.T) {
+func TestGatewayProbeEmptyModelsDefaultsOpenAISupportedModels(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/models" {
 			t.Fatalf("unexpected path %s", r.URL.Path)
@@ -1811,7 +1901,7 @@ func TestGatewayProbeEmptyModelsDefaultsCodexSupportedModels(t *testing.T) {
 	if !result.OK {
 		t.Fatalf("expected empty model probe to use defaults: %s", result.Message)
 	}
-	if got := strings.Join(result.Models, ","); got != expectedDefaultCodexSupportedModelsCSV() {
+	if got := strings.Join(result.Models, ","); got != expectedDefaultOpenAISupportedModelsCSV() {
 		t.Fatalf("result models = %q", got)
 	}
 
@@ -1819,7 +1909,7 @@ func TestGatewayProbeEmptyModelsDefaultsCodexSupportedModels(t *testing.T) {
 	if err := db.First(&updated, state.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(GatewayRouteSupportedModels(updated), ","); got != expectedDefaultCodexSupportedModelsCSV() {
+	if got := strings.Join(GatewayRouteSupportedModels(updated), ","); got != expectedDefaultOpenAISupportedModelsCSV() {
 		t.Fatalf("stored supported models = %q", got)
 	}
 	if updated.ModelProbeStatus != "success" {
@@ -1884,7 +1974,7 @@ func TestGatewaySupportedModelsDefaultDoesNotRefillEditedEmptyState(t *testing.T
 	}
 }
 
-func TestGatewaySupportedModelsDefaultSkipsNonCodexRoutes(t *testing.T) {
+func TestGatewaySupportedModelsDefaultSkipsNonOpenAIRoutes(t *testing.T) {
 	db := newGatewayTestDB(t)
 	createTypedGatewaySite(t, db, "claude-default", "https://claude.example", "claude-key", "anthropic")
 	if _, err := SyncGatewayRoutes(db); err != nil {
@@ -2320,7 +2410,7 @@ func TestInferGatewayRouteTypeFromRequestBody(t *testing.T) {
 		want string
 	}{
 		{name: "claude", body: `{"model":"claude-3-7-sonnet"}`, want: "claude"},
-		{name: "gpt", body: `{"model":"gpt-4o-mini"}`, want: "codex"},
+		{name: "gpt", body: `{"model":"gpt-4o-mini"}`, want: "gpt"},
 		{name: "gemini", body: `{"model":"gemini-2.5-pro"}`, want: "gemini"},
 		{name: "unknown", body: `{"model":"deepseek-chat"}`, want: ""},
 	}
@@ -2566,7 +2656,7 @@ func TestGatewayModelFilteringMatchesDatedCodexModelVersions(t *testing.T) {
 	}
 }
 
-func TestGatewayModelFilteringUsesDefaultCodexModelsWhenUnspecified(t *testing.T) {
+func TestGatewayModelFilteringUsesDefaultOpenAIModelsWhenUnspecified(t *testing.T) {
 	ResetGatewayCountersForTest()
 
 	declaredHits := 0
