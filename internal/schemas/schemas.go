@@ -504,6 +504,7 @@ type GatewaySettingsUpdate = GatewaySettingsResponse
 
 type GatewayRouteStateUpdateRequest struct {
 	RouteType             string    `json:"route_type"`
+	RoutePath             *string   `json:"route_path"`
 	SupportedModels       *[]string `json:"supported_models"`
 	ManualRequestBaseURLs *[]string `json:"manual_request_base_urls"`
 }
@@ -534,6 +535,8 @@ type GatewayRouteStateResponse struct {
 	KeySource           string     `json:"key_source"`
 	RouteType           string     `json:"route_type"`
 	RouteTypeManual     bool       `json:"route_type_manual"`
+	RoutePath           string     `json:"route_path"`
+	RoutePathManual     bool       `json:"route_path_manual"`
 	SupportedModels     []string   `json:"supported_models"`
 	ModelProbeStatus    string     `json:"model_probe_status"`
 	ModelProbeMessage   string     `json:"model_probe_message"`

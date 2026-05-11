@@ -12,6 +12,7 @@ import { useRoute, useRouter } from 'vue-router'
 import sidebarGatewayArtwork from '../assets/design/sidebar-gateway.png'
 import sidebarSkylineArtwork from '../assets/design/sidebar-skyline.png'
 import { getGatewayOverview, getMe, logout } from '../api'
+import { onGatewayOverviewChanged } from '../gatewayOverviewEvents'
 import GroupManagerButton from './GroupManagerButton.vue'
 import type { AdminUser, GatewayOverview } from '../types'
 
@@ -21,6 +22,7 @@ const admin = ref<AdminUser | null>(null)
 const collapsed = ref(false)
 const gatewayOverview = ref<GatewayOverview | null>(null)
 let kpiTimer: number | null = null
+let stopGatewayOverviewListener: (() => void) | null = null
 
 const enabledFeatureKeys = new Set([
   'overview',
@@ -72,9 +74,21 @@ const headerKpis = computed(() => {
     },
     {
       key: 'concurrency',
-      label: '并发',
+      label: '当前并发',
       value: String(ov.active_concurrency ?? 0),
       tone: 'neutral' as const,
+    },
+    {
+      key: 'today-peak-concurrency',
+      label: '今日峰值',
+      value: String(ov.max_concurrency_today ?? 0),
+      tone: 'warning' as const,
+    },
+    {
+      key: 'all-time-peak-concurrency',
+      label: '历史峰值',
+      value: String(ov.max_concurrency_all_time ?? 0),
+      tone: 'info' as const,
     },
   ]
 })
@@ -108,10 +122,13 @@ function signOut() {
 onMounted(async () => {
   await loadAdmin()
   await loadGatewayKpi()
+  stopGatewayOverviewListener = onGatewayOverviewChanged(loadGatewayKpi)
   kpiTimer = window.setInterval(loadGatewayKpi, 30_000)
 })
 
 onBeforeUnmount(() => {
+  stopGatewayOverviewListener?.()
+  stopGatewayOverviewListener = null
   if (kpiTimer !== null) {
     window.clearInterval(kpiTimer)
     kpiTimer = null
@@ -224,7 +241,12 @@ onBeforeUnmount(() => {
   flex-wrap: nowrap;
   min-width: 0;
   max-width: 100%;
-  overflow: hidden;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.app-header__kpis::-webkit-scrollbar {
+  display: none;
 }
 
 .header-kpi {
@@ -234,6 +256,7 @@ onBeforeUnmount(() => {
   border-radius: var(--radius-control);
   border: 1px solid transparent;
   min-width: 96px;
+  flex: 0 0 auto;
   position: relative;
   overflow: hidden;
   transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
@@ -280,6 +303,12 @@ onBeforeUnmount(() => {
   background: linear-gradient(135deg, #e1f5e7 0%, #c9ecd4 100%);
   border-color: rgba(40, 154, 70, 0.32);
   color: #1f7a37;
+}
+
+.header-kpi--warning {
+  background: linear-gradient(135deg, #fff4d8 0%, #ffe3a6 100%);
+  border-color: rgba(217, 142, 0, 0.32);
+  color: #9a5b00;
 }
 
 .header-kpi--neutral {

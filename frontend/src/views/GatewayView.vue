@@ -30,6 +30,7 @@ import { useDebouncedTask } from '../composables/useDebouncedTask'
 import { useTableScrollHeights } from '../composables/useTableScrollHeights'
 import { balanceTone, formatBalance, formatGroupNames, normalizeBalanceUnit, normalizeGroupNames, parseGroupNames } from '../format'
 import { applyGatewayActiveConcurrency } from '../gatewayRouteConcurrency'
+import { notifyGatewayOverviewChanged } from '../gatewayOverviewEvents'
 import { useToast } from '../toast'
 import type { BalanceProbeResult, GatewayActiveRequest, GatewayLog, GatewayOverview, GatewayRoute, GatewayRouteDiagnosis, GatewayRouteProbeResult, GatewaySettingsData, GatewayStrategyStat, GatewayUsage, GatewayUsageRoute, SiteGroup, SiteSummary } from '../types'
 
@@ -59,7 +60,7 @@ const priorityDialogOpen = ref(false)
 const priorityDialogLoading = ref(false)
 const priorityRoute = ref<GatewayRoute | null>(null)
 const priorityInsertIndex = ref<number | undefined>(undefined)
-type ApiFormatOption = 'openai' | 'anthropic' | 'gemini' | 'general'
+type ApiFormatOption = 'codex' | 'openai' | 'anthropic' | 'gemini' | 'general'
 const addUpstreamForm = reactive<{
   name: string
   base_url: string
@@ -72,7 +73,7 @@ const addUpstreamForm = reactive<{
   name: '',
   base_url: '',
   api_key: '',
-  api_format: 'openai',
+  api_format: 'codex',
   group_name: '',
   preferred_model: '',
   supported_models: [],
@@ -87,7 +88,7 @@ function resetAddUpstreamForm() {
   addUpstreamForm.name = ''
   addUpstreamForm.base_url = ''
   addUpstreamForm.api_key = ''
-  addUpstreamForm.api_format = 'openai'
+  addUpstreamForm.api_format = 'codex'
   addUpstreamForm.group_name = ''
   addUpstreamGroupNames.value = []
   addUpstreamForm.preferred_model = ''
@@ -155,7 +156,7 @@ const routeLogsLoading = ref(false)
 const routeDiagnosisLoading = ref(false)
 const routeLogsRoute = ref<GatewayRoute | null>(null)
 const routeDiagnosisOpen = ref(false)
-const includeDisabled = ref(true)
+const includeDisabled = ref(false)
 let autoRefreshTimer: number | null = null
 let activeRequestRefreshTimer: number | null = null
 let lastAutoRefreshAt = 0
@@ -240,6 +241,7 @@ const maskedGatewayApiKey = computed(() => {
 const routeColumns = [
   { title: '路由', key: 'route', width: 240, sorter: (a: GatewayRoute, b: GatewayRoute) => loadRouteLabel(a).localeCompare(loadRouteLabel(b), 'zh-CN') },
   { title: '类型', key: 'type', width: 130, sorter: (a: GatewayRoute, b: GatewayRoute) => a.route_type.localeCompare(b.route_type, 'zh-CN') },
+  { title: '请求格式', key: 'path', width: 178, sorter: (a: GatewayRoute, b: GatewayRoute) => routePathLabel(a.route_path).localeCompare(routePathLabel(b.route_path), 'zh-CN') },
   { title: '余额', key: 'balance', width: 160, sorter: (a: GatewayRoute, b: GatewayRoute) => (a.last_balance ?? -Infinity) - (b.last_balance ?? -Infinity) },
   { title: '分组', key: 'group', width: 110, sorter: (a: GatewayRoute, b: GatewayRoute) => String(a.group_name ?? '').localeCompare(String(b.group_name ?? ''), 'zh-CN') },
   { title: '优先级', key: 'priority', width: 90, sorter: (a: GatewayRoute, b: GatewayRoute) => a.route_priority - b.route_priority },
@@ -260,17 +262,23 @@ const priorityDialogColumns = [
 const routeTypeOptions: Array<{ label: string; value: GatewayRoute['route_type'] }> = [
   { label: '通用', value: 'general' },
   { label: 'Claude', value: 'claude' },
-  { label: 'GPT Chat', value: 'gpt' },
-  { label: 'Codex Responses', value: 'codex' },
+  { label: 'GptChat', value: 'gpt' },
+  { label: 'Codex', value: 'codex' },
   { label: 'Gemini', value: 'gemini' },
 ]
 
 const routeTypeFilterOptions: Array<{ label: string; value: GatewayRoute['route_type'] }> = [
   { label: '通用', value: 'general' },
   { label: 'Claude', value: 'claude' },
-  { label: 'GPT Chat', value: 'gpt' },
-  { label: 'Codex Responses', value: 'codex' },
+  { label: 'GptChat', value: 'gpt' },
+  { label: 'Codex', value: 'codex' },
   { label: 'Gemini', value: 'gemini' },
+]
+
+const routePathOptions: Array<{ label: string; value: NonNullable<GatewayRoute['route_path']> }> = [
+  { label: '跟随客户端', value: '' },
+  { label: '/v1/chat/completions', value: 'chat/completions' },
+  { label: '/v1/responses', value: 'responses' },
 ]
 
 const issueStateOptions: Array<{ label: string; value: 'with_error' | 'without_error' }> = [
@@ -280,9 +288,10 @@ const issueStateOptions: Array<{ label: string; value: 'with_error' | 'without_e
 
 const logColumns = [
   { title: '时间', key: 'created_at', width: 180, sorter: (a: GatewayLog, b: GatewayLog) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime() },
-  { title: '请求', key: 'request', width: 210, sorter: (a: GatewayLog, b: GatewayLog) => `${a.method} ${a.target_path}`.localeCompare(`${b.method} ${b.target_path}`, 'zh-CN') },
+  { title: '请求', key: 'request', width: 360, sorter: (a: GatewayLog, b: GatewayLog) => logRequestLabel(a).localeCompare(logRequestLabel(b), 'zh-CN') },
   { title: '路由', key: 'route', width: 300, sorter: (a: GatewayLog, b: GatewayLog) => logRouteLabel(a).localeCompare(logRouteLabel(b), 'zh-CN') },
   { title: '模型', key: 'model', width: 260, sorter: (a: GatewayLog, b: GatewayLog) => logModelMeta(a).localeCompare(logModelMeta(b), 'zh-CN') },
+  { title: 'UA', key: 'user_agent', width: 240, sorter: (a: GatewayLog, b: GatewayLog) => logUserAgent(a).localeCompare(logUserAgent(b), 'zh-CN') },
   { title: '结果', key: 'status', width: 120, sorter: (a: GatewayLog, b: GatewayLog) => Number(a.success) - Number(b.success) },
   { title: '延迟', key: 'latency', width: 100, sorter: (a: GatewayLog, b: GatewayLog) => (a.latency_ms ?? Infinity) - (b.latency_ms ?? Infinity) },
   { title: '尝试', key: 'attempt', width: 90, sorter: (a: GatewayLog, b: GatewayLog) => a.attempt_index - b.attempt_index },
@@ -396,9 +405,19 @@ const metricCards = computed<Array<{
       tone: 'success',
     },
     {
-      title: '并发数',
+      title: '当前并发',
       value: formatNumber(ov.active_concurrency),
       tone: 'neutral',
+    },
+    {
+      title: '今日最高并发',
+      value: formatNumber(ov.max_concurrency_today),
+      tone: 'warning',
+    },
+    {
+      title: '历史最高并发',
+      value: formatNumber(ov.max_concurrency_all_time),
+      tone: 'info',
     },
     {
       title: '24H 模型费用',
@@ -666,6 +685,9 @@ function routeIssueLabels(route: GatewayRoute) {
   if (route.has_api_key === false) {
     labels.push('缺少 API Key')
   }
+  if (!route.is_enabled && route.is_enabled_manual) {
+    labels.push('手动禁用')
+  }
   return labels
 }
 
@@ -674,6 +696,7 @@ function routeDetailItems(route: GatewayRoute) {
     { label: '快照', value: routeSnapshotLabel(route) || '未记录' },
     { label: '当前出口', value: route.request_base_url || route.base_url || route.site_base_url_snapshot || '未记录' },
     { label: '出口候选', value: routeRequestBasePreview(route) },
+    { label: '请求格式', value: routePathLabel(route.route_path) },
     { label: '余额接口', value: route.balance_probe_url || '自动探测' },
     { label: '支持模型', value: supportedModelsPreview(route.supported_models, 3) },
     { label: '站点', value: `#${route.site_id}` },
@@ -683,6 +706,14 @@ function routeDetailItems(route: GatewayRoute) {
 
 function routeTypeLabel(routeType: string) {
   return routeTypeOptions.find((item) => item.value === routeType)?.label ?? routeType
+}
+
+function normalizeRoutePath(value: unknown): NonNullable<GatewayRoute['route_path']> {
+  return value === 'chat/completions' || value === 'responses' ? value : ''
+}
+
+function routePathLabel(routePath: unknown) {
+  return routePathOptions.find((item) => item.value === normalizeRoutePath(routePath))?.label ?? '跟随客户端'
 }
 
 function activeRequestRouteTypeLabel(routeType: GatewayActiveRequest['route_type']) {
@@ -749,6 +780,7 @@ function normalizeGatewayRoute(route: GatewayRoute): GatewayRoute {
   return {
     ...route,
     balance_unit: balanceUnit,
+    route_path: normalizeRoutePath(route.route_path),
     balance_display: route.balance_display || formatBalance(route.last_balance, balanceUnit),
     package_unit: normalizeBalanceUnit(route.package_unit, ''),
     supported_models: normalizeModelList(route.supported_models),
@@ -837,6 +869,35 @@ function logModelMeta(log: GatewayLog) {
   return `请求 ${logRequestedModel(log)} · 命中 ${logActualModel(log)}`
 }
 
+function logRequestLabel(log: GatewayLog) {
+  return `${log.method} ${logRequestURL(log)}`
+}
+
+function logRequestURL(log: GatewayLog) {
+  return String(log.request_url || log.target_path || '/').trim()
+}
+
+function logUserAgent(log: GatewayLog) {
+  return String(log.user_agent || '').trim()
+}
+
+function activeRequestURL(item: GatewayActiveRequest) {
+  return String(item.request_url || item.target_path || '/').trim()
+}
+
+async function copyGatewayActivityUrl(value: string) {
+  const normalized = value.trim()
+  if (!normalized) {
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(normalized)
+    toast.success('请求 URL 已复制。')
+  } catch {
+    toast.error('复制失败，请手动复制。')
+  }
+}
+
 function activeRequestRouteLabel(item: GatewayActiveRequest) {
   const label = String(item.route_label ?? '').trim()
   if (label) {
@@ -885,7 +946,9 @@ const activeRouteFeed = computed(() =>
     requestedModelLabel: String(item.requested_model || '').trim() || '未声明',
     actualModelLabel: String(item.actual_model || item.requested_model || '').trim() || '待返回',
     groupLabel: formatGroupNames(item.group_name) || '未分组',
-    targetLabel: `${item.method} ${item.target_path || '/'}`,
+    methodLabel: item.method,
+    requestURL: activeRequestURL(item),
+    targetLabel: `${item.method} ${activeRequestURL(item)}`,
     strategyLabel: strategyLabel(item.route_strategy as GatewayStrategyStat['route_strategy']),
     primaryBadge: `并发 ${item.active_concurrency}`,
     primaryBadgeColor: 'processing',
@@ -910,7 +973,9 @@ const recentRouteFeed = computed(() =>
     requestedModelLabel: logRequestedModel(item),
     actualModelLabel: logActualModel(item),
     groupLabel: formatGroupNames(item.group_name) || '未分组',
-    targetLabel: `${item.method} ${item.target_path || '/'}`,
+    methodLabel: item.method,
+    requestURL: logRequestURL(item),
+    targetLabel: logRequestLabel(item),
     strategyLabel: strategyLabel(item.route_strategy as GatewayStrategyStat['route_strategy']),
     primaryBadge: item.success ? '成功' : '失败',
     primaryBadgeColor: item.success ? 'success' : 'error',
@@ -1039,6 +1104,7 @@ const filteredRoutes = computed(() => {
         route.key_name,
         route.route_type,
         routeTypeLabel(route.route_type),
+        routePathLabel(route.route_path),
         routeCircuitState(route),
         route.request_base_url,
         routeRequestBaseList(route).join(' '),
@@ -1069,6 +1135,8 @@ const filteredLogs = computed(() => {
         log.key_fingerprint,
         log.site_id,
         log.target_path,
+        log.request_url,
+        log.user_agent,
         log.method,
         log.failure_reason,
         log.route_strategy,
@@ -1093,6 +1161,8 @@ const filteredRouteLogs = computed(() => {
         log.key_fingerprint,
         log.site_id,
         log.target_path,
+        log.request_url,
+        log.user_agent,
         log.method,
         log.failure_reason,
         log.route_strategy,
@@ -1201,6 +1271,9 @@ async function probeRouteBalances(routeIds: number[], options: { silent?: boolea
     }
     try {
       overview.value = await getGatewayOverview()
+      if (success > 0) {
+        notifyGatewayOverviewChanged()
+      }
     } catch {
       // 余额已写入路由，概览统计刷新失败不阻断当前操作。
     }
@@ -1555,6 +1628,7 @@ async function handleRouteTypeChange(route: GatewayRoute, routeType: GatewayRout
   try {
     const updated = await updateGatewayRouteType(route.id, {
       route_type: routeType,
+      route_path: route.route_path ?? '',
       supported_models: route.supported_models ?? [],
     })
     const normalizedUpdated = normalizeGatewayRoute(updated)
@@ -1574,6 +1648,32 @@ async function handleRouteTypeSelect(route: GatewayRoute, value: unknown) {
   await handleRouteTypeChange(route, value)
 }
 
+async function handleRoutePathChange(route: GatewayRoute, routePath: NonNullable<GatewayRoute['route_path']>) {
+  const previousPath = normalizeRoutePath(route.route_path)
+  routes.value = routes.value.map((item) => (item.id === route.id ? normalizeGatewayRoute({ ...item, route_path: routePath }) : item))
+  try {
+    const updated = await updateGatewayRouteType(route.id, {
+      route_type: route.route_type,
+      route_path: routePath,
+      supported_models: route.supported_models ?? [],
+    })
+    const normalizedUpdated = normalizeGatewayRoute(updated)
+    routes.value = routes.value.map((item) => (item.id === route.id ? normalizedUpdated : item))
+    priorityRoutes.value = priorityRoutes.value.map((item) => (item.id === route.id ? normalizedUpdated : item))
+    toast.success(`${loadRouteLabel(route)} 请求格式已切换为 ${routePathLabel(routePath)}。`)
+  } catch (err) {
+    routes.value = routes.value.map((item) => (item.id === route.id ? normalizeGatewayRoute({ ...item, route_path: previousPath }) : item))
+    toast.error(err instanceof Error ? err.message : '请求格式切换失败')
+  }
+}
+
+async function handleRoutePathSelect(route: GatewayRoute, value: unknown) {
+  if (value !== '' && value !== 'chat/completions' && value !== 'responses') {
+    return
+  }
+  await handleRoutePathChange(route, value)
+}
+
 function openRouteModelsDialog(route: GatewayRoute) {
   routeModelsDialogRoute.value = route
   routeModelsDialogValue.value = [...normalizeModelList(route.supported_models)]
@@ -1590,6 +1690,7 @@ async function saveRouteModelsDialog() {
   try {
     const updated = normalizeGatewayRoute(await updateGatewayRouteType(route.id, {
       route_type: route.route_type,
+      route_path: route.route_path ?? '',
       supported_models: normalizeModelList(routeModelsDialogValue.value),
       manual_request_base_urls: normalizeStringList(routeModelsDialogRequestURLs.value),
     }))
@@ -1734,6 +1835,7 @@ async function handleProbeRouteBalance(route: GatewayRoute) {
     applyRouteBalanceResult(result)
     await refreshRouteSummaries()
     if (result.ok) {
+      notifyGatewayOverviewChanged()
       toast.success(`${loadRouteLabel(route)} 余额读取成功：${result.balance_display || formatBalance(result.remaining, result.unit)}（${result.base_url}）`)
     } else {
       toast.error(`${loadRouteLabel(route)} 余额读取失败：${result.message}`)
@@ -1775,6 +1877,7 @@ async function submitManualRouteBalanceProbe() {
     applyRouteBalanceResult(result)
     await refreshRouteSummaries()
     if (result.ok) {
+      notifyGatewayOverviewChanged()
       toast.success(`${loadRouteLabel(route)} 余额读取成功：${result.balance_display || formatBalance(result.remaining, result.unit)}。`)
       balanceProbeManualOpen.value = false
       balanceProbeManualRoute.value = null
@@ -2114,8 +2217,22 @@ onBeforeUnmount(() => {
                       <a-tag>{{ item.secondaryBadge }}</a-tag>
                       <a-tag v-if="item.is_stream" color="blue">流式</a-tag>
                     </a-space>
+                    <div class="gateway-active-feed__url-row">
+                      <a-tag class="gateway-active-feed__method">{{ item.methodLabel }}</a-tag>
+                      <a-tooltip :title="item.requestURL" placement="topLeft">
+                        <code class="gateway-active-feed__url">{{ item.requestURL }}</code>
+                      </a-tooltip>
+                      <a-button
+                        class="gateway-active-feed__copy"
+                        type="text"
+                        size="small"
+                        :title="`复制 ${item.methodLabel} 请求 URL`"
+                        @click="copyGatewayActivityUrl(item.requestURL)"
+                      >
+                        <template #icon><CopyOutlined /></template>
+                      </a-button>
+                    </div>
                     <div class="gateway-active-feed__request">
-                      <span>{{ item.targetLabel }}</span>
                       <span>请求 {{ item.requestedModelLabel }}</span>
                       <span>命中 {{ item.actualModelLabel }}</span>
                       <span v-if="item.routeTypeLabel">{{ item.routeTypeLabel }}</span>
@@ -2336,6 +2453,15 @@ onBeforeUnmount(() => {
                       <span :class="['route-type-option', `route-type-option--${value}`]">{{ label }}</span>
                     </template>
                   </a-select>
+                </template>
+                <template v-else-if="column.key === 'path'">
+                  <a-select
+                    :value="normalizeRoutePath(asRoute(record).route_path)"
+                    size="small"
+                    :options="routePathOptions"
+                    style="width: 148px"
+                    @change="(value) => handleRoutePathSelect(asRoute(record), value)"
+                  />
                 </template>
                 <template v-else-if="column.key === 'balance'">
                   <span :class="balanceClass(asRoute(record).last_balance)">
@@ -2803,15 +2929,15 @@ onBeforeUnmount(() => {
                 <a-select
                   v-model:value="addUpstreamForm.api_format"
                   :options="[
-                    { label: 'OpenAI / GPT Chat', value: 'openai' },
-                    { label: 'Codex / Responses', value: 'codex' },
+                    { label: 'Codex', value: 'codex' },
+                    { label: 'OpenAI / GPT', value: 'openai' },
                     { label: 'Anthropic / Claude', value: 'anthropic' },
                     { label: 'Gemini', value: 'gemini' },
                     { label: '通用 (general)', value: 'general' },
                   ]"
                 />
                 <small class="field-help">
-                  决定路由分类（claude / gpt / codex / gemini）。
+                  决定路由分类（claude / gpt / codex / gemini），请求路径在路由表“请求格式”列单独设置。
                 </small>
               </a-form-item>
             </a-col>
@@ -2917,14 +3043,16 @@ onBeforeUnmount(() => {
             :pagination="{ pageSize: gatewayTablePageSize }"
             :row-key="logRowKey"
             size="small"
-            :scroll="{ x: 1360, y: drawerTableY }"
+            :scroll="{ x: 1600, y: drawerTableY }"
           >
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'created_at'">
                 {{ formatTime(asLog(record).created_at) }}
               </template>
               <template v-else-if="column.key === 'request'">
-                <span>{{ asLog(record).method }} {{ asLog(record).target_path }}</span>
+                <a-tooltip :title="logRequestLabel(asLog(record))" placement="topLeft">
+                  <span class="table-ellipsis gateway-log-request-url">{{ logRequestLabel(asLog(record)) }}</span>
+                </a-tooltip>
                 <a-tag v-if="asLog(record).is_stream" color="processing" class="stream-tag">流式</a-tag>
               </template>
               <template v-else-if="column.key === 'route'">
@@ -2948,6 +3076,12 @@ onBeforeUnmount(() => {
                     <span class="table-cell-compact__title">{{ logActualModel(asLog(record)) }}</span>
                   </div>
                 </div>
+              </template>
+              <template v-else-if="column.key === 'user_agent'">
+                <a-tooltip v-if="logUserAgent(asLog(record))" placement="topLeft" :title="logUserAgent(asLog(record))">
+                  <span class="table-ellipsis gateway-log-user-agent">{{ logUserAgent(asLog(record)) }}</span>
+                </a-tooltip>
+                <span v-else>暂无</span>
               </template>
               <template v-else-if="column.key === 'status'">
                 <StatusPill :value="asLog(record).success ? 'success' : 'failed'" />
@@ -2989,14 +3123,16 @@ onBeforeUnmount(() => {
             :pagination="{ pageSize: gatewayTablePageSize }"
             :row-key="logRowKey"
             size="small"
-            :scroll="{ x: 1360, y: drawerTableY }"
+            :scroll="{ x: 1600, y: drawerTableY }"
           >
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'created_at'">
                 {{ formatTime(asLog(record).created_at) }}
               </template>
               <template v-else-if="column.key === 'request'">
-                <span>{{ asLog(record).method }} {{ asLog(record).target_path }}</span>
+                <a-tooltip :title="logRequestLabel(asLog(record))" placement="topLeft">
+                  <span class="table-ellipsis gateway-log-request-url">{{ logRequestLabel(asLog(record)) }}</span>
+                </a-tooltip>
                 <a-tag v-if="asLog(record).is_stream" color="processing" class="stream-tag">流式</a-tag>
               </template>
               <template v-else-if="column.key === 'route'">
@@ -3020,6 +3156,12 @@ onBeforeUnmount(() => {
                     <span class="table-cell-compact__title">{{ logActualModel(asLog(record)) }}</span>
                   </div>
                 </div>
+              </template>
+              <template v-else-if="column.key === 'user_agent'">
+                <a-tooltip v-if="logUserAgent(asLog(record))" placement="topLeft" :title="logUserAgent(asLog(record))">
+                  <span class="table-ellipsis gateway-log-user-agent">{{ logUserAgent(asLog(record)) }}</span>
+                </a-tooltip>
+                <span v-else>暂无</span>
               </template>
               <template v-else-if="column.key === 'status'">
                 <StatusPill :value="asLog(record).success ? 'success' : 'failed'" />
@@ -3631,11 +3773,55 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
+.gateway-active-feed__url-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.gateway-active-feed__method {
+  margin-inline-end: 0;
+}
+
+.gateway-active-feed__url {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  color: #334155;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gateway-active-feed__copy {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+}
+
 .gateway-active-feed__request span {
   color: #475569;
   font-family: 'IBM Plex Mono', monospace;
   font-size: 12px;
   font-weight: 600;
+}
+
+.gateway-log-request-url {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: bottom;
+}
+
+.gateway-log-user-agent {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  max-width: 100%;
 }
 
 .gateway-active-feed__meta span {

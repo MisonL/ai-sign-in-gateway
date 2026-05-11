@@ -93,6 +93,8 @@ type GatewayRouteState struct {
 	BalanceProbeURL       string     `gorm:"size:255;default:''" json:"balance_probe_url"`
 	RouteType             string     `gorm:"size:20;default:codex" json:"route_type"`
 	RouteTypeManual       bool       `gorm:"default:false" json:"route_type_manual"`
+	RoutePath             string     `gorm:"size:40;default:''" json:"route_path"`
+	RoutePathManual       bool       `gorm:"default:false" json:"route_path_manual"`
 	SupportedModels       string     `gorm:"type:text;default:'[]'" json:"supported_models"`
 	ModelProbeStatus      string     `gorm:"size:30;default:''" json:"model_probe_status"`
 	ModelProbeMessage     string     `gorm:"type:text;default:''" json:"model_probe_message"`
@@ -135,6 +137,8 @@ type GatewayRequestLog struct {
 	RequestedModel     string    `gorm:"size:120;default:'';index" json:"requested_model"`
 	ActualModel        string    `gorm:"size:120;default:'';index" json:"actual_model"`
 	TargetPath         string    `gorm:"size:255;default:''" json:"target_path"`
+	RequestURL         string    `gorm:"type:text;default:''" json:"request_url"`
+	UserAgent          string    `gorm:"type:text;default:''" json:"user_agent"`
 	Method             string    `gorm:"size:10;default:GET" json:"method"`
 	RouteStrategy      string    `gorm:"size:30;default:round_robin" json:"route_strategy"`
 	AttemptIndex       int       `gorm:"default:1" json:"attempt_index"`
@@ -151,6 +155,13 @@ type GatewayRequestLog struct {
 	IsStream           bool      `gorm:"default:false;index" json:"is_stream"`
 	CreatedAt          time.Time `gorm:"index" json:"created_at"`
 	Site               *Site     `json:"-"`
+}
+
+type GatewayConcurrencyPeak struct {
+	ID             uint      `gorm:"primaryKey" json:"id"`
+	Day            string    `gorm:"size:20;uniqueIndex;not null" json:"day"`
+	MaxConcurrency int       `gorm:"default:0" json:"max_concurrency"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 type SiteQueueTask struct {
@@ -217,6 +228,7 @@ func All() []any {
 		&SystemSetting{},
 		&GatewayRouteState{},
 		&GatewayRequestLog{},
+		&GatewayConcurrencyPeak{},
 		&SiteQueueTask{},
 		&ChatSession{},
 		&ChatMessage{},

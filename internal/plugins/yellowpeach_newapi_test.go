@@ -84,6 +84,71 @@ func TestYellowPeachStatusFallsBackToPasswordWhenAccessTokenUnauthorized(t *test
 	}
 }
 
+func TestYellowPeachStatusFallsBackToAccessTokenWhenCookieUnauthorized(t *testing.T) {
+	selfCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/user/self":
+			selfCalls++
+			if r.Header.Get("Cookie") == "session=stale-session" {
+				w.WriteHeader(http.StatusUnauthorized)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"success": false,
+					"message": "无权进行此操作，未登录且未提供 access token",
+				})
+				return
+			}
+			if got := r.Header.Get("Authorization"); got != "Bearer panel-token" {
+				t.Fatalf("Authorization after fallback = %q", got)
+			}
+			if got := r.Header.Get("New-Api-User"); got != "42" {
+				t.Fatalf("New-Api-User after fallback = %q", got)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"success": true,
+				"message": "ok",
+				"data": map[string]any{
+					"id":      42,
+					"email":   "xem8k5@example.com",
+					"balance": 12.5,
+				},
+			})
+		case "/api/token/":
+			if got := r.Header.Get("Authorization"); got != "Bearer panel-token" {
+				t.Fatalf("token Authorization = %q", got)
+			}
+			if got := r.Header.Get("New-Api-User"); got != "42" {
+				t.Fatalf("token New-Api-User = %q", got)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": map[string]any{"items": []map[string]any{}}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	plugin := NewYellowPeach()
+	status, err := plugin.FetchAccountStatus(context.Background(), models.Site{
+		BaseURL:   server.URL,
+		PluginKey: "yellowpeach-newapi",
+		Credentials: models.JSONMap{
+			"cookie":       "session=stale-session",
+			"access_token": "panel-token",
+			"user_id":      "42",
+		},
+	}, 5)
+	if err != nil {
+		t.Fatalf("FetchAccountStatus returned error: %v", err)
+	}
+	if selfCalls != 2 {
+		t.Fatalf("selfCalls = %d", selfCalls)
+	}
+	if !status.LoggedIn {
+		t.Fatalf("LoggedIn = false: %+v", status)
+	}
+}
+
 func TestYellowPeachCheckinFallsBackToPasswordWhenAccessTokenUnauthorized(t *testing.T) {
 	loginCount := 0
 	checkinCount := 0
@@ -596,6 +661,74 @@ func TestYellowPeachSyncAPIKeysDoesNotCreateAPIKeyWhenListEmpty(t *testing.T) {
 	}
 	if _, ok := result.UpdatedCredentials["api_keys"]; ok {
 		t.Fatalf("unexpected api_keys update: %#v", result.UpdatedCredentials["api_keys"])
+	}
+}
+
+func TestYellowPeachSyncAPIKeysExplainsAccessTokenRequiresUserID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if got := r.Header.Get("Authorization"); got != "Bearer panel-token" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		if got := r.Header.Get("New-Api-User"); got != "" {
+			t.Fatalf("New-Api-User = %q", got)
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": false,
+			"message": "无权进行此操作，未登录且未提供 access token",
+		})
+	}))
+	defer server.Close()
+
+	plugin := NewYellowPeach()
+	_, err := plugin.SyncAPIKeys(context.Background(), models.Site{
+		BaseURL:   server.URL,
+		PluginKey: "yellowpeach-newapi",
+		Credentials: models.JSONMap{
+			"access_token": "panel-token",
+		},
+	}, 5)
+	if err == nil {
+		t.Fatal("SyncAPIKeys returned nil error")
+	}
+	message := err.Error()
+	if !strings.Contains(message, "已提供系统访问令牌") || !strings.Contains(message, "user_id") {
+		t.Fatalf("error = %q", message)
+	}
+}
+
+func TestYellowPeachStatusExplainsAccessTokenRequiresUserID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if got := r.Header.Get("Authorization"); got != "Bearer panel-token" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		if got := r.Header.Get("New-Api-User"); got != "" {
+			t.Fatalf("New-Api-User = %q", got)
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": false,
+			"message": "无权进行此操作，未登录且未提供 access token",
+		})
+	}))
+	defer server.Close()
+
+	plugin := NewYellowPeach()
+	_, err := plugin.FetchAccountStatus(context.Background(), models.Site{
+		BaseURL:   server.URL,
+		PluginKey: "yellowpeach-newapi",
+		Credentials: models.JSONMap{
+			"access_token": "panel-token",
+		},
+	}, 5)
+	if err == nil {
+		t.Fatal("FetchAccountStatus returned nil error")
+	}
+	message := err.Error()
+	if !strings.Contains(message, "系统访问令牌") || !strings.Contains(message, "user_id") {
+		t.Fatalf("error = %q", message)
 	}
 }
 

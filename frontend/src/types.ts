@@ -560,6 +560,8 @@ export interface GatewayOverview {
   total_balance_display: string | null
   quantified_balance_site_count: number
   active_concurrency: number
+  max_concurrency_all_time: number
+  max_concurrency_today: number
   request_count_24h: number
   success_rate_24h: number
   avg_latency_ms_24h: number | null
@@ -682,6 +684,8 @@ export interface GatewayRoute {
   key_source: string
   route_type: 'general' | 'claude' | 'gpt' | 'codex' | 'gemini'
   route_type_manual?: boolean
+  route_path?: '' | 'chat/completions' | 'responses'
+  route_path_manual?: boolean
   model_probe_status?: 'default' | 'key_metadata' | 'success' | 'failed' | ''
   model_probe_message?: string
   model_probe_updated_at?: string | null
@@ -734,6 +738,7 @@ export interface GatewayRouteProbeResult {
 
 export interface GatewayRouteUpdatePayload {
   route_type: 'general' | 'claude' | 'gpt' | 'codex' | 'gemini'
+  route_path?: '' | 'chat/completions' | 'responses'
   supported_models?: string[]
   manual_request_base_urls?: string[]
 }
@@ -767,6 +772,8 @@ export interface GatewayLog {
   key_fingerprint: string
   group_name: string
   target_path: string
+  request_url: string
+  user_agent: string
   method: string
   route_strategy: string
   attempt_index: number
@@ -798,6 +805,7 @@ export interface GatewayActiveRequest {
   key_fingerprint: string
   group_name: string
   target_path: string
+  request_url: string
   method: string
   route_strategy: string
   attempt_index: number

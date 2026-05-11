@@ -508,11 +508,38 @@ func apiKeyEntryConfigSignature(item map[string]any) string {
 	parts := []string{
 		value,
 		apiKeyRouteType(item),
+		apiKeyRoutePath(item),
 		strings.Join(apiKeyRequestBaseURLValues(item), "\n"),
 		strings.TrimSpace(fmt.Sprint(item["image_generation_path"])),
 		strings.TrimSpace(fmt.Sprint(item["image_edit_path"])),
 	}
 	return strings.Join(parts, "\x00")
+}
+
+func apiKeyRoutePath(item map[string]any) string {
+	for _, key := range []string{"route_path", "request_path", "gateway_route_path"} {
+		value := normalizeAPIKeyRoutePath(fmt.Sprint(item[key]))
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func normalizeAPIKeyRoutePath(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" || normalized == "<nil>" {
+		return ""
+	}
+	normalized = strings.Trim(normalized, "/")
+	switch normalized {
+	case "chat", "chat_completions", "chat-completions", "completions", "chat/completions", "v1/chat/completions":
+		return "chat/completions"
+	case "responses", "v1/responses":
+		return "responses"
+	default:
+		return ""
+	}
 }
 
 func apiKeyRouteType(item map[string]any) string {

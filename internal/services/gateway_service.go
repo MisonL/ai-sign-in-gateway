@@ -65,6 +65,10 @@ func RouteActiveCount(stateID uint) int {
 func RouteTotalActive() int {
 	gatewayActive.Lock()
 	defer gatewayActive.Unlock()
+	return gatewayTotalActiveLocked()
+}
+
+func gatewayTotalActiveLocked() int {
 	total := 0
 	for _, n := range gatewayActive.counts {
 		total += n
@@ -83,6 +87,7 @@ type GatewayActiveRequest struct {
 	KeyFingerprint    string    `json:"key_fingerprint"`
 	GroupName         string    `json:"group_name"`
 	TargetPath        string    `json:"target_path"`
+	RequestURL        string    `json:"request_url"`
 	Method            string    `json:"method"`
 	RouteStrategy     string    `json:"route_strategy"`
 	AttemptIndex      int       `json:"attempt_index"`
@@ -115,7 +120,7 @@ func ListGatewayActiveRequests() []GatewayActiveRequest {
 	return out
 }
 
-func beginGatewayActiveRequest(route GatewayRoute, targetPath, method, strategy string, attemptIndex int, isStream bool, requestID string, activeConcurrency int, requestedModel string) string {
+func beginGatewayActiveRequest(route GatewayRoute, targetPath, requestURL, method, strategy string, attemptIndex int, isStream bool, requestID string, activeConcurrency int, requestedModel string) string {
 	if requestID == "" {
 		requestID = newRequestID()
 	}
@@ -144,6 +149,7 @@ func beginGatewayActiveRequest(route GatewayRoute, targetPath, method, strategy 
 		KeyFingerprint:    route.State.KeyFingerprint,
 		GroupName:         route.State.GroupName,
 		TargetPath:        targetPath,
+		RequestURL:        requestURL,
 		Method:            method,
 		RouteStrategy:     normalizeStrategy(strategy),
 		AttemptIndex:      attemptIndex,
@@ -157,6 +163,64 @@ func beginGatewayActiveRequest(route GatewayRoute, targetPath, method, strategy 
 	}
 	gatewayActiveRequests.Unlock()
 	return token
+}
+
+type GatewayConcurrencyPeaks struct {
+	AllTime int `json:"max_concurrency_all_time"`
+	Today   int `json:"max_concurrency_today"`
+}
+
+func RecordGatewayCurrentConcurrencyPeak(db *gorm.DB, now time.Time) error {
+	gatewayActive.Lock()
+	total := gatewayTotalActiveLocked()
+	gatewayActive.Unlock()
+	return RecordGatewayConcurrencyPeak(db, total, now)
+}
+
+func RecordGatewayConcurrencyPeak(db *gorm.DB, totalConcurrency int, now time.Time) error {
+	if db == nil || totalConcurrency <= 0 {
+		return nil
+	}
+	updatedAt := now.UTC()
+	for _, day := range []string{"all", gatewayConcurrencyPeakDay(now)} {
+		if err := db.Exec(`INSERT INTO gateway_concurrency_peaks (day, max_concurrency, updated_at)
+			VALUES (?, ?, ?)
+			ON CONFLICT(day) DO UPDATE SET
+				max_concurrency = excluded.max_concurrency,
+				updated_at = excluded.updated_at
+			WHERE excluded.max_concurrency > gateway_concurrency_peaks.max_concurrency`, day, totalConcurrency, updatedAt).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func GatewayConcurrencyPeakStats(db *gorm.DB, now time.Time) (GatewayConcurrencyPeaks, error) {
+	if db == nil {
+		return GatewayConcurrencyPeaks{}, nil
+	}
+	stats := GatewayConcurrencyPeaks{}
+	var allPeak models.GatewayConcurrencyPeak
+	err := db.Where("day = ?", "all").First(&allPeak).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return stats, err
+	}
+	stats.AllTime = allPeak.MaxConcurrency
+
+	var todayPeak models.GatewayConcurrencyPeak
+	err = db.Where("day = ?", gatewayConcurrencyPeakDay(now)).First(&todayPeak).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return stats, err
+	}
+	stats.Today = todayPeak.MaxConcurrency
+	return stats, nil
+}
+
+func gatewayConcurrencyPeakDay(now time.Time) string {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	return now.In(time.Local).Format("2006-01-02")
 }
 
 func finishGatewayActiveRequest(token string) {
@@ -248,6 +312,9 @@ type GatewayProxyResult struct {
 	StatusCode        int
 	Header            http.Header
 	Body              []byte
+	TargetPath        string
+	RequestURL        string
+	UserAgent         string
 	LatencyMS         float64
 	Success           bool
 	Error             string
@@ -388,6 +455,7 @@ func SyncGatewayRoutes(db *gorm.DB) (int, error) {
 			fp := key.Fingerprint
 			activeFingerprints[fp] = true
 			routeType := firstNonEmpty(key.RouteType, inferRouteType(site))
+			routePath := key.RoutePath
 			explicitSupportedModels := explicitSupportedModelsForSiteKey(site, key)
 			requestBaseCandidates := gatewayRouteRequestBaseCandidatesForKey(site, key)
 			var state models.GatewayRouteState
@@ -412,6 +480,7 @@ func SyncGatewayRoutes(db *gorm.DB) (int, error) {
 					SiteBaseURLSnapshot: site.BaseURL,
 					SiteAPIURLSnapshot:  marshalStringSlice(requestBaseCandidates),
 					RouteType:           routeType,
+					RoutePath:           routePath,
 					SupportedModels:     EncodeGatewaySupportedModels(supportedModels),
 					ModelProbeStatus:    modelProbeStatus,
 					GroupName:           site.GroupName,
@@ -451,6 +520,9 @@ func SyncGatewayRoutes(db *gorm.DB) (int, error) {
 				state.Weight = intValue(site.PluginConfig, "gateway_weight", state.Weight)
 				if !state.RouteTypeManual {
 					state.RouteType = routeType
+				}
+				if key.RoutePathSet && !state.RoutePathManual {
+					state.RoutePath = routePath
 				}
 				if len(explicitSupportedModels) > 0 {
 					state.SupportedModels = EncodeGatewaySupportedModels(explicitSupportedModels)
@@ -1148,9 +1220,6 @@ func ProxyGatewayRequestWithOptions(ctx context.Context, db *gorm.DB, r *http.Re
 	if err != nil {
 		return GatewayProxyResult{}, err
 	}
-	if strings.TrimSpace(opts.RouteType) == "" {
-		opts.RouteType = InferGatewayRouteTypeForRequest(targetPath, body)
-	}
 	if shouldServeGatewayModelProbe(r.Method, targetPath, opts.ModelProbeStrategy) {
 		return gatewayModelProbeResponse(db, opts, policy)
 	}
@@ -1196,7 +1265,7 @@ func ProxyGatewayRequestWithOptions(ctx context.Context, db *gorm.DB, r *http.Re
 			result, shouldFallback, err := proxyGatewayAttempt(ctx, db, r, body, candidateRoute, targetPath, opts, policy, streaming, attempt, requestedModel)
 			result.Attempts = attempt
 			result.IsStream = streaming
-			LogGatewayRequest(db, candidateRoute, targetPath, r.Method, requestedModel, firstNonEmpty(result.ActualModel, requestedModel), statusCodePtrOrNil(result.StatusCode), result.Success, result.LatencyMS, result.Error, policy.RouteStrategy, attempt, streaming, opts.RequestID, GatewayUsage{
+			LogGatewayRequest(db, candidateRoute, firstNonEmpty(result.TargetPath, targetPath), result.RequestURL, result.UserAgent, r.Method, requestedModel, firstNonEmpty(result.ActualModel, requestedModel), statusCodePtrOrNil(result.StatusCode), result.Success, result.LatencyMS, result.Error, policy.RouteStrategy, attempt, streaming, opts.RequestID, GatewayUsage{
 				PromptTokens:      result.PromptTokens,
 				CachedInputTokens: result.CachedInputTokens,
 				CompletionTokens:  result.CompletionTokens,
@@ -1232,15 +1301,16 @@ func ProxyGatewayRequestWithOptions(ctx context.Context, db *gorm.DB, r *http.Re
 
 func proxyGatewayAttempt(ctx context.Context, db *gorm.DB, r *http.Request, body []byte, route GatewayRoute, targetPath string, opts ProxyGatewayOptions, policy GatewayPolicy, streaming bool, attempt int, requestedModel string) (GatewayProxyResult, bool, error) {
 	upstreamTargetPath := gatewayUpstreamTargetPath(route, targetPath)
-	upstreamURL, err := targetURL(route.RequestBaseURL, upstreamTargetPath, r.URL.RawQuery, route.State.RouteType)
+	upstreamURL, err := targetURL(route.RequestBaseURL, upstreamTargetPath, r.URL.RawQuery, route.State.RouteType, route.State.RoutePath)
 	if err != nil {
-		return GatewayProxyResult{Route: route, Error: err.Error()}, true, err
+		return GatewayProxyResult{Route: route, TargetPath: upstreamTargetPath, Error: err.Error()}, true, err
 	}
 
 	circuitBefore := route.State.CircuitState
 	_ = circuitBefore // captured by caller through LogGatewayRequest via fresh route.State
 	activeConcurrency := acquireRoute(route.State.ID)
-	activeToken := beginGatewayActiveRequest(route, targetPath, r.Method, policy.RouteStrategy, attempt, streaming, opts.RequestID, activeConcurrency, requestedModel)
+	_ = RecordGatewayCurrentConcurrencyPeak(db, time.Now())
+	activeToken := beginGatewayActiveRequest(route, upstreamTargetPath, upstreamURL, r.Method, policy.RouteStrategy, attempt, streaming, opts.RequestID, activeConcurrency, requestedModel)
 	defer func() {
 		finishGatewayActiveRequest(activeToken)
 		releaseRoute(route.State.ID)
@@ -1260,9 +1330,11 @@ func proxyGatewayAttempt(ctx context.Context, db *gorm.DB, r *http.Request, body
 	}
 	req, err := http.NewRequestWithContext(reqCtx, r.Method, upstreamURL, bodyReader)
 	if err != nil {
-		return GatewayProxyResult{Route: route, Error: err.Error()}, true, err
+		return GatewayProxyResult{Route: route, TargetPath: upstreamTargetPath, RequestURL: upstreamURL, Error: err.Error()}, true, err
 	}
 	copyGatewayHeaders(req.Header, r.Header)
+	upstreamUserAgent := gatewayUpstreamUserAgent(route, r.Header.Get("User-Agent"))
+	req.Header.Set("User-Agent", upstreamUserAgent)
 	req.Header.Set("Authorization", "Bearer "+route.APIKey)
 
 	client := &http.Client{}
@@ -1275,7 +1347,7 @@ func proxyGatewayAttempt(ctx context.Context, db *gorm.DB, r *http.Request, body
 	latency := float64(time.Since(start).Microseconds()) / 1000.0
 	if err != nil {
 		UpdateRouteFailure(db, &route.State, err.Error(), latency, nil, policy)
-		return GatewayProxyResult{Route: route, LatencyMS: latency, Success: false, Error: err.Error(), ActualModel: requestedModel}, true, nil
+		return GatewayProxyResult{Route: route, TargetPath: upstreamTargetPath, RequestURL: upstreamURL, UserAgent: upstreamUserAgent, LatencyMS: latency, Success: false, Error: err.Error(), ActualModel: requestedModel}, true, nil
 	}
 
 	statusCode := resp.StatusCode
@@ -1293,12 +1365,12 @@ func proxyGatewayAttempt(ctx context.Context, db *gorm.DB, r *http.Request, body
 		if copyErr != nil && written == 0 {
 			// nothing flushed yet — count as failure, allow retry
 			UpdateRouteFailure(db, &route.State, copyErr.Error(), actualLatency, &statusCode, policy)
-			return GatewayProxyResult{Route: route, StatusCode: statusCode, Header: resp.Header.Clone(), LatencyMS: actualLatency, Success: false, Error: copyErr.Error(), ActualModel: requestedModel}, true, nil
+			return GatewayProxyResult{Route: route, StatusCode: statusCode, Header: resp.Header.Clone(), TargetPath: upstreamTargetPath, RequestURL: upstreamURL, UserAgent: upstreamUserAgent, LatencyMS: actualLatency, Success: false, Error: copyErr.Error(), ActualModel: requestedModel}, true, nil
 		}
 		// once data is on the wire, treat as success even if upstream cuts off mid-stream
 		route.State.LastRequestBaseURL = route.RequestBaseURL
 		UpdateRouteSuccess(db, &route.State, statusCode, latency)
-		return GatewayProxyResult{Route: route, StatusCode: statusCode, Header: resp.Header.Clone(), LatencyMS: actualLatency, Success: true, ActualModel: requestedModel}, false, nil
+		return GatewayProxyResult{Route: route, StatusCode: statusCode, Header: resp.Header.Clone(), TargetPath: upstreamTargetPath, RequestURL: upstreamURL, UserAgent: upstreamUserAgent, LatencyMS: actualLatency, Success: true, ActualModel: requestedModel}, false, nil
 	}
 
 	respBody, readErr := readGatewayResponseBody(resp)
@@ -1306,7 +1378,7 @@ func proxyGatewayAttempt(ctx context.Context, db *gorm.DB, r *http.Request, body
 	if readErr != nil {
 		reason := readErr.Error()
 		UpdateRouteFailure(db, &route.State, reason, latency, &statusCode, policy)
-		return GatewayProxyResult{Route: route, StatusCode: statusCode, Header: resp.Header.Clone(), LatencyMS: latency, Success: false, Error: reason, ActualModel: requestedModel}, true, nil
+		return GatewayProxyResult{Route: route, StatusCode: statusCode, Header: resp.Header.Clone(), TargetPath: upstreamTargetPath, RequestURL: upstreamURL, UserAgent: upstreamUserAgent, LatencyMS: latency, Success: false, Error: reason, ActualModel: requestedModel}, true, nil
 	}
 
 	if is2xx {
@@ -1326,6 +1398,9 @@ func proxyGatewayAttempt(ctx context.Context, db *gorm.DB, r *http.Request, body
 			StatusCode:        statusCode,
 			Header:            resp.Header.Clone(),
 			Body:              respBody,
+			TargetPath:        upstreamTargetPath,
+			RequestURL:        upstreamURL,
+			UserAgent:         upstreamUserAgent,
 			LatencyMS:         latency,
 			Success:           true,
 			PromptTokens:      usage.PromptTokens,
@@ -1342,7 +1417,7 @@ func proxyGatewayAttempt(ctx context.Context, db *gorm.DB, r *http.Request, body
 		reason = fmt.Sprintf("status=%d", statusCode)
 	}
 	UpdateRouteFailure(db, &route.State, reason, latency, &statusCode, policy)
-	return GatewayProxyResult{Route: route, StatusCode: statusCode, Header: resp.Header.Clone(), Body: respBody, LatencyMS: latency, Success: false, Error: reason, ActualModel: firstNonEmpty(ExtractGatewayModelFromResponseBody(respBody), requestedModel)}, shouldFallbackGatewayFailure(statusCode, reason, policy.FailureRetryMode), nil
+	return GatewayProxyResult{Route: route, StatusCode: statusCode, Header: resp.Header.Clone(), Body: respBody, TargetPath: upstreamTargetPath, RequestURL: upstreamURL, UserAgent: upstreamUserAgent, LatencyMS: latency, Success: false, Error: reason, ActualModel: firstNonEmpty(ExtractGatewayModelFromResponseBody(respBody), requestedModel)}, shouldFallbackGatewayFailure(statusCode, reason, policy.FailureRetryMode), nil
 }
 
 func gatewayUpstreamTargetPath(route GatewayRoute, targetPath string) string {
@@ -1361,6 +1436,13 @@ func gatewayUpstreamTargetPath(route GatewayRoute, targetPath string) string {
 		}
 		if path := gatewayImagePathFromConfig(route.Site.PluginConfig, "image_edit_path"); path != "" {
 			return path
+		}
+	case "chat/completions", "completions", "responses":
+		switch normalizeGatewayRoutePath(route.State.RoutePath) {
+		case "chat/completions":
+			return "chat/completions"
+		case "responses":
+			return "responses"
 		}
 	}
 	return targetPath
@@ -1849,7 +1931,7 @@ func usageFloat(values map[string]any, keys ...string) *float64 {
 	return nil
 }
 
-func LogGatewayRequest(db *gorm.DB, route GatewayRoute, targetPath, method, requestedModel, actualModel string, statusCode *int, success bool, latency float64, reason string, strategy string, attemptIndex int, isStream bool, requestID string, usage GatewayUsage) {
+func LogGatewayRequest(db *gorm.DB, route GatewayRoute, targetPath, requestURL, userAgent, method, requestedModel, actualModel string, statusCode *int, success bool, latency float64, reason string, strategy string, attemptIndex int, isStream bool, requestID string, usage GatewayUsage) {
 	siteID := route.State.SiteID
 	if route.Site.ID != 0 {
 		siteID = route.Site.ID
@@ -1874,6 +1956,8 @@ func LogGatewayRequest(db *gorm.DB, route GatewayRoute, targetPath, method, requ
 		RequestedModel:     requestedModel,
 		ActualModel:        actualModel,
 		TargetPath:         targetPath,
+		RequestURL:         requestURL,
+		UserAgent:          userAgent,
 		Method:             method,
 		RouteStrategy:      normalizeStrategy(strategy),
 		AttemptIndex:       attemptIndex,
@@ -1919,7 +2003,7 @@ func ProbeGatewayRoute(ctx context.Context, db *gorm.DB, routeID string, timeout
 	for _, baseURL := range gatewayRouteBasesInOrder(route) {
 		candidateRoute := route
 		candidateRoute.RequestBaseURL = baseURL
-		upstreamURL, err := targetURL(candidateRoute.RequestBaseURL, "models", "", candidateRoute.State.RouteType)
+		upstreamURL, err := targetURL(candidateRoute.RequestBaseURL, "models", "", candidateRoute.State.RouteType, "")
 		if err != nil {
 			return GatewayProbeResult{}, err
 		}
@@ -1930,6 +2014,7 @@ func ProbeGatewayRoute(ctx context.Context, db *gorm.DB, routeID string, timeout
 			return GatewayProbeResult{}, err
 		}
 		req.Header.Set("Accept", "application/json")
+		req.Header.Set("User-Agent", gatewayUpstreamUserAgent(candidateRoute, ""))
 		req.Header.Set("Authorization", "Bearer "+candidateRoute.APIKey)
 		start := time.Now()
 		resp, err := (&http.Client{Timeout: time.Duration(timeoutSeconds) * time.Second}).Do(req)
@@ -2155,6 +2240,8 @@ type siteKey struct {
 	Name            string
 	Source          string
 	RouteType       string
+	RoutePath       string
+	RoutePathSet    bool
 	SupportedModels []string
 	RequestBaseURLs []string
 	Config          models.JSONMap
@@ -2179,6 +2266,8 @@ func siteAPIKeys(site models.Site) []siteKey {
 				Name:            strings.TrimSpace(fmt.Sprint(obj["name"])),
 				Source:          "site.credentials.api_keys",
 				RouteType:       routeTypeFromAny(obj["route_type"], obj["api_type"], obj["api_format"], obj["type"]),
+				RoutePath:       routePathFromAny(obj["route_path"], obj["request_path"], obj["gateway_route_path"]),
+				RoutePathSet:    siteKeyHasRoutePath(obj),
 				SupportedModels: stringListAnyValue(obj, "supported_models"),
 				RequestBaseURLs: apiKeyRequestBaseURLs(site, obj),
 				Config:          cloneSiteKeyConfig(obj),
@@ -2219,6 +2308,7 @@ func assignSiteKeyFingerprints(keys []siteKey) {
 func siteKeyRouteSignature(key siteKey) string {
 	parts := []string{
 		normalizeRouteType(key.RouteType),
+		normalizeGatewayRoutePath(key.RoutePath),
 		strings.Join(normalizeStringList(key.SupportedModels), ","),
 		strings.Join(normalizeStringList(key.RequestBaseURLs), ","),
 		strings.TrimSpace(stringMapValue(key.Config, "image_generation_path", "")),
@@ -2532,6 +2622,98 @@ func EncodeGatewayRequestBaseURLs(values []string) string {
 	return marshalStringSlice(values)
 }
 
+func SetSiteAPIKeyRequestBaseURLs(site *models.Site, keyFingerprint string, values []string) (bool, string) {
+	if site == nil || keyFingerprint == "" {
+		return false, ""
+	}
+	credentials := cloneGatewayJSONMap(site.Credentials)
+	raw, ok := credentials["api_keys"].([]any)
+	if !ok || len(raw) == 0 {
+		return false, ""
+	}
+	normalized := normalizeRequestBaseURLCandidates(site.BaseURL, values)
+	changed := false
+	newFingerprint := ""
+	keys := siteAPIKeys(*site)
+	keyIndex := 0
+	for idx, item := range raw {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if !siteAPIKeyEntryActive(entry) {
+			continue
+		}
+		if keyIndex >= len(keys) {
+			break
+		}
+		key := keys[keyIndex]
+		keyIndex++
+		if key.Fingerprint != keyFingerprint {
+			continue
+		}
+		if len(normalized) > 0 {
+			entry["request_base_urls"] = stringSliceToAnySlice(normalized)
+		} else {
+			delete(entry, "request_base_urls")
+		}
+		removeAPIKeyRequestBaseURLAliases(entry)
+		raw[idx] = entry
+		changed = true
+		candidateSite := *site
+		candidateSite.Credentials = models.JSONMap{"api_keys": raw}
+		for _, nextKey := range siteAPIKeys(candidateSite) {
+			if nextKey.Value == key.Value &&
+				normalizeRouteType(nextKey.RouteType) == normalizeRouteType(key.RouteType) &&
+				normalizeGatewayRoutePath(nextKey.RoutePath) == normalizeGatewayRoutePath(key.RoutePath) &&
+				strings.Join(normalizeStringList(nextKey.SupportedModels), "\x00") == strings.Join(normalizeStringList(key.SupportedModels), "\x00") &&
+				strings.TrimSpace(nextKey.Name) == strings.TrimSpace(key.Name) {
+				newFingerprint = nextKey.Fingerprint
+				break
+			}
+		}
+		break
+	}
+	if changed {
+		credentials["api_keys"] = raw
+		site.Credentials = credentials
+	}
+	return changed, newFingerprint
+}
+
+func siteAPIKeyEntryActive(obj map[string]any) bool {
+	value := strings.TrimSpace(fmt.Sprint(obj["key"]))
+	status := strings.ToLower(strings.TrimSpace(fmt.Sprint(obj["status"])))
+	return value != "" && status != "disabled" && status != "inactive" && status != "revoked"
+}
+
+func stringSliceToAnySlice(values []string) []any {
+	out := make([]any, 0, len(values))
+	for _, value := range values {
+		out = append(out, value)
+	}
+	return out
+}
+
+func removeAPIKeyRequestBaseURLAliases(entry map[string]any) {
+	for _, key := range []string{
+		"request_base_url",
+		"api_request_urls",
+		"api_request_url",
+		"gateway_request_urls",
+		"gateway_request_url",
+		"endpoint_url",
+		"base_url",
+		"baseURL",
+		"api_base_url",
+		"apiBaseUrl",
+		"api_url",
+		"apiUrl",
+	} {
+		delete(entry, key)
+	}
+}
+
 func GatewaySupportedModelsBySite(db *gorm.DB, siteIDs []uint, includeDisabled bool) (map[uint][]string, error) {
 	out := map[uint][]string{}
 	query := db.Model(&models.GatewayRouteState{}).Joins("JOIN sites ON sites.id = gateway_route_states.site_id")
@@ -2588,7 +2770,7 @@ func normalizeRouteType(value string) string {
 		return "general"
 	case "claude", "anthropic":
 		return "claude"
-	case "gpt", "openai", "chatgpt", "chat", "chat_completions", "chat-completions":
+	case "gpt", "gptchat", "gpt_chat", "gpt-chat", "openai", "chatgpt", "chat", "chat_completions", "chat-completions":
 		return "gpt"
 	case "codex", "response", "responses":
 		return "codex"
@@ -2607,6 +2789,49 @@ func routeTypeFromAny(values ...any) string {
 		}
 	}
 	return ""
+}
+
+func routePathFromAny(values ...any) string {
+	for _, value := range values {
+		candidate := normalizeGatewayRoutePath(fmt.Sprint(value))
+		if candidate != "" {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func siteKeyHasRoutePath(obj map[string]any) bool {
+	for _, key := range []string{"route_path", "request_path", "gateway_route_path"} {
+		if _, ok := obj[key]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func NormalizeGatewayRoutePath(value string) string {
+	return normalizeGatewayRoutePath(value)
+}
+
+func normalizeGatewayRoutePath(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" || normalized == "<nil>" {
+		return ""
+	}
+	normalized = strings.Trim(normalized, "/")
+	switch normalized {
+	case "inherit", "auto", "client", "follow_client", "follow-client", "none", "default":
+		return ""
+	case "chat", "chat_completions", "chat-completions", "completions", "v1/chat/completions":
+		return "chat/completions"
+	case "chat/completions":
+		return "chat/completions"
+	case "responses", "v1/responses":
+		return "responses"
+	default:
+		return ""
+	}
 }
 
 func InferGatewayRouteTypeFromTargetPath(targetPath string) string {
@@ -2671,33 +2896,61 @@ func normalizeModelID(value string) string {
 }
 
 func filterGatewayRoutesByRequest(routes []GatewayRoute, group, routeType, targetPath string, body []byte) (gatewayRouteFilterResult, error) {
+	requestedRouteType := normalizeRouteType(routeType)
 	result := gatewayRouteFilterResult{
 		Candidates: routes,
-		RouteType:  normalizeRouteType(routeType),
+		RouteType:  requestedRouteType,
 		Model:      normalizeModelID(ExtractGatewayModelFromRequestBody(body)),
 	}
 	if result.RouteType == "" {
 		result.RouteType = InferGatewayRouteTypeForRequest(targetPath, body)
 	}
 	filtered := routes
-	if result.RouteType != "" {
-		next := make([]GatewayRoute, 0, len(filtered))
-		for _, route := range filtered {
-			if route.State.RouteType == result.RouteType || route.State.RouteType == "general" {
-				next = append(next, route)
+	if requestedRouteType != "" {
+		filtered = filterRoutesByRouteType(filtered, requestedRouteType)
+		result.Candidates = filterRoutesBySupportedModel(filtered, result.Model)
+		if len(result.Candidates) == 0 && result.Model != "" && len(filtered) > 0 {
+			return gatewayRouteFilterResult{}, GatewayModelNotSupportedError{
+				Model:     result.Model,
+				RouteType: result.RouteType,
+				Group:     strings.TrimSpace(group),
 			}
 		}
-		filtered = next
+		return result, nil
 	}
-	result.Candidates = filterRoutesBySupportedModel(filtered, result.Model)
-	if len(result.Candidates) == 0 && result.Model != "" && len(filtered) > 0 {
+
+	filtered = filterRoutesBySupportedModel(filtered, result.Model)
+	if len(filtered) == 0 && result.Model != "" && len(routes) > 0 {
 		return gatewayRouteFilterResult{}, GatewayModelNotSupportedError{
 			Model:     result.Model,
 			RouteType: result.RouteType,
 			Group:     strings.TrimSpace(group),
 		}
 	}
+	if result.RouteType != "" {
+		preferred := filterRoutesByRouteType(filtered, result.RouteType)
+		if len(preferred) > 0 {
+			filtered = preferred
+		} else {
+			result.RouteType = ""
+		}
+	}
+	result.Candidates = filtered
 	return result, nil
+}
+
+func filterRoutesByRouteType(routes []GatewayRoute, routeType string) []GatewayRoute {
+	routeType = normalizeRouteType(routeType)
+	if routeType == "" {
+		return routes
+	}
+	next := make([]GatewayRoute, 0, len(routes))
+	for _, route := range routes {
+		if route.State.RouteType == routeType || route.State.RouteType == "general" {
+			next = append(next, route)
+		}
+	}
+	return next
 }
 
 func filterRoutesBySupportedModel(routes []GatewayRoute, model string) []GatewayRoute {
@@ -2764,9 +3017,10 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func targetURL(baseURL, targetPath, rawQuery, routeType string) (string, error) {
+func targetURL(baseURL, targetPath, rawQuery, routeType, routePath string) (string, error) {
 	base := NormalizeBaseURL(baseURL)
 	path := strings.TrimLeft(targetPath, "/")
+	normalizedRoutePath := normalizeGatewayRoutePath(routePath)
 	parsed, err := url.Parse(base)
 	if err != nil {
 		return "", err
@@ -2793,13 +3047,21 @@ func targetURL(baseURL, targetPath, rawQuery, routeType string) (string, error) 
 		values.Del("group")
 		values.Del("type")
 		values.Del("route_type")
+		if values.Has("wire_api") {
+			switch normalizedRoutePath {
+			case "chat/completions":
+				values.Set("wire_api", "chat")
+			case "responses":
+				values.Set("wire_api", "responses")
+			}
+		}
 		u.RawQuery = values.Encode()
 	}
 	return u.String(), nil
 }
 
 func GatewayTargetURL(baseURL, targetPath, rawQuery, routeType string) (string, error) {
-	return targetURL(baseURL, targetPath, rawQuery, routeType)
+	return targetURL(baseURL, targetPath, rawQuery, routeType, "")
 }
 
 func copyGatewayHeaders(dst, src http.Header) {
@@ -2811,6 +3073,42 @@ func copyGatewayHeaders(dst, src http.Header) {
 			}
 		}
 	}
+}
+
+func gatewayUpstreamUserAgent(route GatewayRoute, clientUserAgent string) string {
+	if key, ok := siteKeyForFingerprint(route.Site, route.State.KeyFingerprint); ok {
+		if value := strings.TrimSpace(stringMapValue(key.Config, "user_agent", "")); value != "" {
+			return value
+		}
+	}
+	if value := strings.TrimSpace(stringMapValue(route.Site.Credentials, "user_agent", "")); value != "" {
+		return value
+	}
+	if value := gatewayOfficialUserAgentForClient(clientUserAgent); value != "" {
+		return value
+	}
+	return DefaultCodexCLIUserAgent
+}
+
+func gatewayOfficialUserAgentForClient(clientUserAgent string) string {
+	value := strings.TrimSpace(clientUserAgent)
+	if value == "" {
+		return ""
+	}
+	normalized := strings.ToLower(value)
+	for _, prefix := range []string{
+		"codex-tui/",
+		"codex_exec/",
+		"codex_vscode/",
+		"codex desktop/",
+		"openai/python ",
+		"openai/js ",
+	} {
+		if strings.HasPrefix(normalized, prefix) {
+			return value
+		}
+	}
+	return ""
 }
 
 func extractModelIDs(body []byte) []string {

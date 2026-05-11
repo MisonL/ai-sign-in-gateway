@@ -43,6 +43,28 @@ export function apiKeyImageEditPath(item: SiteApiKeyRecord | undefined): string 
   return apiKeyEntryValue(item, 'image_edit_path')
 }
 
+export function normalizeApiKeyRoutePath(value: unknown): string {
+  const normalized = String(value ?? '').trim().toLowerCase().replace(/^\/+|\/+$/g, '')
+  if (!normalized || ['inherit', 'auto', 'client', 'follow_client', 'follow-client', 'none', 'default'].includes(normalized)) {
+    return ''
+  }
+  if (['chat', 'chat_completions', 'chat-completions', 'completions', 'chat/completions', 'v1/chat/completions'].includes(normalized)) {
+    return 'chat/completions'
+  }
+  if (['responses', 'v1/responses'].includes(normalized)) {
+    return 'responses'
+  }
+  return ''
+}
+
+export function apiKeyRoutePath(item: SiteApiKeyRecord | undefined): string {
+  return normalizeApiKeyRoutePath(
+    item?.route_path
+    || item?.request_path
+    || item?.gateway_route_path,
+  )
+}
+
 export function apiKeyEntryRouteType(item: SiteApiKeyRecord | undefined): string {
   const normalized = apiKeyEntryValue(item, 'route_type')
     || apiKeyEntryValue(item, 'api_type')
@@ -60,10 +82,43 @@ function apiKeyEntryConfigSignature(item: SiteApiKeyRecord): string {
   return [
     apiKeyEntryValue(item, 'key'),
     apiKeyEntryRouteType(item),
+    apiKeyRoutePath(item),
     apiKeyRequestBaseURLs(item).join('\n'),
     apiKeyImageGenerationPath(item),
     apiKeyImageEditPath(item),
   ].join('\x00')
+}
+
+export function setApiKeyRoutePath(
+  credentials: Record<string, unknown>,
+  key: string,
+  routePath: unknown,
+  entryIndex?: number,
+): Record<string, unknown> {
+  const normalizedKey = key.trim()
+  if (!normalizedKey) {
+    return credentials
+  }
+  const normalizedRoutePath = normalizeApiKeyRoutePath(routePath)
+  const entries = storedApiKeyEntries(credentials).map((item, index) => {
+    if (!apiKeyEntryMatches(item, index, normalizedKey, entryIndex)) {
+      return item
+    }
+    const next: SiteApiKeyRecord = { ...item }
+    if (normalizedRoutePath) {
+      next.route_path = normalizedRoutePath
+    } else {
+      delete next.route_path
+    }
+    for (const alias of ['request_path', 'gateway_route_path']) {
+      delete next[alias]
+    }
+    return next
+  })
+  return {
+    ...credentials,
+    api_keys: entries,
+  }
 }
 
 export function setApiKeyRequestBaseURLs(

@@ -28,7 +28,7 @@ func (p *APISupplier) Meta() schemas.PluginMetaResponse {
 			Field("user_agent", "浏览器标识", "text", "Mozilla/5.0 ...", false, ""),
 		},
 		ConfigFields: []schemas.FieldDescriptor{
-			Field("api_format", "API 格式", "text", "openai / anthropic / gemini / general", false, ""),
+			Field("api_format", "API 格式", "text", "codex / openai / anthropic / gemini / general", false, ""),
 			Field("endpoint_url", "出口地址", "url", "https://example.com/v1", false, ""),
 			Field("api_request_urls", "API 请求候选", "textarea", "https://api-a.example.com\nhttps://api-b.example.com/v1", false, "可填多个候选 URL，每行一个；网关请求会按顺序尝试。"),
 			Field("image_generation_path", "图片生成 Path", "text", "/images/generations", false, "可选。纯文本生图接口路径，留空默认 /images/generations。"),

@@ -6,6 +6,7 @@ import (
 )
 
 const DefaultBrowserUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
+const DefaultCodexCLIUserAgent = "codex-tui/0.130.0 (Ubuntu 24.4.0; x86_64) VTE/7600 (codex-tui; 0.130.0)"
 
 func BuildBrowserHeaders(baseURL string, includeContentType bool, authorization string, cookie string, extra map[string]string) map[string]string {
 	origin := strings.TrimRight(baseURL, "/")

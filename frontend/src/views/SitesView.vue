@@ -57,6 +57,7 @@ import { balanceTone, formatBalance, formatGroupNames, normalizeBalanceUnit, nor
 import {
   apiKeyImageEditPath,
   apiKeyImageGenerationPath,
+  apiKeyRoutePath,
   apiKeyRequestBaseURLs,
   apiKeyEntryValue,
   apiKeyValue,
@@ -64,6 +65,7 @@ import {
   isManualApiKeyEntry,
   mergeApiKeyEntries,
   setApiKeyImagePaths,
+  setApiKeyRoutePath,
   setApiKeyRequestBaseURLs,
   removeSiteApiKeyCredential,
   storedApiKeyEntries,
@@ -199,13 +201,15 @@ const apiKeyDialogForm = reactive({
 })
 
 const apiKeyRequestUrlDrafts = reactive<Record<string, string>>({})
+const apiKeyRoutePathDrafts = reactive<Record<string, string>>({})
 const apiKeyImageGenerationPathDrafts = reactive<Record<string, string>>({})
 const apiKeyImageEditPathDrafts = reactive<Record<string, string>>({})
 
 const manualApiKeyForm = reactive({
   name: '',
   key: '',
-  route_type: 'gpt',
+  route_type: 'codex',
+  route_path: 'responses',
   request_base_urls: '',
   image_generation_path: '',
   image_edit_path: '',
@@ -237,6 +241,7 @@ type SiteApiKeyEntry = {
   isPrimary: boolean
   source: string
   routeType: string
+  routePath: string
   requestBaseURLs: string[]
   imageGenerationPath: string
   imageEditPath: string
@@ -1216,6 +1221,9 @@ function resetApiKeyRequestUrlDrafts(entries: SiteApiKeyEntry[]) {
   for (const key of Object.keys(apiKeyRequestUrlDrafts)) {
     delete apiKeyRequestUrlDrafts[key]
   }
+  for (const key of Object.keys(apiKeyRoutePathDrafts)) {
+    delete apiKeyRoutePathDrafts[key]
+  }
   for (const key of Object.keys(apiKeyImageGenerationPathDrafts)) {
     delete apiKeyImageGenerationPathDrafts[key]
   }
@@ -1225,6 +1233,7 @@ function resetApiKeyRequestUrlDrafts(entries: SiteApiKeyEntry[]) {
   for (const entry of entries) {
     const key = apiKeyDraftKey(entry)
     apiKeyRequestUrlDrafts[key] = entry.requestBaseURLs.join('\n')
+    apiKeyRoutePathDrafts[key] = entry.routePath
     apiKeyImageGenerationPathDrafts[key] = entry.imageGenerationPath
     apiKeyImageEditPathDrafts[key] = entry.imageEditPath
   }
@@ -1241,6 +1250,20 @@ function updateApiKeyRequestUrlDraft(entry: SiteApiKeyEntry, value: string) {
     ...credentials,
     api_keys: mergeApiKeyEntries(storedApiKeyEntriesForEdit({ ...site, credentials })),
   }, entry.key, value, entry.entryIndex))
+}
+
+function apiKeyRoutePathDraft(entry: SiteApiKeyEntry): string {
+  return apiKeyRoutePathDrafts[apiKeyDraftKey(entry)] ?? entry.routePath
+}
+
+function updateApiKeyRoutePathDraft(entry: SiteApiKeyEntry, value: unknown) {
+  const key = apiKeyDraftKey(entry)
+  const routePath = typeof value === 'string' ? value : ''
+  apiKeyRoutePathDrafts[key] = routePath
+  upsertApiKeyDialogSiteCredentials((site, credentials) => setApiKeyRoutePath({
+    ...credentials,
+    api_keys: mergeApiKeyEntries(storedApiKeyEntriesForEdit({ ...site, credentials })),
+  }, entry.key, routePath, entry.entryIndex))
 }
 
 function apiKeyImageGenerationPathDraft(entry: SiteApiKeyEntry): string {
@@ -1295,7 +1318,18 @@ function normalizeApiKeyRouteType(value: unknown): string {
 
 function defaultApiKeyRouteType(site: Pick<Site, 'plugin_config'>): string {
   const config = site.plugin_config as Record<string, unknown>
-  return normalizeApiKeyRouteType(config?.gateway_route_type) || normalizeApiKeyRouteType(config?.api_format) || 'gpt'
+  return normalizeApiKeyRouteType(config?.gateway_route_type) || normalizeApiKeyRouteType(config?.api_format) || 'codex'
+}
+
+function defaultApiKeyRoutePath(routeType: string): string {
+  const normalized = normalizeApiKeyRouteType(routeType)
+  if (normalized === 'gpt') {
+    return 'chat/completions'
+  }
+  if (normalized === 'codex') {
+    return 'responses'
+  }
+  return ''
 }
 
 function storedApiKeyEntriesForEdit(site: Pick<Site, 'credentials' | 'plugin_config'>): SiteApiKeyRecord[] {
@@ -1343,6 +1377,7 @@ function siteApiKeyEntries(site: Pick<Site, 'credentials'>): SiteApiKeyEntry[] {
           isPrimary: Boolean(entry?.is_primary) || key === apiKeyValue(credentials),
           source,
           routeType,
+          routePath: apiKeyRoutePath(entry),
           requestBaseURLs: apiKeyRequestBaseURLs(entry),
           imageGenerationPath: apiKeyImageGenerationPath(entry),
           imageEditPath: apiKeyImageEditPath(entry),
@@ -1366,6 +1401,7 @@ function siteApiKeyEntries(site: Pick<Site, 'credentials'>): SiteApiKeyEntry[] {
       isPrimary: true,
       source: '',
       routeType: '',
+      routePath: '',
       requestBaseURLs: [],
       imageGenerationPath: '',
       imageEditPath: '',
@@ -1443,10 +1479,16 @@ const manualApiKeyEntries = computed(() =>
 
 const apiKeyRouteTypeOptions = [
   { label: '通用', value: 'general' },
-  { label: 'GPT Chat', value: 'gpt' },
-  { label: 'Codex Responses', value: 'codex' },
+  { label: 'GptChat', value: 'gpt' },
+  { label: 'Codex', value: 'codex' },
   { label: 'Claude', value: 'claude' },
   { label: 'Gemini', value: 'gemini' },
+]
+
+const apiKeyRoutePathOptions = [
+  { label: '跟随客户端', value: '' },
+  { label: '/v1/chat/completions', value: 'chat/completions' },
+  { label: '/v1/responses', value: 'responses' },
 ]
 
 function siteCheckinActionLabel(site: Site) {
@@ -1849,6 +1891,7 @@ async function openApiKeyDialog(site: Site) {
     manualApiKeyForm.name = ''
     manualApiKeyForm.key = ''
     manualApiKeyForm.route_type = defaultApiKeyRouteType(fullSite)
+    manualApiKeyForm.route_path = defaultApiKeyRoutePath(manualApiKeyForm.route_type)
     manualApiKeyForm.request_base_urls = ''
     manualApiKeyForm.image_generation_path = ''
     manualApiKeyForm.image_edit_path = ''
@@ -1889,6 +1932,10 @@ function apiKeyRouteTypeLabel(value: string) {
   return apiKeyRouteTypeOptions.find((option) => option.value === value)?.label ?? '默认类型'
 }
 
+function apiKeyRoutePathLabel(value: string) {
+  return apiKeyRoutePathOptions.find((option) => option.value === value)?.label ?? '跟随客户端'
+}
+
 function apiKeySourceLabel(entry: SiteApiKeyEntry) {
   if (entry.isManual) {
     return '自定义'
@@ -1923,6 +1970,7 @@ function addManualApiKey() {
     return
   }
   const routeType = normalizeApiKeyRouteType(manualApiKeyForm.route_type) || defaultApiKeyRouteType(site)
+  const routePath = apiKeyRoutePath({ route_path: manualApiKeyForm.route_path })
   const name = manualApiKeyForm.name.trim() || `自定义 Key ${manualApiKeyEntries.value.length + 1}`
   const entry = {
     id: `manual-${Date.now()}`,
@@ -1935,6 +1983,9 @@ function addManualApiKey() {
     request_base_urls: normalizeStringList(manualApiKeyForm.request_base_urls),
     image_generation_path: manualApiKeyForm.image_generation_path.trim(),
     image_edit_path: manualApiKeyForm.image_edit_path.trim(),
+  }
+  if (routePath) {
+    Object.assign(entry, { route_path: routePath })
   }
   upsertApiKeyDialogSiteCredentials((currentSite, credentials) => {
     const entries = storedApiKeyEntriesForEdit({ ...currentSite, credentials })
@@ -1952,6 +2003,7 @@ function addManualApiKey() {
   manualApiKeyForm.name = ''
   manualApiKeyForm.key = ''
   manualApiKeyForm.route_type = defaultApiKeyRouteType(site)
+  manualApiKeyForm.route_path = defaultApiKeyRoutePath(manualApiKeyForm.route_type)
   manualApiKeyForm.request_base_urls = ''
   manualApiKeyForm.image_generation_path = ''
   manualApiKeyForm.image_edit_path = ''
@@ -1962,6 +2014,7 @@ function removeApiKey(entry: SiteApiKeyEntry) {
   upsertApiKeyDialogSiteCredentials((_site, credentials) => removeSiteApiKeyCredential(credentials, entry.key, entry.entryIndex))
   const key = apiKeyDraftKey(entry)
   delete apiKeyRequestUrlDrafts[key]
+  delete apiKeyRoutePathDrafts[key]
   delete apiKeyImageGenerationPathDrafts[key]
   delete apiKeyImageEditPathDrafts[key]
   toast.success('API Key 已从本地配置移除，保存后生效。')
@@ -3706,7 +3759,7 @@ onBeforeUnmount(() => {
                           type="info"
                           show-icon
                           message="此站点只用于网关转发，不参与签到 / 资料同步。"
-                          description="api_format 推荐填 openai / anthropic / gemini / general（写错只会影响路由分类，不会影响转发）。Base URL 与 API Key 是必填项。"
+                          description="api_format 推荐填 codex / openai / anthropic / gemini / general（写错只会影响路由分类，不会影响转发）。Base URL 与 API Key 是必填项。"
                           class="site-editor-config-alert"
                         />
                         <a-row :gutter="[0, 4]">
@@ -4042,6 +4095,7 @@ onBeforeUnmount(() => {
                       <a-tag v-if="entry.isPrimary" color="processing">主 Key</a-tag>
                       <a-tag :color="entry.isManual ? 'blue' : 'purple'">{{ apiKeySourceLabel(entry) }}</a-tag>
                       <a-tag v-if="entry.routeType">{{ apiKeyRouteTypeLabel(entry.routeType) }}</a-tag>
+                      <a-tag>{{ apiKeyRoutePathLabel(entry.routePath) }}</a-tag>
                       <a-tag :color="entry.status === 'active' ? 'green' : 'default'">{{ entry.status }}</a-tag>
                     </a-space>
                     <a-space size="small">
@@ -4049,30 +4103,50 @@ onBeforeUnmount(() => {
                       <a-button size="small" danger @click="removeApiKey(entry)">删除</a-button>
                     </a-space>
                   </div>
-                  <a-input-password
-                    :value="entry.key"
-                    readonly
-                    visibility-toggle
-                    placeholder="当前 API Key 为空"
-                  />
-                  <a-textarea
-                    class="api-key-dialog-item__urls"
-                    :value="apiKeyRequestUrlDraft(entry)"
-                    :rows="2"
-                    placeholder="当前 Key 专用请求 URL，每行一个；留空使用下方站点级 URL"
-                    @update:value="(value) => updateApiKeyRequestUrlDraft(entry, value)"
-                  />
+                  <div class="api-key-dialog-field">
+                    <div class="api-key-dialog-field__label">API Key</div>
+                    <a-input-password
+                      :value="entry.key"
+                      readonly
+                      visibility-toggle
+                      placeholder="当前 API Key 为空"
+                    />
+                  </div>
+                  <div class="api-key-dialog-field">
+                    <div class="api-key-dialog-field__label">专用请求 URL</div>
+                    <a-textarea
+                      class="api-key-dialog-item__urls"
+                      :value="apiKeyRequestUrlDraft(entry)"
+                      :rows="2"
+                      placeholder="当前 Key 专用请求 URL，每行一个；留空使用下方站点级 URL"
+                      @update:value="(value) => updateApiKeyRequestUrlDraft(entry, value)"
+                    />
+                  </div>
+                  <div class="api-key-dialog-field">
+                    <div class="api-key-dialog-field__label">请求路径</div>
+                    <a-select
+                      :value="apiKeyRoutePathDraft(entry)"
+                      :options="apiKeyRoutePathOptions"
+                      @update:value="(value) => updateApiKeyRoutePathDraft(entry, value)"
+                    />
+                  </div>
                   <div class="api-key-dialog-item__paths">
-                    <a-input
-                      :value="apiKeyImageGenerationPathDraft(entry)"
-                      placeholder="当前 Key 生图 Path，可留空"
-                      @update:value="(value) => updateApiKeyImagePathDraft(entry, 'generation', value)"
-                    />
-                    <a-input
-                      :value="apiKeyImageEditPathDraft(entry)"
-                      placeholder="当前 Key 编辑 Path，可留空"
-                      @update:value="(value) => updateApiKeyImagePathDraft(entry, 'edit', value)"
-                    />
+                    <div class="api-key-dialog-field">
+                      <div class="api-key-dialog-field__label">图片生成 Path</div>
+                      <a-input
+                        :value="apiKeyImageGenerationPathDraft(entry)"
+                        placeholder="当前 Key 生图 Path，可留空"
+                        @update:value="(value) => updateApiKeyImagePathDraft(entry, 'generation', value)"
+                      />
+                    </div>
+                    <div class="api-key-dialog-field">
+                      <div class="api-key-dialog-field__label">图片编辑 Path</div>
+                      <a-input
+                        :value="apiKeyImageEditPathDraft(entry)"
+                        placeholder="当前 Key 编辑 Path，可留空"
+                        @update:value="(value) => updateApiKeyImagePathDraft(entry, 'edit', value)"
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -4081,34 +4155,61 @@ onBeforeUnmount(() => {
           </a-form-item>
           <a-form-item label="添加自定义 API Key">
             <div class="manual-api-key-editor">
-              <a-input
-                v-model:value="manualApiKeyForm.name"
-                placeholder="名称，例如 Claude 备用"
-              />
-              <a-select
-                v-model:value="manualApiKeyForm.route_type"
-                :options="apiKeyRouteTypeOptions"
-              />
-              <a-input-password
-                v-model:value="manualApiKeyForm.key"
-                placeholder="sk-..."
-                autocomplete="new-password"
-                @press-enter="addManualApiKey"
-              />
-              <a-textarea
-                v-model:value="manualApiKeyForm.request_base_urls"
-                :rows="2"
-                placeholder="当前 Key 专用请求 URL，可留空"
-              />
-              <a-input
-                v-model:value="manualApiKeyForm.image_generation_path"
-                placeholder="生图 Path，可留空"
-              />
-              <a-input
-                v-model:value="manualApiKeyForm.image_edit_path"
-                placeholder="编辑 Path，可留空"
-              />
-              <a-button type="primary" @click="addManualApiKey">添加</a-button>
+              <div class="api-key-dialog-field manual-api-key-editor__name">
+                <div class="api-key-dialog-field__label">名称</div>
+                <a-input
+                  v-model:value="manualApiKeyForm.name"
+                  placeholder="名称，例如 Claude 备用"
+                />
+              </div>
+              <div class="api-key-dialog-field manual-api-key-editor__type">
+                <div class="api-key-dialog-field__label">路由类型</div>
+                <a-select
+                  v-model:value="manualApiKeyForm.route_type"
+                  :options="apiKeyRouteTypeOptions"
+                />
+              </div>
+              <div class="api-key-dialog-field manual-api-key-editor__path">
+                <div class="api-key-dialog-field__label">请求路径</div>
+                <a-select
+                  v-model:value="manualApiKeyForm.route_path"
+                  :options="apiKeyRoutePathOptions"
+                />
+              </div>
+              <div class="api-key-dialog-field manual-api-key-editor__key">
+                <div class="api-key-dialog-field__label">API Key</div>
+                <a-input-password
+                  v-model:value="manualApiKeyForm.key"
+                  placeholder="sk-..."
+                  autocomplete="new-password"
+                  @press-enter="addManualApiKey"
+                />
+              </div>
+              <div class="api-key-dialog-field manual-api-key-editor__urls">
+                <div class="api-key-dialog-field__label">专用请求 URL</div>
+                <a-textarea
+                  v-model:value="manualApiKeyForm.request_base_urls"
+                  :rows="2"
+                  placeholder="当前 Key 专用请求 URL，可留空"
+                />
+              </div>
+              <div class="api-key-dialog-field manual-api-key-editor__generation">
+                <div class="api-key-dialog-field__label">图片生成 Path</div>
+                <a-input
+                  v-model:value="manualApiKeyForm.image_generation_path"
+                  placeholder="生图 Path，可留空"
+                />
+              </div>
+              <div class="api-key-dialog-field manual-api-key-editor__edit">
+                <div class="api-key-dialog-field__label">图片编辑 Path</div>
+                <a-input
+                  v-model:value="manualApiKeyForm.image_edit_path"
+                  placeholder="编辑 Path，可留空"
+                />
+              </div>
+              <div class="manual-api-key-editor__action">
+                <a-button type="primary" @click="addManualApiKey">添加</a-button>
+              </div>
             </div>
             <small class="field-help">保存后自定义 Key 会与接口同步 Key 同时存在；专用 URL 优先于站点级 URL，适合同一站点 Claude/GPT 走不同 API URL。</small>
           </a-form-item>
@@ -4561,6 +4662,19 @@ onBeforeUnmount(() => {
   gap: 8px;
 }
 
+.api-key-dialog-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.api-key-dialog-field__label {
+  color: #18315e;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
 .api-key-dialog-item__urls {
   font-size: 12px;
 }
@@ -4573,9 +4687,27 @@ onBeforeUnmount(() => {
 
 .manual-api-key-editor {
   display: grid;
-  grid-template-columns: minmax(120px, 1fr) 150px minmax(180px, 1.4fr) minmax(200px, 1.6fr) minmax(140px, 1fr) minmax(140px, 1fr) auto;
+  grid-template-columns: minmax(140px, 1fr) 150px 200px;
   gap: 8px;
   align-items: start;
+}
+
+.manual-api-key-editor__key,
+.manual-api-key-editor__urls {
+  grid-column: 1 / -1;
+}
+
+.manual-api-key-editor__generation {
+  grid-column: 1 / 2;
+}
+
+.manual-api-key-editor__edit {
+  grid-column: 2 / 3;
+}
+
+.manual-api-key-editor__action {
+  grid-column: 3 / 4;
+  justify-self: start;
 }
 
 .email-pattern-tooltip {
@@ -5230,6 +5362,14 @@ onBeforeUnmount(() => {
   .api-key-dialog-item__paths,
   .manual-api-key-editor {
     grid-template-columns: 1fr;
+  }
+
+  .manual-api-key-editor__key,
+  .manual-api-key-editor__urls,
+  .manual-api-key-editor__generation,
+  .manual-api-key-editor__edit,
+  .manual-api-key-editor__action {
+    grid-column: 1 / -1;
   }
 
   .api-key-dialog-item__head {

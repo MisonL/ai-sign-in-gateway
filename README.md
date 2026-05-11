@@ -298,7 +298,7 @@ http://127.0.0.1:8972/api/gateway
 
 如果模型加载提示 404，通常表示当前站点的请求 API URL 不支持模型列表接口，或后台进程尚未更新到包含 `/api/tools/models` 的版本。先确认站点的 `api_request_urls` / `gateway_request_urls` 是否指向模型请求根地址，并重启最新二进制或后端进程。
 
-路由模型探测如果从 Codex/OpenAI 兼容 `/models` 成功读取到空列表，会默认写入 `gpt-5.4,gpt-5.5` 作为支持模型，避免“探测无模型但编辑仍保留旧模型”的状态不一致。
+Codex/OpenAI 兼容新增路由未声明 `supported_models` 时，会默认写入 `gpt-5.3-codex,gpt-5.3-codex-spark,gpt-5.4,gpt-5.4-mini,gpt-5.4-nano,gpt-5.4-pro,gpt-5.5,gpt-5.5-pro`。请求模型带 `-YYYY-MM-DD` 日期后缀时会按对应基础模型匹配；已有路由同步不会因支持模型为空而重填默认，避免覆盖编辑结果。路由模型探测如果从 `/models` 成功读取到空列表，也会使用同一默认列表。
 
 ## 余额与套餐余量
 

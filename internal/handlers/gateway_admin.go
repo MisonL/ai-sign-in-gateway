@@ -80,6 +80,7 @@ func (a *App) GatewayOverview(w http.ResponseWriter, r *http.Request) {
 
 	totalBalance, quantified := totalBalanceForRoutes(a.DB)
 	costSummary := gatewayUsageCostSummary(logs)
+	concurrencyPeaks, _ := services.GatewayConcurrencyPeakStats(a.DB, now)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"total_routes":                  total,
@@ -90,6 +91,8 @@ func (a *App) GatewayOverview(w http.ResponseWriter, r *http.Request) {
 		"total_balance_display":         totalBalance,
 		"quantified_balance_site_count": quantified,
 		"active_concurrency":            services.RouteTotalActive(),
+		"max_concurrency_all_time":      concurrencyPeaks.AllTime,
+		"max_concurrency_today":         concurrencyPeaks.Today,
 		"request_count_24h":             len(requestIDs),
 		"success_rate_24h":              successRate,
 		"avg_latency_ms_24h":            avgLatency,
@@ -113,7 +116,9 @@ func round2(v float64) float64 {
 
 func totalBalanceForRoutes(db *gormDB) (any, int) {
 	var routes []models.GatewayRouteState
-	if err := db.Where("last_balance IS NOT NULL").Find(&routes).Error; err != nil {
+	if err := db.Joins("JOIN sites ON sites.id = gateway_route_states.site_id").
+		Where("gateway_route_states.is_enabled = ? AND sites.is_enabled = ? AND gateway_route_states.last_balance IS NOT NULL", true, true).
+		Find(&routes).Error; err != nil {
 		return nil, 0
 	}
 	totals := map[string]float64{}
@@ -833,7 +838,7 @@ func (a *App) SyncGatewayRoutes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "route_count": count})
 }
 func (a *App) GatewayRoutes(w http.ResponseWriter, r *http.Request) {
-	includeDisabled := r.URL.Query().Get("include_disabled") != "false"
+	includeDisabled := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("include_disabled")), "true")
 	routes, err := services.ListGatewayRoutes(a.DB, r.URL.Query().Get("group"), includeDisabled)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -951,6 +956,8 @@ func (a *App) gatewayLogResponse(logs []models.GatewayRequestLog) []map[string]a
 			"key_fingerprint":      item.KeyFingerprint,
 			"group_name":           item.GroupName,
 			"target_path":          item.TargetPath,
+			"request_url":          item.RequestURL,
+			"user_agent":           item.UserAgent,
 			"method":               item.Method,
 			"route_strategy":       item.RouteStrategy,
 			"attempt_index":        item.AttemptIndex,
@@ -1050,12 +1057,12 @@ func (a *App) ToggleGatewayRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "网关路由不存在")
 		return
 	}
-	state.IsEnabled = !state.IsEnabled
-	if err := a.DB.Save(&state).Error; err != nil {
+	state, err := services.SetGatewayRouteManualEnabled(a.DB, state.ID, !state.IsEnabled)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "保存路由状态失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"id": state.ID, "is_enabled": state.IsEnabled, "circuit_state": state.CircuitState})
+	writeJSON(w, http.StatusOK, map[string]any{"id": state.ID, "is_enabled": state.IsEnabled, "is_enabled_manual": state.IsEnabledManual, "circuit_state": state.CircuitState})
 }
 
 func (a *App) DisableAllGatewayRoutes(w http.ResponseWriter, r *http.Request) {
@@ -1063,12 +1070,20 @@ func (a *App) DisableAllGatewayRoutes(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	result := a.DB.Model(&models.GatewayRouteState{}).Where("is_enabled = ?", true).Update("is_enabled", false)
-	if result.Error != nil {
+	var routes []models.GatewayRouteState
+	if err := a.DB.Select("id").Where("is_enabled = ?", true).Find(&routes).Error; err != nil {
 		writeError(w, http.StatusInternalServerError, "禁用全部路由失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "disabled_count": result.RowsAffected})
+	routeIDs := make([]uint, 0, len(routes))
+	for _, route := range routes {
+		routeIDs = append(routeIDs, route.ID)
+	}
+	if err := services.SetGatewayRoutesManualDisabled(a.DB, routeIDs, true); err != nil {
+		writeError(w, http.StatusInternalServerError, "禁用全部路由失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "disabled_count": len(routeIDs)})
 }
 
 func (a *App) EnableOnlyGatewayRoute(w http.ResponseWriter, r *http.Request) {
@@ -1077,15 +1092,22 @@ func (a *App) EnableOnlyGatewayRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "网关路由不存在")
 		return
 	}
-	if err := a.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&models.GatewayRouteState{}).Where("id <> ?", state.ID).Update("is_enabled", false).Error; err != nil {
-			return err
+	var routes []models.GatewayRouteState
+	if err := a.DB.Select("id").Find(&routes).Error; err != nil {
+		writeError(w, http.StatusInternalServerError, "设置唯一启用路由失败")
+		return
+	}
+	disableIDs := make([]uint, 0, len(routes))
+	for _, route := range routes {
+		if route.ID != state.ID {
+			disableIDs = append(disableIDs, route.ID)
 		}
-		if err := tx.Model(&models.GatewayRouteState{}).Where("id = ?", state.ID).Update("is_enabled", true).Error; err != nil {
-			return err
-		}
-		return nil
-	}); err != nil {
+	}
+	if err := services.SetGatewayRoutesManualDisabled(a.DB, disableIDs, true); err != nil {
+		writeError(w, http.StatusInternalServerError, "设置唯一启用路由失败")
+		return
+	}
+	if _, err := services.SetGatewayRouteManualEnabled(a.DB, state.ID, true); err != nil {
 		writeError(w, http.StatusInternalServerError, "设置唯一启用路由失败")
 		return
 	}
@@ -1112,8 +1134,16 @@ func (a *App) UpdateGatewayRouteType(w http.ResponseWriter, r *http.Request) {
 	}
 	routeType := normalizeGatewayRouteType(payload.RouteType)
 	if routeType == "" {
-		writeError(w, http.StatusBadRequest, "route_type 必须是 general/claude/gpt/codex/gemini")
+		writeError(w, http.StatusBadRequest, "route_type 必须是 general/claude/gpt_chat/codex/gemini")
 		return
+	}
+	routePath := ""
+	if payload.RoutePath != nil {
+		routePath = services.NormalizeGatewayRoutePath(*payload.RoutePath)
+		if strings.TrimSpace(*payload.RoutePath) != "" && routePath == "" {
+			writeError(w, http.StatusBadRequest, "route_path 必须是空、chat/completions 或 responses")
+			return
+		}
 	}
 	var state models.GatewayRouteState
 	if err := a.DB.Preload("Site").First(&state, chi.URLParam(r, "routeID")).Error; err != nil {
@@ -1122,18 +1152,41 @@ func (a *App) UpdateGatewayRouteType(w http.ResponseWriter, r *http.Request) {
 	}
 	state.RouteType = routeType
 	state.RouteTypeManual = true
+	if payload.RoutePath != nil {
+		state.RoutePath = routePath
+		state.RoutePathManual = true
+	}
 	if payload.SupportedModels != nil {
 		state.SupportedModels = services.EncodeGatewaySupportedModels(*payload.SupportedModels)
 	}
 	if payload.ManualRequestBaseURLs != nil {
 		state.ManualRequestBaseURLs = services.EncodeGatewayRequestBaseURLs(*payload.ManualRequestBaseURLs)
 		state.LastRequestBaseURL = ""
+		if changed, keyFingerprint := services.SetSiteAPIKeyRequestBaseURLs(&state.Site, state.KeyFingerprint, *payload.ManualRequestBaseURLs); changed && keyFingerprint != "" {
+			state.KeyFingerprint = keyFingerprint
+		}
+		requestBaseURLs := services.GatewayRouteManualRequestBaseURLs(state, state.Site)
+		if len(requestBaseURLs) == 0 {
+			requestBaseURLs = services.GatewayRequestBaseCandidates(state.Site)
+		}
+		state.SiteAPIURLSnapshot = services.EncodeGatewayRequestBaseURLs(requestBaseURLs)
 	}
 	if err := a.DB.Save(&state).Error; err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, gatewayRouteResponse(services.GatewayRoute{State: state, Site: state.Site, RequestBaseURL: services.GatewayRouteRequestBase(state, state.Site)}))
+	if payload.ManualRequestBaseURLs != nil {
+		if err := a.DB.Save(&state.Site).Error; err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, gatewayRouteResponse(services.GatewayRoute{
+		State:          state,
+		Site:           state.Site,
+		APIKey:         services.GatewayRouteAPIKeyForState(state),
+		RequestBaseURL: services.GatewayRouteRequestBase(state, state.Site),
+	}))
 }
 
 func (a *App) DiagnoseGatewayRoute(w http.ResponseWriter, r *http.Request) {
@@ -1441,6 +1494,8 @@ func gatewayRouteResponse(route services.GatewayRoute) map[string]any {
 		"key_source":               state.KeySource,
 		"route_type":               state.RouteType,
 		"route_type_manual":        state.RouteTypeManual,
+		"route_path":               state.RoutePath,
+		"route_path_manual":        state.RoutePathManual,
 		"supported_models":         services.GatewayRouteSupportedModels(state),
 		"model_probe_status":       state.ModelProbeStatus,
 		"model_probe_message":      state.ModelProbeMessage,
@@ -1449,6 +1504,7 @@ func gatewayRouteResponse(route services.GatewayRoute) map[string]any {
 		"route_priority_manual":    state.RoutePriorityManual,
 		"weight":                   state.Weight,
 		"is_enabled":               state.IsEnabled,
+		"is_enabled_manual":        state.IsEnabledManual,
 		"circuit_state":            state.CircuitState,
 		"consecutive_failures":     state.ConsecutiveFailures,
 		"active_concurrency":       services.RouteActiveCount(state.ID),
@@ -1483,7 +1539,7 @@ func normalizeGatewayRouteType(value string) string {
 		return "general"
 	case "claude", "anthropic":
 		return "claude"
-	case "gpt", "openai", "chatgpt", "chat", "chat_completions", "chat-completions":
+	case "gpt", "gptchat", "gpt_chat", "gpt-chat", "openai", "chatgpt", "chat", "chat_completions", "chat-completions":
 		return "gpt"
 	case "codex", "response", "responses":
 		return "codex"

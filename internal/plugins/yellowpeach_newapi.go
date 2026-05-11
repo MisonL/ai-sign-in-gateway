@@ -193,6 +193,13 @@ func (p *YellowPeach) FetchAccountStatus(ctx context.Context, site models.Site, 
 	}
 	payload, _, err := p.requestJSON(ctx, site, http.MethodGet, "/api/user/self", auth, nil, timeoutSeconds)
 	if err != nil {
+		if fallbackAuth, ok := yellowpeachAccessTokenFallbackAuth(site, auth); ok {
+			if fallbackPayload, _, fallbackErr := p.requestJSON(ctx, site, http.MethodGet, "/api/user/self", fallbackAuth, nil, timeoutSeconds); fallbackErr == nil {
+				auth = fallbackAuth
+				payload = fallbackPayload
+				err = nil
+			}
+		}
 		if hasYellowPeachLoginCredentials(site) {
 			fallbackAuth, loginErr := p.autoLogin(ctx, site, timeoutSeconds)
 			if loginErr == nil {
@@ -257,7 +264,10 @@ func (p *YellowPeach) SyncAPIKeys(ctx context.Context, site models.Site, timeout
 	if err != nil {
 		return APIKeySyncResult{}, err
 	}
-	updates, primaryKey := p.syncAPIKeys(ctx, site, auth, timeoutSeconds, false)
+	updates, primaryKey, err := p.syncAPIKeysWithError(ctx, site, auth, timeoutSeconds, false)
+	if err != nil {
+		return APIKeySyncResult{}, err
+	}
 	if updates == nil {
 		updates = models.JSONMap{}
 	}
@@ -299,6 +309,14 @@ func (p *YellowPeach) Checkin(ctx context.Context, site models.Site, timeoutSeco
 	}
 	payload, raw, err := p.requestJSON(ctx, site, http.MethodPost, target, auth, body, timeoutSeconds)
 	if err != nil {
+		if fallbackAuth, ok := yellowpeachAccessTokenFallbackAuth(site, auth); ok {
+			if fallbackPayload, fallbackRaw, fallbackErr := p.requestJSON(ctx, site, http.MethodPost, target, fallbackAuth, body, timeoutSeconds); fallbackErr == nil {
+				auth = fallbackAuth
+				payload = fallbackPayload
+				raw = fallbackRaw
+				err = nil
+			}
+		}
 		if hasYellowPeachLoginCredentials(site) {
 			fallbackAuth, loginErr := p.autoLogin(ctx, site, timeoutSeconds)
 			if loginErr == nil {
@@ -349,6 +367,9 @@ func (p *YellowPeach) authContext(ctx context.Context, site models.Site, timeout
 			if hasYellowPeachLoginCredentials(site) {
 				return p.autoLogin(ctx, site, timeoutSeconds)
 			}
+			if access != "" {
+				return auth, errors.New("已提供系统访问令牌，但当前站点未允许仅凭 access_token 自动获取 user_id；请填写该令牌所属用户 ID（请求头 New-Api-User）后重试。")
+			}
 			return auth, errors.New("已提供凭证但未能自动获取 user_id，请手动填写后重试。")
 		}
 		auth.UserID = resolved
@@ -366,6 +387,15 @@ func hasYellowPeachLoginCredentials(site models.Site) bool {
 	}
 	password := strings.TrimSpace(stringValue(site.Credentials, "password", ""))
 	return username != "" && password != ""
+}
+
+func yellowpeachAccessTokenFallbackAuth(site models.Site, current yellowpeachAuth) (yellowpeachAuth, bool) {
+	access := strings.TrimSpace(stringValue(site.Credentials, "access_token", ""))
+	if access == "" || current.Authorization != "" {
+		return yellowpeachAuth{}, false
+	}
+	userID := strings.TrimSpace(firstNonEmptyPlugin(current.UserID, stringValue(site.Credentials, "user_id", "")))
+	return yellowpeachAuth{Authorization: normalizeYPAuthorization(access), UserID: userID}, true
 }
 
 func (p *YellowPeach) apiKeyAuthContext(ctx context.Context, site models.Site, timeoutSeconds int) (yellowpeachAuth, error) {
@@ -671,6 +701,13 @@ func (p *YellowPeach) requestJSON(ctx context.Context, site models.Site, method,
 		if message == "" {
 			message = fmt.Sprintf("HTTP %d", resp.StatusCode)
 		}
+		if (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) && auth.Authorization != "" {
+			if auth.UserID == "" {
+				message = fmt.Sprintf("%s。已提供系统访问令牌，但当前站点可能要求同时配置 user_id（请求头 New-Api-User），请填写该令牌所属用户 ID 后重试。", message)
+			} else {
+				message = fmt.Sprintf("%s。已携带系统访问令牌和 New-Api-User=%s，请确认 access_token 未过期且 user_id 属于该令牌。", message, auth.UserID)
+			}
+		}
 		return parsed, raw, fmt.Errorf("yellowpeach 接口返回 %d: %s", resp.StatusCode, shorten(message, 200))
 	}
 	return parsed, raw, nil
@@ -681,39 +718,44 @@ func (p *YellowPeach) listAPIKeys(ctx context.Context, site models.Site, auth ye
 }
 
 func (p *YellowPeach) syncAPIKeys(ctx context.Context, site models.Site, auth yellowpeachAuth, timeoutSeconds int, allowCreate bool) (models.JSONMap, string) {
+	updates, primaryKey, _ := p.syncAPIKeysWithError(ctx, site, auth, timeoutSeconds, allowCreate)
+	return updates, primaryKey
+}
+
+func (p *YellowPeach) syncAPIKeysWithError(ctx context.Context, site models.Site, auth yellowpeachAuth, timeoutSeconds int, allowCreate bool) (models.JSONMap, string, error) {
 	apiKeysURL := strings.TrimSpace(stringValue(site.PluginConfig, "api_keys_url", ""))
 	if apiKeysURL == "" {
 		apiKeysURL = "/api/token/?p=0&size=100"
 	}
 	payload, _, err := p.requestJSON(ctx, site, http.MethodGet, apiKeysURL, auth, nil, timeoutSeconds)
 	if err != nil {
-		return nil, ""
+		return nil, "", err
 	}
 	items := extractTokenItems(payload)
 	if len(items) == 0 {
 		if !allowCreate {
-			return nil, ""
+			return nil, "", nil
 		}
 		p.createAPIKey(ctx, site, auth, timeoutSeconds)
 		payload, _, err = p.requestJSON(ctx, site, http.MethodGet, apiKeysURL, auth, nil, timeoutSeconds)
 		if err != nil {
-			return nil, ""
+			return nil, "", err
 		}
 		items = extractTokenItems(payload)
 		if len(items) == 0 || !newAPITokenItemsHaveUsableKey(items) {
-			return nil, ""
+			return nil, "", nil
 		}
 	}
 
 	keyByID := p.fetchTokenKeys(ctx, site, auth, tokenItemIDsNeedingKeys(items), timeoutSeconds)
 	if len(keyByID) == 0 && !newAPITokenItemsHaveUsableKey(items) {
 		if !allowCreate {
-			return nil, ""
+			return nil, "", nil
 		}
 		p.createAPIKey(ctx, site, auth, timeoutSeconds)
 		payload, _, err = p.requestJSON(ctx, site, http.MethodGet, apiKeysURL, auth, nil, timeoutSeconds)
 		if err != nil {
-			return nil, ""
+			return nil, "", err
 		}
 		items = extractTokenItems(payload)
 		keyByID = p.fetchTokenKeys(ctx, site, auth, tokenItemIDsNeedingKeys(items), timeoutSeconds)
@@ -759,13 +801,13 @@ func (p *YellowPeach) syncAPIKeys(ctx context.Context, site models.Site, auth ye
 		}
 	}
 	if len(apiKeys) == 0 {
-		return nil, ""
+		return nil, "", nil
 	}
 	if primary == nil {
 		primary = apiKeys[0]
 	}
 	credentialsUpdate["api_keys"] = apiKeys
-	return credentialsUpdate, strings.TrimSpace(fmt.Sprint(primary["key"]))
+	return credentialsUpdate, strings.TrimSpace(fmt.Sprint(primary["key"])), nil
 }
 
 func newAPITokenItemsHaveUsableKey(items []map[string]any) bool {
