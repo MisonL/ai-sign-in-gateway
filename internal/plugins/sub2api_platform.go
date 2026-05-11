@@ -954,6 +954,9 @@ func normalizeAPIKeyRouteType(value string) string {
 	if value == "" || value == "<nil>" {
 		return ""
 	}
+	if value == "general" || value == "auto" || value == "any" || value == "none" || value == "default" {
+		return "general"
+	}
 	if strings.Contains(value, "claude") || strings.Contains(value, "anthropic") {
 		return "claude"
 	}

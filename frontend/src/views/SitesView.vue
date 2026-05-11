@@ -1275,6 +1275,9 @@ function supportedModelsPreview(values: unknown, limit = 2): string {
 
 function normalizeApiKeyRouteType(value: unknown): string {
   const normalized = String(value ?? '').trim().toLowerCase()
+  if (['general', 'auto', 'any', 'none', 'default'].includes(normalized)) {
+    return 'general'
+  }
   if (normalized === 'claude' || normalized === 'anthropic') {
     return 'claude'
   }
@@ -1439,6 +1442,7 @@ const manualApiKeyEntries = computed(() =>
 )
 
 const apiKeyRouteTypeOptions = [
+  { label: '通用', value: 'general' },
   { label: 'GPT Chat', value: 'gpt' },
   { label: 'Codex Responses', value: 'codex' },
   { label: 'Claude', value: 'claude' },

@@ -1118,6 +1118,8 @@ func toolInferRouteType(site models.Site) string {
 
 func toolNormalizeRouteType(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "general", "auto", "any", "none", "default":
+		return "general"
 	case "claude", "anthropic":
 		return "claude"
 	case "gemini", "google":

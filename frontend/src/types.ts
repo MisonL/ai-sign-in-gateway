@@ -680,7 +680,7 @@ export interface GatewayRoute {
   key_name: string
   key_fingerprint: string
   key_source: string
-  route_type: 'claude' | 'gpt' | 'codex' | 'gemini'
+  route_type: 'general' | 'claude' | 'gpt' | 'codex' | 'gemini'
   route_type_manual?: boolean
   model_probe_status?: 'default' | 'key_metadata' | 'success' | 'failed' | ''
   model_probe_message?: string
@@ -733,7 +733,7 @@ export interface GatewayRouteProbeResult {
 }
 
 export interface GatewayRouteUpdatePayload {
-  route_type: 'claude' | 'gpt' | 'codex' | 'gemini'
+  route_type: 'general' | 'claude' | 'gpt' | 'codex' | 'gemini'
   supported_models?: string[]
   manual_request_base_urls?: string[]
 }

@@ -777,7 +777,7 @@ func filterAndOrderCandidates(routes []GatewayRoute, group, routeType string, po
 		if route.APIKey == "" || !route.Site.IsEnabled || !route.State.IsEnabled {
 			continue
 		}
-		if rt != "" && route.State.RouteType != rt {
+		if rt != "" && route.State.RouteType != rt && route.State.RouteType != "general" {
 			continue
 		}
 		// refresh half-open after cooldown
@@ -2584,6 +2584,8 @@ func inferRouteType(site models.Site) string {
 
 func normalizeRouteType(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "general", "auto", "any", "none", "default":
+		return "general"
 	case "claude", "anthropic":
 		return "claude"
 	case "gpt", "openai", "chatgpt", "chat", "chat_completions", "chat-completions":
@@ -2681,7 +2683,7 @@ func filterGatewayRoutesByRequest(routes []GatewayRoute, group, routeType, targe
 	if result.RouteType != "" {
 		next := make([]GatewayRoute, 0, len(filtered))
 		for _, route := range filtered {
-			if route.State.RouteType == result.RouteType {
+			if route.State.RouteType == result.RouteType || route.State.RouteType == "general" {
 				next = append(next, route)
 			}
 		}
@@ -2791,7 +2793,6 @@ func targetURL(baseURL, targetPath, rawQuery, routeType string) (string, error) 
 		values.Del("group")
 		values.Del("type")
 		values.Del("route_type")
-		values.Del("wire_api")
 		u.RawQuery = values.Encode()
 	}
 	return u.String(), nil

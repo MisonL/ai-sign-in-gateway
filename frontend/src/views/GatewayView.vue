@@ -258,6 +258,7 @@ const priorityDialogColumns = [
 ]
 
 const routeTypeOptions: Array<{ label: string; value: GatewayRoute['route_type'] }> = [
+  { label: '通用', value: 'general' },
   { label: 'Claude', value: 'claude' },
   { label: 'GPT Chat', value: 'gpt' },
   { label: 'Codex Responses', value: 'codex' },
@@ -265,6 +266,7 @@ const routeTypeOptions: Array<{ label: string; value: GatewayRoute['route_type']
 ]
 
 const routeTypeFilterOptions: Array<{ label: string; value: GatewayRoute['route_type'] }> = [
+  { label: '通用', value: 'general' },
   { label: 'Claude', value: 'claude' },
   { label: 'GPT Chat', value: 'gpt' },
   { label: 'Codex Responses', value: 'codex' },
@@ -1566,7 +1568,7 @@ async function handleRouteTypeChange(route: GatewayRoute, routeType: GatewayRout
 }
 
 async function handleRouteTypeSelect(route: GatewayRoute, value: unknown) {
-  if (value !== 'claude' && value !== 'gpt' && value !== 'codex' && value !== 'gemini') {
+  if (value !== 'general' && value !== 'claude' && value !== 'gpt' && value !== 'codex' && value !== 'gemini') {
     return
   }
   await handleRouteTypeChange(route, value)

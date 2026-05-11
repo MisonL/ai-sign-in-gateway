@@ -1185,13 +1185,13 @@ func TestGatewayGPTChatAndCodexResponsesUseDifferentAPIKeyRoutes(t *testing.T) {
 	}
 }
 
-func TestGatewayChatRouteDropsClientWireAPIQuery(t *testing.T) {
+func TestGatewayChatRouteForwardsClientWireAPIQuery(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/chat/completions" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
-		if got := r.URL.Query().Get("wire_api"); got != "" {
-			t.Fatalf("wire_api was forwarded upstream: %q", got)
+		if got := r.URL.Query().Get("wire_api"); got != "responses" {
+			t.Fatalf("wire_api query = %q", got)
 		}
 		if got := r.URL.Query().Get("foo"); got != "bar" {
 			t.Fatalf("foo query = %q", got)
@@ -1236,6 +1236,88 @@ func TestGatewayChatRouteDropsClientWireAPIQuery(t *testing.T) {
 	}
 	if !strings.Contains(string(result.Body), `"provider":"gpt-chat"`) {
 		t.Fatalf("body = %s", result.Body)
+	}
+}
+
+func TestGatewayGeneralRouteUsesClientRequestModeAndForwardsWireAPI(t *testing.T) {
+	hits := map[string]int{}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/responses":
+			hits["responses"]++
+			if got := r.URL.Query().Get("wire_api"); got != "responses" {
+				t.Fatalf("responses wire_api query = %q", got)
+			}
+			_, _ = w.Write([]byte(`{"provider":"general-responses"}`))
+		case "/v1/chat/completions":
+			hits["chat"]++
+			if got := r.URL.Query().Get("wire_api"); got != "chat" {
+				t.Fatalf("chat wire_api query = %q", got)
+			}
+			_, _ = w.Write([]byte(`{"provider":"general-chat"}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer upstream.Close()
+
+	db := newGatewayTestDB(t)
+	site := models.Site{
+		Name:      "general-wire-api",
+		BaseURL:   "https://panel.example",
+		PluginKey: "api-supplier",
+		IsEnabled: true,
+		Credentials: models.JSONMap{
+			"api_keys": []any{
+				map[string]any{
+					"name":              "general",
+					"key":               "general-key",
+					"status":            "active",
+					"route_type":        "general",
+					"supported_models":  []any{"gpt-5.5"},
+					"request_base_urls": []any{upstream.URL},
+				},
+			},
+		},
+		PluginConfig: models.JSONMap{"api_format": "openai"},
+	}
+	if err := db.Create(&site).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count, err := SyncGatewayRoutes(db); err != nil || count != 1 {
+		t.Fatalf("SyncGatewayRoutes count=%d err=%v", count, err)
+	}
+	var state models.GatewayRouteState
+	if err := db.Where("site_id = ?", site.ID).First(&state).Error; err != nil {
+		t.Fatal(err)
+	}
+	if state.RouteType != "general" {
+		t.Fatalf("route type = %q", state.RouteType)
+	}
+
+	responseBody := []byte(`{"model":"gpt-5.5","input":"ping"}`)
+	responseReq := httptest.NewRequest(http.MethodPost, "/api/gateway/v1/responses?wire_api=responses", bytes.NewReader(responseBody))
+	responseReq.Header.Set("Content-Type", "application/json")
+	responseResult, err := ProxyGatewayRequest(responseReq.Context(), db, responseReq, "responses", "", "", GatewayPolicy{RequestTimeout: 5, MaxAttempts: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(responseResult.Body), `"provider":"general-responses"`) {
+		t.Fatalf("response body = %s", responseResult.Body)
+	}
+
+	chatBody := []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"ping"}]}`)
+	chatReq := httptest.NewRequest(http.MethodPost, "/api/gateway/v1/chat/completions?wire_api=chat", bytes.NewReader(chatBody))
+	chatReq.Header.Set("Content-Type", "application/json")
+	chatResult, err := ProxyGatewayRequest(chatReq.Context(), db, chatReq, "chat/completions", "", "", GatewayPolicy{RequestTimeout: 5, MaxAttempts: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(chatResult.Body), `"provider":"general-chat"`) {
+		t.Fatalf("chat body = %s", chatResult.Body)
+	}
+	if hits["responses"] != 1 || hits["chat"] != 1 {
+		t.Fatalf("hits = %#v", hits)
 	}
 }
 
