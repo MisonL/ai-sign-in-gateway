@@ -1185,6 +1185,60 @@ func TestGatewayGPTChatAndCodexResponsesUseDifferentAPIKeyRoutes(t *testing.T) {
 	}
 }
 
+func TestGatewayChatRouteDropsClientWireAPIQuery(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("wire_api"); got != "" {
+			t.Fatalf("wire_api was forwarded upstream: %q", got)
+		}
+		if got := r.URL.Query().Get("foo"); got != "bar" {
+			t.Fatalf("foo query = %q", got)
+		}
+		_, _ = w.Write([]byte(`{"provider":"gpt-chat"}`))
+	}))
+	defer upstream.Close()
+
+	db := newGatewayTestDB(t)
+	site := models.Site{
+		Name:      "chat-wire-api",
+		BaseURL:   upstream.URL,
+		PluginKey: "api-supplier",
+		IsEnabled: true,
+		Credentials: models.JSONMap{
+			"api_keys": []any{
+				map[string]any{
+					"name":              "chat",
+					"key":               "chat-key",
+					"status":            "active",
+					"route_type":        "gpt",
+					"supported_models":  []any{"gpt-5.5"},
+					"request_base_urls": []any{upstream.URL},
+				},
+			},
+		},
+		PluginConfig: models.JSONMap{"api_format": "openai"},
+	}
+	if err := db.Create(&site).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count, err := SyncGatewayRoutes(db); err != nil || count != 1 {
+		t.Fatalf("SyncGatewayRoutes count=%d err=%v", count, err)
+	}
+
+	body := []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"ping"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/v1/chat/completions?wire_api=responses&foo=bar", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	result, err := ProxyGatewayRequest(req.Context(), db, req, "chat/completions", "", "", GatewayPolicy{RequestTimeout: 5, MaxAttempts: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(result.Body), `"provider":"gpt-chat"`) {
+		t.Fatalf("body = %s", result.Body)
+	}
+}
+
 func TestGatewayRequestBaseUsesPerAPIKeyMetadata(t *testing.T) {
 	gptHits := 0
 	gpt := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

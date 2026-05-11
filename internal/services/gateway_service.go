@@ -2791,6 +2791,7 @@ func targetURL(baseURL, targetPath, rawQuery, routeType string) (string, error) 
 		values.Del("group")
 		values.Del("type")
 		values.Del("route_type")
+		values.Del("wire_api")
 		u.RawQuery = values.Encode()
 	}
 	return u.String(), nil
