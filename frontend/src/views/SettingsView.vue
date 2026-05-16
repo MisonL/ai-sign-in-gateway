@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { DatabaseOutlined, DeleteOutlined, DownloadOutlined, FolderOpenOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons-vue'
+import { CopyOutlined, DatabaseOutlined, DeleteOutlined, DownloadOutlined, FolderOpenOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons-vue'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -20,7 +20,7 @@ import {
 } from '../api'
 import ShellLayout from '../components/ShellLayout.vue'
 import { useToast } from '../toast'
-import type { RuntimeDatabaseBackupFile, RuntimeStopPortResult, SettingsData } from '../types'
+import type { GatewayModelPrice, GatewayPricingScheme, RuntimeDatabaseBackupFile, RuntimeStopPortResult, SettingsData } from '../types'
 
 const toast = useToast()
 const route = useRoute()
@@ -40,6 +40,9 @@ const form = reactive<SettingsData>({
   database_backup_dir: '',
   database_backup_interval_minutes: 1440,
   database_backup_retention: 7,
+  log_retention_days: 5,
+  gateway_pricing_active_scheme_id: 'official',
+  gateway_pricing_schemes: [],
   feature_flags: {},
   features: [],
   desktop_frontend_default_port: 3721,
@@ -72,9 +75,24 @@ const databaseBackupDir = ref('')
 const runtimeConfigDirInput = ref('')
 const runtimeDatabaseFileInput = ref<HTMLInputElement | null>(null)
 const currentUsername = ref('')
-const activeTab = ref<'schedule' | 'runtime' | 'database' | 'config' | 'account'>('schedule')
+const activeTab = ref<'schedule' | 'runtime' | 'database' | 'pricing' | 'extensions' | 'config' | 'account'>('schedule')
 const isDesktopEmbedded = computed(() => route.path === '/desktop')
 const settingsFrameComponent = computed(() => (isDesktopEmbedded.value ? 'div' : ShellLayout))
+const pricingProviderOptions = [
+  { label: 'Codex / OpenAI', value: 'codex' },
+  { label: 'Claude', value: 'claude' },
+  { label: 'Gemini', value: 'gemini' },
+]
+const pricingSchemeOptions = computed(() =>
+  form.gateway_pricing_schemes.map((scheme) => ({
+    label: scheme.readonly ? `${scheme.name}（只读）` : scheme.name,
+    value: scheme.id,
+  })),
+)
+const activePricingScheme = computed(() =>
+  form.gateway_pricing_schemes.find((scheme) => scheme.id === form.gateway_pricing_active_scheme_id) ?? form.gateway_pricing_schemes[0] ?? null,
+)
+const activePricingEditable = computed(() => Boolean(activePricingScheme.value && !activePricingScheme.value.readonly))
 const accountForm = reactive({
   new_username: '',
   current_password: '',
@@ -87,6 +105,12 @@ async function loadData() {
   try {
     const settings = await getSettings()
     Object.assign(form, settings)
+    if (!form.gateway_pricing_active_scheme_id) {
+      form.gateway_pricing_active_scheme_id = 'official'
+    }
+    if (!Array.isArray(form.gateway_pricing_schemes)) {
+      form.gateway_pricing_schemes = []
+    }
     runtimeConfigDirInput.value = settings.runtime_pending_config_dir || settings.runtime_config_dir || settings.runtime_default_config_dir || ''
     await loadDatabaseBackups(false)
     try {
@@ -101,6 +125,55 @@ async function loadData() {
   } finally {
     loading.value = false
   }
+}
+
+function clonePricingScheme(source: GatewayPricingScheme): GatewayPricingScheme {
+  return {
+    ...source,
+    prices: source.prices.map((price) => ({ ...price })),
+  }
+}
+
+function duplicateActivePricingScheme() {
+  const source = activePricingScheme.value
+  if (!source) {
+    return
+  }
+  const next = clonePricingScheme(source)
+  next.id = `custom-${Date.now()}`
+  next.name = source.readonly ? '官方价格副本' : `${source.name} 副本`
+  next.readonly = false
+  next.source = 'custom'
+  form.gateway_pricing_schemes.push(next)
+  form.gateway_pricing_active_scheme_id = next.id
+}
+
+function addPricingRow() {
+  const scheme = activePricingScheme.value
+  if (!scheme || scheme.readonly) {
+    return
+  }
+  scheme.prices.push({
+    provider: 'codex',
+    model_prefix: '',
+    display_name: '',
+    input_per_mtok: 0,
+    cached_input_per_mtok: 0,
+    cache_write_per_mtok: 0,
+    output_per_mtok: 0,
+  })
+}
+
+function removePricingRow(index: number) {
+  const scheme = activePricingScheme.value
+  if (!scheme || scheme.readonly) {
+    return
+  }
+  scheme.prices.splice(index, 1)
+}
+
+function priceRowKey(price: GatewayModelPrice, index: number) {
+  return `${price.provider}-${price.model_prefix}-${index}`
 }
 
 async function save() {
@@ -567,6 +640,28 @@ onMounted(loadData)
                         </small>
                       </a-form-item>
 
+                      <a-form-item label="日志配置">
+                        <a-space direction="vertical" size="middle" class="runtime-backup-settings">
+                          <a-row :gutter="16">
+                            <a-col :xs="24" :md="12">
+                              <a-form-item label="日志保留天数" html-for="settings-log-retention-days">
+                                <a-input-number
+                                  id="settings-log-retention-days"
+                                  v-model:value="form.log_retention_days"
+                                  name="settings_log_retention_days"
+                                  style="width: 100%"
+                                  :min="1"
+                                  :max="365"
+                                />
+                              </a-form-item>
+                            </a-col>
+                          </a-row>
+                        </a-space>
+                        <small class="field-help">
+                          默认保留 5 天；保存后会立即清理更早的签到运行日志和网关请求日志，后台也会每小时自动清理一次。
+                        </small>
+                      </a-form-item>
+
                       <a-form-item label="自动备份数据库">
                         <a-space direction="vertical" size="middle" class="runtime-backup-settings">
                           <a-switch
@@ -665,6 +760,175 @@ onMounted(loadData)
                           </template>
                         </a-table-column>
                       </a-table>
+                    </a-form>
+                  </div>
+                </div>
+              </a-tab-pane>
+              <a-tab-pane key="pricing" tab="价格">
+                <div class="card-form runtime-tab-form">
+                  <div class="card-scroll card-scroll--padded">
+                    <a-form layout="vertical">
+                      <a-alert
+                        type="info"
+                        show-icon
+                        message="价格按上游返回的 usage token 计算"
+                        description="官方价格方案不可修改；复制为自定义方案后可调整模型前缀和每 100 万 token 单价。未返回 usage 或未匹配价格的请求会计为未知费用。"
+                        class="settings-security-alert"
+                      />
+
+                      <a-row :gutter="16">
+                        <a-col :xs="24" :md="12">
+                          <a-form-item label="当前价格方案">
+                            <a-select
+                              v-model:value="form.gateway_pricing_active_scheme_id"
+                              :options="pricingSchemeOptions"
+                            />
+                          </a-form-item>
+                        </a-col>
+                        <a-col :xs="24" :md="12">
+                          <a-form-item label="方案操作">
+                            <a-space wrap>
+                              <a-button @click="duplicateActivePricingScheme">
+                                <template #icon><CopyOutlined /></template>
+                                复制当前方案
+                              </a-button>
+                              <a-tag v-if="activePricingScheme?.readonly">官方只读</a-tag>
+                              <a-tag v-else color="processing">自定义可编辑</a-tag>
+                            </a-space>
+                          </a-form-item>
+                        </a-col>
+                      </a-row>
+
+                      <template v-if="activePricingScheme">
+                        <a-row :gutter="16">
+                          <a-col :xs="24" :md="12">
+                            <a-form-item label="方案名称">
+                              <a-input
+                                v-model:value="activePricingScheme.name"
+                                :readonly="!activePricingEditable"
+                              />
+                            </a-form-item>
+                          </a-col>
+                          <a-col :xs="24" :md="12">
+                            <a-form-item label="来源">
+                              <a-input
+                                v-model:value="activePricingScheme.source"
+                                :readonly="!activePricingEditable"
+                              />
+                            </a-form-item>
+                          </a-col>
+                        </a-row>
+
+                        <div class="pricing-grid pricing-grid--head">
+                          <span>提供方</span>
+                          <span>模型前缀</span>
+                          <span>显示名称</span>
+                          <span>输入 / MTok</span>
+                          <span>缓存读 / MTok</span>
+                          <span>缓存写 / MTok</span>
+                          <span>输出 / MTok</span>
+                          <span>操作</span>
+                        </div>
+                        <div
+                          v-for="(price, index) in activePricingScheme.prices"
+                          :key="priceRowKey(price, index)"
+                          class="pricing-grid"
+                        >
+                          <a-select
+                            v-if="activePricingEditable"
+                            v-model:value="price.provider"
+                            :options="pricingProviderOptions"
+                          />
+                          <a-tag v-else>{{ price.provider }}</a-tag>
+                          <a-input
+                            v-model:value="price.model_prefix"
+                            :readonly="!activePricingEditable"
+                            placeholder="gpt-5.5"
+                          />
+                          <a-input
+                            v-model:value="price.display_name"
+                            :readonly="!activePricingEditable"
+                            placeholder="显示名称"
+                          />
+                          <a-input-number
+                            v-model:value="price.input_per_mtok"
+                            style="width: 100%"
+                            :min="0"
+                            :step="0.001"
+                            :disabled="!activePricingEditable"
+                          />
+                          <a-input-number
+                            v-model:value="price.cached_input_per_mtok"
+                            style="width: 100%"
+                            :min="0"
+                            :step="0.001"
+                            :disabled="!activePricingEditable"
+                          />
+                          <a-input-number
+                            v-model:value="price.cache_write_per_mtok"
+                            style="width: 100%"
+                            :min="0"
+                            :step="0.001"
+                            :disabled="!activePricingEditable"
+                          />
+                          <a-input-number
+                            v-model:value="price.output_per_mtok"
+                            style="width: 100%"
+                            :min="0"
+                            :step="0.001"
+                            :disabled="!activePricingEditable"
+                          />
+                          <a-button
+                            danger
+                            size="small"
+                            :disabled="!activePricingEditable"
+                            @click="removePricingRow(index)"
+                          >
+                            删除
+                          </a-button>
+                        </div>
+
+                        <div class="card-actions card-actions--left">
+                          <a-space wrap>
+                            <a-button :disabled="!activePricingEditable" @click="addPricingRow">
+                              <template #icon><PlusOutlined /></template>
+                              添加价格
+                            </a-button>
+                            <a-button type="primary" :loading="loading" @click="save">
+                              <template #icon><SaveOutlined /></template>
+                              保存设置
+                            </a-button>
+                          </a-space>
+                        </div>
+                      </template>
+                    </a-form>
+                  </div>
+                </div>
+              </a-tab-pane>
+              <a-tab-pane key="extensions" tab="扩展">
+                <div class="card-form runtime-tab-form">
+                  <div class="card-scroll card-scroll--padded">
+                    <a-form layout="vertical">
+                      <a-list :data-source="form.features" item-layout="horizontal" class="extension-settings-list">
+                        <template #renderItem="{ item }">
+                          <a-list-item>
+                            <a-list-item-meta :title="item.name" :description="item.description || item.key" />
+                            <a-switch
+                              :checked="Boolean(form.feature_flags[item.key] ?? item.default_enabled)"
+                              checked-children="启用"
+                              un-checked-children="关闭"
+                              @change="(checked) => { form.feature_flags[item.key] = checked === true }"
+                            />
+                          </a-list-item>
+                        </template>
+                      </a-list>
+                      <a-empty v-if="!form.features.length" description="未安装扩展" />
+                      <div class="card-actions card-actions--left">
+                        <a-button type="primary" :loading="loading" @click="save">
+                          <template #icon><SaveOutlined /></template>
+                          保存设置
+                        </a-button>
+                      </div>
                     </a-form>
                   </div>
                 </div>
@@ -961,6 +1225,26 @@ onMounted(loadData)
   overflow-wrap: anywhere;
 }
 
+.pricing-grid {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.75fr) minmax(140px, 1.1fr) minmax(130px, 1fr) repeat(4, minmax(96px, 0.75fr)) 72px;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+  min-width: 0;
+}
+
+.pricing-grid--head {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.pricing-grid :deep(.ant-tag) {
+  margin-inline-end: 0;
+}
+
 .desktop-runtime-row {
   margin-top: 8px;
 }
@@ -986,6 +1270,16 @@ onMounted(loadData)
 
   .runtime-config-loader :deep(.ant-btn) {
     width: 100%;
+  }
+
+  .pricing-grid {
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .pricing-grid--head {
+    display: none;
   }
 }
 </style>

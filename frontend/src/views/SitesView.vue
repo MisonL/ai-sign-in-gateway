@@ -174,6 +174,9 @@ const checkinConfigForm = reactive<SettingsData>({
   database_backup_dir: '',
   database_backup_interval_minutes: 1440,
   database_backup_retention: 7,
+  log_retention_days: 5,
+  gateway_pricing_active_scheme_id: 'official',
+  gateway_pricing_schemes: [],
   feature_flags: {},
   features: [],
   desktop_frontend_default_port: 3721,
@@ -2645,7 +2648,7 @@ function editorPayload(): SitePayload {
   }
 }
 
-function upsertSite(saved: Site) {
+function upsertSite(saved: Site, options: { edit?: boolean } = {}) {
   saved = normalizeSite(saved)
   const index = sites.value.findIndex((site) => site.id === saved.id)
   if (index >= 0) {
@@ -2654,7 +2657,7 @@ function upsertSite(saved: Site) {
     sites.value = [saved, ...sites.value]
   }
   selectedId.value = saved.id
-  editingId.value = saved.id
+  editingId.value = options.edit === false ? null : saved.id
 }
 
 async function persistEditor(options: { keepDrawerOpen?: boolean; showToast?: boolean } = {}) {
@@ -2733,11 +2736,11 @@ async function saveBatchRegisteredSites() {
   batchRegisterResult.value = result
   const firstCreated = result.items.find((item) => item.ok && item.site)?.site
   if (firstCreated) {
-    upsertSite(firstCreated)
+    upsertSite(firstCreated, { edit: false })
   }
-  drawerOpen.value = false
   await syncRoutesAfterSiteChange()
   await reloadDataWithCheckinExtras(firstCreated?.id ?? selectedId.value)
+  drawerOpen.value = true
   const failedText = result.failed_count ? `，失败 ${result.failed_count}` : ''
   toast.success(`批量注册完成：创建 ${result.created_count}${failedText}。`)
 }
@@ -4207,7 +4210,8 @@ onBeforeUnmount(() => {
                   placeholder="编辑 Path，可留空"
                 />
               </div>
-              <div class="manual-api-key-editor__action">
+              <div class="api-key-dialog-field manual-api-key-editor__action">
+                <div class="api-key-dialog-field__label api-key-dialog-field__label--spacer" aria-hidden="true">操作</div>
                 <a-button type="primary" @click="addManualApiKey">添加</a-button>
               </div>
             </div>
@@ -4673,6 +4677,10 @@ onBeforeUnmount(() => {
   font-size: 12px;
   font-weight: 700;
   line-height: 1.4;
+}
+
+.api-key-dialog-field__label--spacer {
+  visibility: hidden;
 }
 
 .api-key-dialog-item__urls {
@@ -5370,6 +5378,10 @@ onBeforeUnmount(() => {
   .manual-api-key-editor__edit,
   .manual-api-key-editor__action {
     grid-column: 1 / -1;
+  }
+
+  .manual-api-key-editor__action .api-key-dialog-field__label--spacer {
+    display: none;
   }
 
   .api-key-dialog-item__head {

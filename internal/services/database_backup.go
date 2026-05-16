@@ -60,7 +60,7 @@ func (r DatabaseBackupRunner) shouldRun(lastBackup *time.Time) bool {
 	if !settings.DatabaseBackupEnabled {
 		return false
 	}
-	backupDir, err := normalizeBackupDir(settings.DatabaseBackupDir)
+	backupDir, err := r.ResolveBackupDir(settings.DatabaseBackupDir)
 	if err != nil {
 		log.Printf("自动备份数据库: 备份目录无效: %v", err)
 		return false
@@ -116,6 +116,31 @@ func (r DatabaseBackupRunner) loadSettings() (models.SystemSetting, error) {
 		return models.SystemSetting{}, err
 	}
 	return settings, nil
+}
+
+func (r DatabaseBackupRunner) ResolveBackupDir(path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return r.DefaultBackupDir()
+	}
+	dir, err := normalizeBackupDir(path)
+	if err != nil {
+		return "", err
+	}
+	if isForeignUnixDefaultBackupDir(dir) {
+		return r.DefaultBackupDir()
+	}
+	return dir, nil
+}
+
+func (r DatabaseBackupRunner) DefaultBackupDir() (string, error) {
+	sourcePath, err := filepath.Abs(filepath.Clean(r.DatabasePath))
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(sourcePath) == "" || sourcePath == "." {
+		return "", os.ErrInvalid
+	}
+	return filepath.Join(filepath.Dir(sourcePath), "backups"), nil
 }
 
 func vacuumInto(sourcePath string, targetPath string) error {
@@ -185,22 +210,30 @@ func ListDatabaseBackups(backupDir string) ([]DatabaseBackupFile, error) {
 }
 
 func DeleteDatabaseBackup(backupDir string, name string) error {
-	dir, err := normalizeBackupDir(backupDir)
+	backup, err := DatabaseBackupFileByName(backupDir, name)
 	if err != nil {
 		return err
 	}
+	return os.Remove(backup.Path)
+}
+
+func DatabaseBackupFileByName(backupDir string, name string) (DatabaseBackupFile, error) {
+	dir, err := normalizeBackupDir(backupDir)
+	if err != nil {
+		return DatabaseBackupFile{}, err
+	}
 	cleanName := filepath.Base(strings.TrimSpace(name))
 	if cleanName == "." || cleanName == string(filepath.Separator) || cleanName != strings.TrimSpace(name) {
-		return os.ErrInvalid
+		return DatabaseBackupFile{}, os.ErrInvalid
 	}
 	if !strings.HasPrefix(cleanName, "ai-sign-in-gateway-") || filepath.Ext(cleanName) != ".db" {
-		return os.ErrInvalid
+		return DatabaseBackupFile{}, os.ErrInvalid
 	}
 	target := filepath.Join(dir, cleanName)
 	if !strings.HasPrefix(filepath.Clean(target), filepath.Clean(dir)+string(filepath.Separator)) {
-		return os.ErrInvalid
+		return DatabaseBackupFile{}, os.ErrInvalid
 	}
-	return os.Remove(target)
+	return backupFileInfo(target)
 }
 
 func NormalizeDatabaseBackupDir(path string) (string, error) {
@@ -255,6 +288,19 @@ func samePath(path string, dir string) bool {
 	left, leftErr := filepath.Abs(filepath.Clean(path))
 	right, rightErr := filepath.Abs(filepath.Clean(dir))
 	return leftErr == nil && rightErr == nil && left == right
+}
+
+func isForeignUnixDefaultBackupDir(dir string) bool {
+	cleanDir := filepath.ToSlash(filepath.Clean(dir))
+	if !strings.HasPrefix(cleanDir, "/home/") || !strings.Contains(cleanDir, "/.ai-sign-in-gateway/") {
+		return false
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	cleanHome := filepath.ToSlash(filepath.Clean(home))
+	return cleanDir != cleanHome && !strings.HasPrefix(cleanDir, cleanHome+"/")
 }
 
 func nonZeroInt(value int, fallback int) int {

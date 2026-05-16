@@ -63,8 +63,37 @@ EOF
   printf '%s\n' "$include_dir"
 }
 
+prepare_linux_webkit_pkg_config_compat() {
+  local pkg_config_dir="$OUTPUT_DIR/pkgconfig-compat"
+  local version
+
+  if pkg-config --exists webkit2gtk-4.0; then
+    return 1
+  fi
+  if ! pkg-config --exists webkit2gtk-4.1; then
+    echo "缺少 Linux 桌面构建依赖: webkit2gtk-4.0 或 webkit2gtk-4.1" >&2
+    exit 1
+  fi
+
+  version="$(pkg-config --modversion webkit2gtk-4.1)"
+  mkdir -p "$pkg_config_dir"
+  cat >"$pkg_config_dir/webkit2gtk-4.0.pc" <<EOF
+Name: WebKitGTK
+Description: WebKitGTK 4.1 compatibility entry for webview_go
+Version: $version
+Requires: webkit2gtk-4.1
+Libs:
+Cflags:
+EOF
+  echo "检测到 webkit2gtk-4.1，已生成 webview_go 的 pkg-config 兼容入口。" >&2
+  printf '%s\n' "$pkg_config_dir"
+}
+
 require_command go
 require_command npm
+if [[ "$DESKTOP_SHELL" == "true" && "$CGO_ENABLED_VALUE" != "0" && "$TARGET_GOOS" == "linux" ]]; then
+  require_command pkg-config
+fi
 
 mkdir -p "$OUTPUT_DIR"
 trap cleanup EXIT
@@ -93,6 +122,11 @@ echo "构建自包含${BUILD_LABEL}二进制..."
         build_env+=("CXX=${CXX:-i686-w64-mingw32-g++}")
         ;;
     esac
+  fi
+  if [[ "$CGO_ENABLED_VALUE" != "0" && "$TARGET_GOOS" == "linux" ]]; then
+    if webkit_pkg_config_dir="$(prepare_linux_webkit_pkg_config_compat)"; then
+      build_env+=("PKG_CONFIG_PATH=$webkit_pkg_config_dir${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}")
+    fi
   fi
   env "${build_env[@]}" \
     go build -tags "$BUILD_TAGS" -trimpath -ldflags "$GO_LDFLAGS" -o "$OUTPUT_PATH" ./cmd/ai-sign-in-gateway

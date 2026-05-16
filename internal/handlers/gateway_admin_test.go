@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -253,6 +254,207 @@ func TestUpdateGatewayRouteTypeResponseKeepsAPIKeyStatus(t *testing.T) {
 	}
 }
 
+func TestGatewayRouteGroupManagementAssignsRouteToMultipleGroups(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:gateway-route-groups-admin?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(models.All()...); err != nil {
+		t.Fatalf("auto migrate: %v", err)
+	}
+	site := models.Site{
+		Name:      "group-admin-site",
+		BaseURL:   "https://group-admin.example",
+		PluginKey: "api-supplier",
+		IsEnabled: true,
+		Credentials: models.JSONMap{
+			"api_key": "route-secret",
+		},
+	}
+	if err := db.Create(&site).Error; err != nil {
+		t.Fatalf("create site: %v", err)
+	}
+	state := models.GatewayRouteState{
+		SiteID:         site.ID,
+		KeyFingerprint: testGatewayRouteFingerprint("route-secret"),
+		RouteType:      "codex",
+		IsEnabled:      true,
+		CircuitState:   "closed",
+	}
+	if err := db.Create(&state).Error; err != nil {
+		t.Fatalf("create route: %v", err)
+	}
+
+	app := &App{DB: db}
+	router := chi.NewRouter()
+	router.Post("/route-groups", app.CreateGatewayRouteGroup)
+	router.Put("/routes/{routeID}/groups", app.UpdateGatewayRouteGroups)
+	router.Get("/routes", app.GatewayRoutes)
+
+	firstBody, _ := json.Marshal(map[string]any{"name": "fast", "api_key": "fast-key"})
+	firstRec := httptest.NewRecorder()
+	router.ServeHTTP(firstRec, httptest.NewRequest(http.MethodPost, "/route-groups", bytes.NewReader(firstBody)))
+	if firstRec.Code != http.StatusCreated {
+		t.Fatalf("create first status = %d body = %s", firstRec.Code, firstRec.Body.String())
+	}
+	var firstGroup map[string]any
+	if err := json.Unmarshal(firstRec.Body.Bytes(), &firstGroup); err != nil {
+		t.Fatalf("decode first group: %v", err)
+	}
+
+	secondBody, _ := json.Marshal(map[string]any{"name": "cheap"})
+	secondRec := httptest.NewRecorder()
+	router.ServeHTTP(secondRec, httptest.NewRequest(http.MethodPost, "/route-groups", bytes.NewReader(secondBody)))
+	if secondRec.Code != http.StatusCreated {
+		t.Fatalf("create second status = %d body = %s", secondRec.Code, secondRec.Body.String())
+	}
+	var secondGroup map[string]any
+	if err := json.Unmarshal(secondRec.Body.Bytes(), &secondGroup); err != nil {
+		t.Fatalf("decode second group: %v", err)
+	}
+
+	assignBody, _ := json.Marshal(map[string]any{
+		"group_ids": []uint{uint(firstGroup["id"].(float64)), uint(secondGroup["id"].(float64))},
+	})
+	assignRec := httptest.NewRecorder()
+	router.ServeHTTP(assignRec, httptest.NewRequest(http.MethodPut, "/routes/1/groups", bytes.NewReader(assignBody)))
+	if assignRec.Code != http.StatusOK {
+		t.Fatalf("assign status = %d body = %s", assignRec.Code, assignRec.Body.String())
+	}
+
+	routesRec := httptest.NewRecorder()
+	router.ServeHTTP(routesRec, httptest.NewRequest(http.MethodGet, "/routes", nil))
+	if routesRec.Code != http.StatusOK {
+		t.Fatalf("routes status = %d body = %s", routesRec.Code, routesRec.Body.String())
+	}
+	var routes []map[string]any
+	if err := json.Unmarshal(routesRec.Body.Bytes(), &routes); err != nil {
+		t.Fatalf("decode routes: %v", err)
+	}
+	if len(routes) != 1 {
+		t.Fatalf("routes len = %d", len(routes))
+	}
+	groups, ok := routes[0]["groups"].([]any)
+	if !ok || len(groups) != 2 {
+		t.Fatalf("route groups = %#v", routes[0]["groups"])
+	}
+	if routes[0]["group_name"] != "cheap, fast" && routes[0]["group_name"] != "fast, cheap" {
+		t.Fatalf("group_name = %v", routes[0]["group_name"])
+	}
+}
+
+func TestDeleteGatewayRouteRemovesMatchingSiteAPIKeyAndGroupMembership(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:gateway-route-delete-api-key?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(models.All()...); err != nil {
+		t.Fatalf("auto migrate: %v", err)
+	}
+	site := models.Site{
+		Name:      "delete-route-site",
+		BaseURL:   "https://delete-route.example",
+		PluginKey: "api-supplier",
+		IsEnabled: true,
+		Credentials: models.JSONMap{
+			"api_keys": []any{
+				map[string]any{"name": "keep", "key": "keep-secret", "status": "active", "route_type": "codex"},
+				map[string]any{"name": "delete", "key": "delete-secret", "status": "active", "route_type": "claude"},
+			},
+		},
+	}
+	if err := db.Create(&site).Error; err != nil {
+		t.Fatalf("create site: %v", err)
+	}
+	route := models.GatewayRouteState{
+		SiteID:              site.ID,
+		KeyFingerprint:      testGatewayRouteFingerprint("delete-secret"),
+		KeyName:             "delete",
+		KeySource:           "site.credentials.api_keys",
+		SiteNameSnapshot:    site.Name,
+		SiteBaseURLSnapshot: site.BaseURL,
+		RouteType:           "claude",
+		IsEnabled:           true,
+		CircuitState:        "closed",
+	}
+	if err := db.Create(&route).Error; err != nil {
+		t.Fatalf("create route: %v", err)
+	}
+	keepRoute := models.GatewayRouteState{
+		SiteID:              site.ID,
+		KeyFingerprint:      testGatewayRouteFingerprint("keep-secret"),
+		KeyName:             "keep",
+		KeySource:           "site.credentials.api_keys",
+		SiteNameSnapshot:    site.Name,
+		SiteBaseURLSnapshot: site.BaseURL,
+		RouteType:           "codex",
+		IsEnabled:           true,
+		CircuitState:        "closed",
+	}
+	if err := db.Create(&keepRoute).Error; err != nil {
+		t.Fatalf("create keep route: %v", err)
+	}
+	group := models.GatewayRouteGroup{Name: "fast", APIKey: "group-key"}
+	if err := db.Create(&group).Error; err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+	if err := db.Create(&models.GatewayRouteGroupMember{GroupID: group.ID, RouteStateID: route.ID}).Error; err != nil {
+		t.Fatalf("create route group member: %v", err)
+	}
+
+	app := &App{DB: db}
+	router := chi.NewRouter()
+	router.Delete("/routes/{routeID}", app.DeleteGatewayRoute)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/routes/1", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete status = %d body = %s", rec.Code, rec.Body.String())
+	}
+
+	var response map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response["removed_api_key"] != true {
+		t.Fatalf("removed_api_key = %v", response["removed_api_key"])
+	}
+
+	var deleted models.GatewayRouteState
+	if err := db.First(&deleted, route.ID).Error; !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("deleted route lookup err = %v", err)
+	}
+	var remaining models.GatewayRouteState
+	if err := db.First(&remaining, keepRoute.ID).Error; err != nil {
+		t.Fatalf("remaining route missing: %v", err)
+	}
+	var memberCount int64
+	if err := db.Model(&models.GatewayRouteGroupMember{}).Where("route_state_id = ?", route.ID).Count(&memberCount).Error; err != nil {
+		t.Fatalf("count route members: %v", err)
+	}
+	if memberCount != 0 {
+		t.Fatalf("route group member count = %d", memberCount)
+	}
+
+	var storedSite models.Site
+	if err := db.First(&storedSite, site.ID).Error; err != nil {
+		t.Fatalf("reload site: %v", err)
+	}
+	apiKeys, ok := storedSite.Credentials["api_keys"].([]any)
+	if !ok {
+		t.Fatalf("api_keys type = %T", storedSite.Credentials["api_keys"])
+	}
+	if len(apiKeys) != 1 {
+		t.Fatalf("api_keys len = %d values = %#v", len(apiKeys), apiKeys)
+	}
+	kept, ok := apiKeys[0].(map[string]any)
+	if !ok {
+		t.Fatalf("api key type = %T", apiKeys[0])
+	}
+	if kept["key"] != "keep-secret" {
+		t.Fatalf("remaining api key = %#v", kept)
+	}
+}
+
 func TestUpdateGatewayRouteTypeAcceptsGptChatAlias(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:gateway-route-gpt-chat-alias?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
@@ -304,7 +506,7 @@ func TestGatewayUsageCostSummaryUsesModelInputCacheOutput(t *testing.T) {
 		},
 	}
 
-	summary := gatewayUsageCostSummary(logs)
+	summary := gatewayUsageCostSummary(logs, services.OfficialGatewayPricingScheme())
 	if got := summary["input_cost"]; got != 0.00375 {
 		t.Fatalf("input_cost = %v", got)
 	}
@@ -322,6 +524,38 @@ func TestGatewayUsageCostSummaryUsesModelInputCacheOutput(t *testing.T) {
 	}
 	if got := summary["unknown_requests"]; got != 0 {
 		t.Fatalf("unknown_requests = %v", got)
+	}
+}
+
+func TestGatewayUsageCostSummaryUsesCustomPricingScheme(t *testing.T) {
+	prompt, cached, completion, total := 1000, 100, 500, 1500
+	logs := []models.GatewayRequestLog{
+		{
+			Model:             "claude-custom",
+			RouteType:         "claude",
+			PromptTokens:      &prompt,
+			CachedInputTokens: &cached,
+			CompletionTokens:  &completion,
+			TotalTokens:       &total,
+			Success:           true,
+			CreatedAt:         time.Now().UTC(),
+		},
+	}
+	pricing := models.GatewayPricingScheme{
+		ID:       "custom",
+		Name:     "custom",
+		Currency: "USD",
+		Prices: []models.GatewayModelPrice{
+			{Provider: "claude", ModelPrefix: "claude-custom", InputPerMTok: 10, CachedInputPerMTok: 1, OutputPerMTok: 20},
+		},
+	}
+
+	summary := gatewayUsageCostSummary(logs, pricing)
+	if got := summary["total_cost"]; got != 0.0201 {
+		t.Fatalf("total_cost = %v", got)
+	}
+	if got := summary["known_requests"]; got != 1 {
+		t.Fatalf("known_requests = %v", got)
 	}
 }
 

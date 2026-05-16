@@ -305,6 +305,23 @@ type GatewayRoute struct {
 	Site           models.Site
 	APIKey         string
 	RequestBaseURL string
+	Groups         []models.GatewayRouteGroup
+}
+
+type GatewayRouteGroupWithCount struct {
+	Group      models.GatewayRouteGroup
+	RouteCount int
+}
+
+type GatewayRouteGroupInput struct {
+	Name   string
+	APIKey string
+}
+
+type DeleteGatewayRouteResult struct {
+	RouteID       uint
+	SiteID        uint
+	RemovedAPIKey bool
 }
 
 type GatewayProxyResult struct {
@@ -322,6 +339,8 @@ type GatewayProxyResult struct {
 	IsStream          bool
 	PromptTokens      *int
 	CachedInputTokens *int
+	CacheReadTokens   *int
+	CacheWriteTokens  *int
 	CompletionTokens  *int
 	TotalTokens       *int
 	UsageCost         *float64
@@ -542,6 +561,9 @@ func SyncGatewayRoutes(db *gorm.DB) (int, error) {
 			if activeFingerprints[state.KeyFingerprint] {
 				continue
 			}
+			if err := deleteGatewayRouteGroupMembersForRoutes(db, []uint{state.ID}); err != nil {
+				return count, err
+			}
 			if err := db.Delete(&state).Error; err != nil {
 				return count, err
 			}
@@ -556,7 +578,21 @@ func cleanupOrphanGatewayRoutes(db *gorm.DB) error {
 		return err
 	}
 	if len(siteIDs) == 0 {
+		var routeIDs []uint
+		if err := db.Model(&models.GatewayRouteState{}).Pluck("id", &routeIDs).Error; err != nil {
+			return err
+		}
+		if err := deleteGatewayRouteGroupMembersForRoutes(db, routeIDs); err != nil {
+			return err
+		}
 		return db.Where("1 = 1").Delete(&models.GatewayRouteState{}).Error
+	}
+	var routeIDs []uint
+	if err := db.Model(&models.GatewayRouteState{}).Where("site_id NOT IN ?", siteIDs).Pluck("id", &routeIDs).Error; err != nil {
+		return err
+	}
+	if err := deleteGatewayRouteGroupMembersForRoutes(db, routeIDs); err != nil {
+		return err
 	}
 	return db.Where("site_id NOT IN ?", siteIDs).Delete(&models.GatewayRouteState{}).Error
 }
@@ -571,6 +607,13 @@ func cleanupDisabledSiteGatewayRoutes(db *gorm.DB) error {
 	}
 	return db.Transaction(func(tx *gorm.DB) error {
 		if err := persistDisabledGatewayRoutesBeforeDelete(tx, disabledSiteIDs); err != nil {
+			return err
+		}
+		var routeIDs []uint
+		if err := tx.Model(&models.GatewayRouteState{}).Where("site_id IN ?", disabledSiteIDs).Pluck("id", &routeIDs).Error; err != nil {
+			return err
+		}
+		if err := deleteGatewayRouteGroupMembersForRoutes(tx, routeIDs); err != nil {
 			return err
 		}
 		return tx.Where("site_id IN ?", disabledSiteIDs).Delete(&models.GatewayRouteState{}).Error
@@ -614,7 +657,14 @@ func ListGatewayRoutes(db *gorm.DB, group string, includeDisabled bool) ([]Gatew
 func listGatewayRoutes(db *gorm.DB, group string, includeDisabled bool) ([]GatewayRoute, error) {
 	query := db.Preload("Site")
 	if strings.TrimSpace(group) != "" {
-		query = query.Where("group_name = ?", strings.TrimSpace(group))
+		routeIDs, err := GatewayRouteIDsForGroup(db, group)
+		if err != nil {
+			return nil, err
+		}
+		if len(routeIDs) == 0 {
+			return []GatewayRoute{}, nil
+		}
+		query = query.Where("id IN ?", routeIDs)
 	}
 	if !includeDisabled {
 		query = query.Where("is_enabled = ?", true)
@@ -627,6 +677,9 @@ func listGatewayRoutes(db *gorm.DB, group string, includeDisabled bool) ([]Gatew
 	for _, state := range states {
 		key := apiKeyForFingerprint(state.Site, state.KeyFingerprint)
 		routes = append(routes, GatewayRoute{State: state, Site: state.Site, APIKey: key, RequestBaseURL: GatewayRouteRequestBase(state, state.Site)})
+	}
+	if err := hydrateGatewayRouteGroups(db, routes); err != nil {
+		return nil, err
 	}
 	return routes, nil
 }
@@ -747,6 +800,236 @@ func parseGatewayRouteGroupNames(value string) []string {
 	}))
 }
 
+func normalizeGatewayRouteGroupName(value string) string {
+	return strings.TrimSpace(value)
+}
+
+func ListGatewayRouteGroups(db *gorm.DB) ([]GatewayRouteGroupWithCount, error) {
+	var groups []models.GatewayRouteGroup
+	if err := db.Order("name asc, id asc").Find(&groups).Error; err != nil {
+		return nil, err
+	}
+	counts := map[uint]int{}
+	if len(groups) > 0 {
+		type row struct {
+			GroupID uint
+			Count   int
+		}
+		var rows []row
+		if err := db.Model(&models.GatewayRouteGroupMember{}).
+			Select("group_id, count(*) as count").
+			Group("group_id").
+			Scan(&rows).Error; err != nil {
+			return nil, err
+		}
+		for _, item := range rows {
+			counts[item.GroupID] = item.Count
+		}
+	}
+	out := make([]GatewayRouteGroupWithCount, 0, len(groups))
+	for _, group := range groups {
+		out = append(out, GatewayRouteGroupWithCount{Group: group, RouteCount: counts[group.ID]})
+	}
+	return out, nil
+}
+
+func CreateGatewayRouteGroup(db *gorm.DB, input GatewayRouteGroupInput) (models.GatewayRouteGroup, error) {
+	name := normalizeGatewayRouteGroupName(input.Name)
+	if name == "" {
+		return models.GatewayRouteGroup{}, errors.New("分组名称不能为空")
+	}
+	if err := ensureGatewayRouteGroupAPIKeyUnique(db, 0, input.APIKey); err != nil {
+		return models.GatewayRouteGroup{}, err
+	}
+	group := models.GatewayRouteGroup{Name: name, APIKey: strings.TrimSpace(input.APIKey)}
+	if err := db.Create(&group).Error; err != nil {
+		return models.GatewayRouteGroup{}, err
+	}
+	return group, nil
+}
+
+func UpdateGatewayRouteGroup(db *gorm.DB, groupID uint, input GatewayRouteGroupInput) (models.GatewayRouteGroup, error) {
+	if groupID == 0 {
+		return models.GatewayRouteGroup{}, errors.New("分组 ID 无效")
+	}
+	name := normalizeGatewayRouteGroupName(input.Name)
+	if name == "" {
+		return models.GatewayRouteGroup{}, errors.New("分组名称不能为空")
+	}
+	if err := ensureGatewayRouteGroupAPIKeyUnique(db, groupID, input.APIKey); err != nil {
+		return models.GatewayRouteGroup{}, err
+	}
+	var group models.GatewayRouteGroup
+	if err := db.First(&group, groupID).Error; err != nil {
+		return models.GatewayRouteGroup{}, err
+	}
+	group.Name = name
+	group.APIKey = strings.TrimSpace(input.APIKey)
+	if err := db.Save(&group).Error; err != nil {
+		return models.GatewayRouteGroup{}, err
+	}
+	return group, nil
+}
+
+func DeleteGatewayRouteGroup(db *gorm.DB, groupID uint) error {
+	if groupID == 0 {
+		return errors.New("分组 ID 无效")
+	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("group_id = ?", groupID).Delete(&models.GatewayRouteGroupMember{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&models.GatewayRouteGroup{}, groupID).Error
+	})
+}
+
+func ReplaceGatewayRouteGroupMemberships(db *gorm.DB, routeID uint, groupIDs []uint) ([]models.GatewayRouteGroup, error) {
+	if routeID == 0 {
+		return nil, errors.New("路由 ID 无效")
+	}
+	var route models.GatewayRouteState
+	if err := db.First(&route, routeID).Error; err != nil {
+		return nil, err
+	}
+	groupIDs = uniqueUintValues(groupIDs)
+	var groups []models.GatewayRouteGroup
+	if len(groupIDs) > 0 {
+		if err := db.Where("id IN ?", groupIDs).Order("name asc, id asc").Find(&groups).Error; err != nil {
+			return nil, err
+		}
+		if len(groups) != len(groupIDs) {
+			return nil, errors.New("包含不存在的路由分组")
+		}
+	}
+	err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("route_state_id = ?", routeID).Delete(&models.GatewayRouteGroupMember{}).Error; err != nil {
+			return err
+		}
+		for _, groupID := range groupIDs {
+			member := models.GatewayRouteGroupMember{GroupID: groupID, RouteStateID: routeID}
+			if err := tx.Create(&member).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return groups, nil
+}
+
+func GatewayRouteIDsForGroup(db *gorm.DB, groupName string) ([]uint, error) {
+	groupName = normalizeGatewayRouteGroupName(groupName)
+	if groupName == "" {
+		return nil, nil
+	}
+	var group models.GatewayRouteGroup
+	err := db.Where("lower(name) = lower(?)", groupName).First(&group).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return []uint{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var routeIDs []uint
+	if err := db.Model(&models.GatewayRouteGroupMember{}).
+		Where("group_id = ?", group.ID).
+		Pluck("route_state_id", &routeIDs).Error; err != nil {
+		return nil, err
+	}
+	return uniqueUintValues(routeIDs), nil
+}
+
+func GatewayRouteGroupForAPIKey(db *gorm.DB, apiKey string) (models.GatewayRouteGroup, bool, error) {
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return models.GatewayRouteGroup{}, false, nil
+	}
+	var group models.GatewayRouteGroup
+	err := db.Where("api_key = ?", apiKey).Order("id asc").First(&group).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return models.GatewayRouteGroup{}, false, nil
+	}
+	if err != nil {
+		return models.GatewayRouteGroup{}, false, err
+	}
+	return group, true, nil
+}
+
+func HasGatewayRouteGroupAPIKeys(db *gorm.DB) (bool, error) {
+	var count int64
+	if err := db.Model(&models.GatewayRouteGroup{}).Where("api_key <> ''").Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func ensureGatewayRouteGroupAPIKeyUnique(db *gorm.DB, currentID uint, apiKey string) error {
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return nil
+	}
+	query := db.Model(&models.GatewayRouteGroup{}).Where("api_key = ?", apiKey)
+	if currentID != 0 {
+		query = query.Where("id <> ?", currentID)
+	}
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
+		return errors.New("分组 API Key 已被其他分组使用")
+	}
+	return nil
+}
+
+func hydrateGatewayRouteGroups(db *gorm.DB, routes []GatewayRoute) error {
+	if len(routes) == 0 {
+		return nil
+	}
+	routeIDs := make([]uint, 0, len(routes))
+	indexByID := map[uint]int{}
+	for idx, route := range routes {
+		if route.State.ID == 0 {
+			continue
+		}
+		routeIDs = append(routeIDs, route.State.ID)
+		indexByID[route.State.ID] = idx
+	}
+	if len(routeIDs) == 0 {
+		return nil
+	}
+	var members []models.GatewayRouteGroupMember
+	if err := db.Preload("Group").
+		Where("route_state_id IN ?", routeIDs).
+		Order("route_state_id asc, group_id asc").
+		Find(&members).Error; err != nil {
+		return err
+	}
+	for _, member := range members {
+		idx, ok := indexByID[member.RouteStateID]
+		if !ok || member.Group.ID == 0 {
+			continue
+		}
+		routes[idx].Groups = append(routes[idx].Groups, member.Group)
+	}
+	for idx := range routes {
+		sort.SliceStable(routes[idx].Groups, func(i, j int) bool {
+			return routes[idx].Groups[i].Name < routes[idx].Groups[j].Name
+		})
+	}
+	return nil
+}
+
+func deleteGatewayRouteGroupMembersForRoutes(db *gorm.DB, routeIDs []uint) error {
+	routeIDs = uniqueUintValues(routeIDs)
+	if len(routeIDs) == 0 {
+		return nil
+	}
+	return db.Where("route_state_id IN ?", routeIDs).Delete(&models.GatewayRouteGroupMember{}).Error
+}
+
 func GatewayRoutePackageDisplay(site models.Site) string {
 	value := NormalizeBalanceUnitText(stringMapValue(site.PluginConfig, "package_display", ""))
 	if value == "" {
@@ -831,12 +1114,51 @@ func GetGatewayRoute(db *gorm.DB, routeID string) (GatewayRoute, error) {
 	if err := db.Preload("Site").First(&state, routeID).Error; err != nil {
 		return GatewayRoute{}, err
 	}
-	return GatewayRoute{
+	route := GatewayRoute{
 		State:          state,
 		Site:           state.Site,
 		APIKey:         apiKeyForFingerprint(state.Site, state.KeyFingerprint),
 		RequestBaseURL: GatewayRouteRequestBase(state, state.Site),
-	}, nil
+	}
+	routes := []GatewayRoute{route}
+	if err := hydrateGatewayRouteGroups(db, routes); err != nil {
+		return GatewayRoute{}, err
+	}
+	return routes[0], nil
+}
+
+func DeleteGatewayRoute(db *gorm.DB, routeID uint) (DeleteGatewayRouteResult, error) {
+	if routeID == 0 {
+		return DeleteGatewayRouteResult{}, gorm.ErrRecordNotFound
+	}
+	result := DeleteGatewayRouteResult{RouteID: routeID}
+	err := db.Transaction(func(tx *gorm.DB) error {
+		var state models.GatewayRouteState
+		if err := tx.Preload("Site").First(&state, routeID).Error; err != nil {
+			return err
+		}
+		result.SiteID = state.SiteID
+		site := state.Site
+		if site.ID != 0 && removeSiteAPIKeyForGatewayRoute(&site, state.KeyFingerprint) {
+			if err := tx.Model(&models.Site{}).Where("id = ?", site.ID).Update("credentials", site.Credentials).Error; err != nil {
+				return err
+			}
+			result.RemovedAPIKey = true
+		}
+		if site.ID != 0 {
+			if err := updateSiteManualDisabledGatewayRoute(tx, state.SiteID, state.KeyFingerprint, false); err != nil {
+				return err
+			}
+		}
+		if err := deleteGatewayRouteGroupMembersForRoutes(tx, []uint{state.ID}); err != nil {
+			return err
+		}
+		return tx.Delete(&state).Error
+	})
+	if err != nil {
+		return DeleteGatewayRouteResult{}, err
+	}
+	return result, nil
 }
 
 // ----------------------------- candidate ordering -----------------------------
@@ -1268,6 +1590,8 @@ func ProxyGatewayRequestWithOptions(ctx context.Context, db *gorm.DB, r *http.Re
 			LogGatewayRequest(db, candidateRoute, firstNonEmpty(result.TargetPath, targetPath), result.RequestURL, result.UserAgent, r.Method, requestedModel, firstNonEmpty(result.ActualModel, requestedModel), statusCodePtrOrNil(result.StatusCode), result.Success, result.LatencyMS, result.Error, policy.RouteStrategy, attempt, streaming, opts.RequestID, GatewayUsage{
 				PromptTokens:      result.PromptTokens,
 				CachedInputTokens: result.CachedInputTokens,
+				CacheReadTokens:   result.CacheReadTokens,
+				CacheWriteTokens:  result.CacheWriteTokens,
 				CompletionTokens:  result.CompletionTokens,
 				TotalTokens:       result.TotalTokens,
 				UsageCost:         result.UsageCost,
@@ -1358,7 +1682,7 @@ func proxyGatewayAttempt(ctx context.Context, db *gorm.DB, r *http.Request, body
 			opts.BeforeWrite(statusCode, resp.Header.Clone())
 		}
 		writeStreamHeaders(opts.ResponseWriter, resp.Header, statusCode)
-		written, copyErr := streamBody(opts.ResponseWriter, resp.Body)
+		written, usage, actualModel, copyErr := streamBody(opts.ResponseWriter, resp.Body)
 		_ = resp.Body.Close()
 		end := time.Now()
 		actualLatency := float64(end.Sub(start).Microseconds()) / 1000.0
@@ -1370,7 +1694,24 @@ func proxyGatewayAttempt(ctx context.Context, db *gorm.DB, r *http.Request, body
 		// once data is on the wire, treat as success even if upstream cuts off mid-stream
 		route.State.LastRequestBaseURL = route.RequestBaseURL
 		UpdateRouteSuccess(db, &route.State, statusCode, latency)
-		return GatewayProxyResult{Route: route, StatusCode: statusCode, Header: resp.Header.Clone(), TargetPath: upstreamTargetPath, RequestURL: upstreamURL, UserAgent: upstreamUserAgent, LatencyMS: actualLatency, Success: true, ActualModel: requestedModel}, false, nil
+		return GatewayProxyResult{
+			Route:             route,
+			StatusCode:        statusCode,
+			Header:            resp.Header.Clone(),
+			TargetPath:        upstreamTargetPath,
+			RequestURL:        upstreamURL,
+			UserAgent:         upstreamUserAgent,
+			LatencyMS:         actualLatency,
+			Success:           true,
+			PromptTokens:      usage.PromptTokens,
+			CachedInputTokens: usage.CachedInputTokens,
+			CacheReadTokens:   usage.CacheReadTokens,
+			CacheWriteTokens:  usage.CacheWriteTokens,
+			CompletionTokens:  usage.CompletionTokens,
+			TotalTokens:       usage.TotalTokens,
+			UsageCost:         usage.UsageCost,
+			ActualModel:       firstNonEmpty(actualModel, requestedModel),
+		}, false, nil
 	}
 
 	respBody, readErr := readGatewayResponseBody(resp)
@@ -1405,6 +1746,8 @@ func proxyGatewayAttempt(ctx context.Context, db *gorm.DB, r *http.Request, body
 			Success:           true,
 			PromptTokens:      usage.PromptTokens,
 			CachedInputTokens: usage.CachedInputTokens,
+			CacheReadTokens:   usage.CacheReadTokens,
+			CacheWriteTokens:  usage.CacheWriteTokens,
 			CompletionTokens:  usage.CompletionTokens,
 			TotalTokens:       usage.TotalTokens,
 			UsageCost:         usage.UsageCost,
@@ -1594,16 +1937,34 @@ func writeStreamHeaders(w http.ResponseWriter, src http.Header, status int) {
 	w.WriteHeader(status)
 }
 
-func streamBody(w http.ResponseWriter, src io.Reader) (int, error) {
+type gatewayStreamCapture struct {
+	max  int
+	data []byte
+}
+
+func (c *gatewayStreamCapture) Write(p []byte) {
+	if c.max <= 0 || len(p) == 0 {
+		return
+	}
+	c.data = append(c.data, p...)
+	if len(c.data) > c.max {
+		c.data = append([]byte{}, c.data[len(c.data)-c.max:]...)
+	}
+}
+
+func streamBody(w http.ResponseWriter, src io.Reader) (int, GatewayUsage, string, error) {
 	flusher, _ := w.(http.Flusher)
 	buf := make([]byte, 32*1024)
+	capture := gatewayStreamCapture{max: 1 << 20}
 	written := 0
 	for {
 		n, err := src.Read(buf)
 		if n > 0 {
 			if _, werr := w.Write(buf[:n]); werr != nil {
-				return written, werr
+				usage, model := ExtractGatewayUsageFromStream(capture.data)
+				return written, usage, model, werr
 			}
+			capture.Write(buf[:n])
 			written += n
 			if flusher != nil {
 				flusher.Flush()
@@ -1611,11 +1972,59 @@ func streamBody(w http.ResponseWriter, src io.Reader) (int, error) {
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return written, nil
+				usage, model := ExtractGatewayUsageFromStream(capture.data)
+				return written, usage, model, nil
 			}
-			return written, err
+			usage, model := ExtractGatewayUsageFromStream(capture.data)
+			return written, usage, model, err
 		}
 	}
+}
+
+func ExtractGatewayUsageFromStream(body []byte) (GatewayUsage, string) {
+	var out GatewayUsage
+	actualModel := ""
+	for _, rawLine := range bytes.Split(body, []byte{'\n'}) {
+		line := strings.TrimSpace(string(rawLine))
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "data:") {
+			line = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		}
+		if line == "" || line == "[DONE]" || !strings.HasPrefix(line, "{") {
+			continue
+		}
+		usage := ExtractGatewayUsage([]byte(line))
+		out = mergeGatewayUsage(out, usage)
+		if model := ExtractGatewayModelFromResponseBody([]byte(line)); model != "" {
+			actualModel = model
+		}
+	}
+	return out, actualModel
+}
+
+func mergeGatewayUsage(left, right GatewayUsage) GatewayUsage {
+	left.PromptTokens = maxIntPtr(left.PromptTokens, right.PromptTokens)
+	left.CachedInputTokens = maxIntPtr(left.CachedInputTokens, right.CachedInputTokens)
+	left.CacheReadTokens = maxIntPtr(left.CacheReadTokens, right.CacheReadTokens)
+	left.CacheWriteTokens = maxIntPtr(left.CacheWriteTokens, right.CacheWriteTokens)
+	left.CompletionTokens = maxIntPtr(left.CompletionTokens, right.CompletionTokens)
+	left.TotalTokens = maxIntPtr(left.TotalTokens, right.TotalTokens)
+	if right.UsageCost != nil {
+		left.UsageCost = right.UsageCost
+	}
+	return left
+}
+
+func maxIntPtr(left, right *int) *int {
+	if left == nil {
+		return right
+	}
+	if right == nil || *left >= *right {
+		return left
+	}
+	return right
 }
 
 func readGatewayRequestBody(r *http.Request) ([]byte, error) {
@@ -1838,6 +2247,8 @@ func roundTo(value float64, digits int) float64 {
 type GatewayUsage struct {
 	PromptTokens      *int
 	CachedInputTokens *int
+	CacheReadTokens   *int
+	CacheWriteTokens  *int
 	CompletionTokens  *int
 	TotalTokens       *int
 	UsageCost         *float64
@@ -1857,34 +2268,67 @@ func ExtractGatewayUsage(body []byte) GatewayUsage {
 		return GatewayUsage{}
 	}
 	usageMap, ok := payload["usage"].(map[string]any)
+	if !ok {
+		usageMap, ok = payload["usageMetadata"].(map[string]any)
+	}
 	if !ok || len(usageMap) == 0 {
 		return GatewayUsage{}
 	}
-	prompt := usageInt(usageMap, "prompt_tokens", "input_tokens")
-	cachedInput := usageInt(usageMap, "cached_input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "prompt_cache_hit_tokens")
-	if cachedInput == nil {
+	prompt := usageInt(usageMap, "prompt_tokens", "input_tokens", "promptTokenCount")
+	cacheRead := usageInt(usageMap, "cache_read_input_tokens", "prompt_cache_hit_tokens", "cachedContentTokenCount")
+	cacheWrite := usageInt(usageMap, "cache_creation_input_tokens")
+	cachedInput := usageInt(usageMap, "cached_input_tokens")
+	if cacheRead == nil {
 		if details, ok := usageMap["prompt_tokens_details"].(map[string]any); ok {
-			cachedInput = usageInt(details, "cached_tokens")
+			cacheRead = usageInt(details, "cached_tokens")
+		}
+	}
+	if cacheRead == nil {
+		if details, ok := usageMap["input_tokens_details"].(map[string]any); ok {
+			cacheRead = usageInt(details, "cached_tokens")
 		}
 	}
 	if cachedInput == nil {
-		if details, ok := usageMap["input_tokens_details"].(map[string]any); ok {
-			cachedInput = usageInt(details, "cached_tokens")
-		}
+		cachedInput = sumIntPtrs(cacheRead, cacheWrite)
 	}
-	completion := usageInt(usageMap, "completion_tokens", "output_tokens")
-	total := usageInt(usageMap, "total_tokens")
-	if total == nil && prompt != nil && completion != nil {
-		v := *prompt + *completion
+	completion := usageInt(usageMap, "completion_tokens", "output_tokens", "candidatesTokenCount")
+	total := usageInt(usageMap, "total_tokens", "totalTokenCount")
+	if total == nil && (prompt != nil || cacheRead != nil || cacheWrite != nil || completion != nil) {
+		v := intPtrValue(prompt) + intPtrValue(cacheRead) + intPtrValue(cacheWrite) + intPtrValue(completion)
 		total = &v
 	}
 	return GatewayUsage{
 		PromptTokens:      prompt,
 		CachedInputTokens: cachedInput,
+		CacheReadTokens:   cacheRead,
+		CacheWriteTokens:  cacheWrite,
 		CompletionTokens:  completion,
 		TotalTokens:       total,
 		UsageCost:         usageFloat(usageMap, "total_cost", "cost", "usage_cost"),
 	}
+}
+
+func sumIntPtrs(values ...*int) *int {
+	total := 0
+	hasValue := false
+	for _, value := range values {
+		if value == nil {
+			continue
+		}
+		total += *value
+		hasValue = true
+	}
+	if !hasValue {
+		return nil
+	}
+	return &total
+}
+
+func intPtrValue(value *int) int {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
 
 func usageInt(values map[string]any, keys ...string) *int {
@@ -1955,6 +2399,7 @@ func LogGatewayRequest(db *gorm.DB, route GatewayRoute, targetPath, requestURL, 
 		Model:              requestedModel,
 		RequestedModel:     requestedModel,
 		ActualModel:        actualModel,
+		RouteType:          route.State.RouteType,
 		TargetPath:         targetPath,
 		RequestURL:         requestURL,
 		UserAgent:          userAgent,
@@ -1966,6 +2411,8 @@ func LogGatewayRequest(db *gorm.DB, route GatewayRoute, targetPath, requestURL, 
 		LatencyMS:          &latency,
 		PromptTokens:       usage.PromptTokens,
 		CachedInputTokens:  usage.CachedInputTokens,
+		CacheReadTokens:    usage.CacheReadTokens,
+		CacheWriteTokens:   usage.CacheWriteTokens,
 		CompletionTokens:   usage.CompletionTokens,
 		TotalTokens:        usage.TotalTokens,
 		UsageCost:          usage.UsageCost,
@@ -2594,6 +3041,51 @@ func siteKeyForFingerprint(site models.Site, fp string) (siteKey, bool) {
 	return siteKey{}, false
 }
 
+func removeSiteAPIKeyForGatewayRoute(site *models.Site, keyFingerprint string) bool {
+	if site == nil || strings.TrimSpace(keyFingerprint) == "" {
+		return false
+	}
+	credentials := cloneGatewayJSONMap(site.Credentials)
+	raw, ok := credentials["api_keys"].([]any)
+	if ok && len(raw) > 0 {
+		keys := siteAPIKeys(*site)
+		keyIndex := 0
+		for idx, item := range raw {
+			entry, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			if !siteAPIKeyEntryActive(entry) {
+				continue
+			}
+			if keyIndex >= len(keys) {
+				break
+			}
+			key := keys[keyIndex]
+			keyIndex++
+			if key.Fingerprint != keyFingerprint {
+				continue
+			}
+			next := append([]any{}, raw[:idx]...)
+			next = append(next, raw[idx+1:]...)
+			if len(next) == 0 {
+				delete(credentials, "api_keys")
+			} else {
+				credentials["api_keys"] = next
+			}
+			site.Credentials = credentials
+			return true
+		}
+	}
+	value := strings.TrimSpace(stringMapValue(credentials, "api_key", ""))
+	if value != "" && fingerprint(value) == keyFingerprint {
+		delete(credentials, "api_key")
+		site.Credentials = credentials
+		return true
+	}
+	return false
+}
+
 func GatewayRouteAPIKeyForState(state models.GatewayRouteState) string {
 	return apiKeyForFingerprint(state.Site, state.KeyFingerprint)
 }
@@ -3077,21 +3569,25 @@ func copyGatewayHeaders(dst, src http.Header) {
 
 func gatewayUpstreamUserAgent(route GatewayRoute, clientUserAgent string) string {
 	if key, ok := siteKeyForFingerprint(route.Site, route.State.KeyFingerprint); ok {
-		if value := strings.TrimSpace(stringMapValue(key.Config, "user_agent", "")); value != "" {
+		if value := gatewayOfficialUserAgent(stringMapValue(key.Config, "user_agent", "")); value != "" {
 			return value
 		}
 	}
-	if value := strings.TrimSpace(stringMapValue(route.Site.Credentials, "user_agent", "")); value != "" {
+	if value := gatewayOfficialUserAgent(stringMapValue(route.Site.Credentials, "user_agent", "")); value != "" {
 		return value
 	}
-	if value := gatewayOfficialUserAgentForClient(clientUserAgent); value != "" {
+	if value := gatewayOfficialUserAgent(clientUserAgent); value != "" {
 		return value
 	}
 	return DefaultCodexCLIUserAgent
 }
 
 func gatewayOfficialUserAgentForClient(clientUserAgent string) string {
-	value := strings.TrimSpace(clientUserAgent)
+	return gatewayOfficialUserAgent(clientUserAgent)
+}
+
+func gatewayOfficialUserAgent(userAgent string) string {
+	value := strings.TrimSpace(userAgent)
 	if value == "" {
 		return ""
 	}
@@ -3103,6 +3599,8 @@ func gatewayOfficialUserAgentForClient(clientUserAgent string) string {
 		"codex desktop/",
 		"openai/python ",
 		"openai/js ",
+		"opencode/",
+		"opencodex/",
 	} {
 		if strings.HasPrefix(normalized, prefix) {
 			return value

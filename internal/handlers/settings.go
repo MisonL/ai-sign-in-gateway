@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"archive/zip"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -33,7 +35,9 @@ func (a *App) SettingsRoutes(r chi.Router) {
 	r.Post("/runtime/database", a.ImportRuntimeDatabase)
 	r.Get("/runtime/database/backups", a.ListRuntimeDatabaseBackups)
 	r.Post("/runtime/database/backups", a.BackupRuntimeDatabaseNow)
+	r.Get("/runtime/database/backups/{name}/download", a.DownloadRuntimeDatabaseBackup)
 	r.Delete("/runtime/database/backups/{name}", a.DeleteRuntimeDatabaseBackup)
+	r.Get("/runtime/config-dir/archive", a.DownloadRuntimeConfigArchive)
 }
 
 func (a *App) systemSettings() (models.SystemSetting, error) {
@@ -75,12 +79,27 @@ func (a *App) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 	settings.OnlyEnabledSites = payload.OnlyEnabledSites
 	settings.DesktopKeepRunning = payload.DesktopKeepRunning
 	settings.DatabaseBackupEnabled = payload.DatabaseBackupEnabled
-	settings.DatabaseBackupDir = strings.TrimSpace(payload.DatabaseBackupDir)
+	databaseBackupDir, err := normalizeRuntimeBackupDirInput(payload.DatabaseBackupDir)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "数据库备份目录无效: "+err.Error())
+		return
+	}
+	settings.DatabaseBackupDir = databaseBackupDir
 	settings.DatabaseBackupIntervalMinutes = clampInt(payload.DatabaseBackupIntervalMinutes, 5, 10080, 1440)
 	settings.DatabaseBackupRetention = clampInt(payload.DatabaseBackupRetention, 1, 365, 7)
+	settings.LogRetentionDays = clampInt(payload.LogRetentionDays, 1, 365, services.DefaultLogRetentionDays)
+	activePricingSchemeID, customPricingSchemes := services.NormalizeGatewayPricingSettings(payload.GatewayPricingActiveSchemeID, payload.GatewayPricingSchemes)
+	settings.GatewayPricingActiveSchemeID = activePricingSchemeID
+	settings.GatewayPricingSchemes = services.EncodeGatewayPricingSchemes(customPricingSchemes)
+	settings.FeatureFlags = normalizeFeatureFlags(payload.FeatureFlags)
 	if err := a.DB.Save(&settings).Error; err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if result, err := services.CleanupOldLogs(a.DB, settings.LogRetentionDays, time.Now().UTC()); err != nil {
+		log.Printf("日志清理失败: %v", err)
+	} else if result.TotalDeleted() > 0 {
+		log.Printf("日志清理: 已删除 %d 条旧日志，保留 %d 天", result.TotalDeleted(), result.RetentionDays)
 	}
 	writeJSON(w, http.StatusOK, settingsResponse(settings))
 }
@@ -279,6 +298,54 @@ func (a *App) DeleteRuntimeDatabaseBackup(w http.ResponseWriter, r *http.Request
 	})
 }
 
+func (a *App) DownloadRuntimeDatabaseBackup(w http.ResponseWriter, r *http.Request) {
+	backupDir, err := a.runtimeBackupDir()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	backup, err := services.DatabaseBackupFileByName(backupDir, chi.URLParam(r, "name"))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			writeError(w, http.StatusNotFound, "备份文件不存在")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "备份文件无效: "+err.Error())
+		return
+	}
+	w.Header().Set("Content-Disposition", contentDispositionAttachment(backup.Name))
+	w.Header().Set("Content-Type", "application/vnd.sqlite3")
+	http.ServeFile(w, r, backup.Path)
+}
+
+func (a *App) DownloadRuntimeConfigArchive(w http.ResponseWriter, r *http.Request) {
+	configDir, err := runtimeConfigDir()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	info, err := os.Stat(configDir)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "读取配置目录失败: "+err.Error())
+		return
+	}
+	if !info.IsDir() {
+		writeError(w, http.StatusBadRequest, "当前配置路径不是目录")
+		return
+	}
+
+	filename := fmt.Sprintf("ai-sign-in-gateway-config-%s.zip", time.Now().Format("20060102-150405"))
+	w.Header().Set("Content-Disposition", contentDispositionAttachment(filename))
+	w.Header().Set("Content-Type", "application/zip")
+	zipWriter := zip.NewWriter(w)
+	defer zipWriter.Close()
+
+	if err := writeConfigArchive(zipWriter, configDir); err != nil {
+		// zip 流一旦开始写入就不能再可靠地改写 HTTP 状态，记录到归档注释中供客户端排查。
+		zipWriter.SetComment("配置文件打包未完整完成: " + err.Error())
+	}
+}
+
 func (a *App) importRuntimeDatabaseUpload(w http.ResponseWriter, r *http.Request) {
 	const maxUploadSize = 512 << 20
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
@@ -398,6 +465,12 @@ func settingsResponse(settings models.SystemSetting) schemas.SettingsResponse {
 	if strings.TrimSpace(info.DatabasePath) == "" && strings.TrimSpace(info.ConfigDir) != "" {
 		info.DatabasePath = filepath.Join(info.ConfigDir, "ai-sign-in-gateway.db")
 	}
+	databaseBackupDir := settings.DatabaseBackupDir
+	if strings.TrimSpace(info.DatabasePath) != "" {
+		if resolvedDir, err := (services.DatabaseBackupRunner{DatabasePath: info.DatabasePath}).ResolveBackupDir(settings.DatabaseBackupDir); err == nil {
+			databaseBackupDir = resolvedDir
+		}
+	}
 	return schemas.SettingsResponse{
 		Timezone:                           settings.Timezone,
 		ScheduleEnabled:                    settings.ScheduleEnabled,
@@ -410,9 +483,14 @@ func settingsResponse(settings models.SystemSetting) schemas.SettingsResponse {
 		OnlyEnabledSites:                   settings.OnlyEnabledSites,
 		DesktopKeepRunning:                 settings.DesktopKeepRunning,
 		DatabaseBackupEnabled:              settings.DatabaseBackupEnabled,
-		DatabaseBackupDir:                  settings.DatabaseBackupDir,
+		DatabaseBackupDir:                  databaseBackupDir,
 		DatabaseBackupIntervalMinutes:      nonZeroInt(settings.DatabaseBackupIntervalMinutes, 1440),
 		DatabaseBackupRetention:            nonZeroInt(settings.DatabaseBackupRetention, 7),
+		LogRetentionDays:                   nonZeroInt(settings.LogRetentionDays, services.DefaultLogRetentionDays),
+		GatewayPricingActiveSchemeID:       services.ResolveGatewayPricingScheme(settings.GatewayPricingActiveSchemeID, settings.GatewayPricingSchemes).ID,
+		GatewayPricingSchemes:              services.GatewayPricingSchemesForResponse(settings.GatewayPricingSchemes),
+		FeatureFlags:                       normalizeFeatureFlags(settings.FeatureFlags),
+		Features:                           featureResponses(settings),
 		DesktopFrontendDefaultPort:         info.FrontendDefaultPort,
 		DesktopFrontendPort:                info.FrontendPort,
 		DesktopFrontendURL:                 info.FrontendURL,
@@ -426,7 +504,19 @@ func settingsResponse(settings models.SystemSetting) schemas.SettingsResponse {
 		RuntimeDefaultConfigDir:            info.DefaultConfigDir,
 		RuntimeDatabasePath:                info.DatabasePath,
 		RuntimePendingConfigDir:            info.PendingConfigDir,
+		SecurityWarnings:                   securityWarnings(settings),
 	}
+}
+
+func securityWarnings(settings models.SystemSetting) []string {
+	warnings := []string{}
+	if strings.TrimSpace(settings.GatewayAPIKey) == "" {
+		warnings = append(warnings, "网关 API Key 未配置，公开网关当前已禁用。")
+	}
+	if strings.TrimSpace(settings.DatabaseBackupDir) == "" {
+		warnings = append(warnings, "数据库备份目录未配置，建议启用本地备份以便回滚。")
+	}
+	return warnings
 }
 
 func (a *App) runtimeBackupDir() (string, error) {
@@ -434,10 +524,23 @@ func (a *App) runtimeBackupDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if strings.TrimSpace(settings.DatabaseBackupDir) == "" {
-		return "", fmt.Errorf("请先设置数据库备份目录并保存")
+	databasePath, err := runtimeDatabasePath()
+	if err != nil {
+		return "", err
 	}
-	return services.NormalizeDatabaseBackupDir(settings.DatabaseBackupDir)
+	return (services.DatabaseBackupRunner{DatabasePath: databasePath}).ResolveBackupDir(settings.DatabaseBackupDir)
+}
+
+func normalizeRuntimeBackupDirInput(path string) (string, error) {
+	value := strings.TrimSpace(path)
+	if value == "" {
+		return "", nil
+	}
+	databasePath, err := runtimeDatabasePath()
+	if err == nil {
+		return (services.DatabaseBackupRunner{DatabasePath: databasePath}).ResolveBackupDir(value)
+	}
+	return services.NormalizeDatabaseBackupDir(value)
 }
 
 func databaseBackupFilesResponse(files []services.DatabaseBackupFile) []schemas.RuntimeDatabaseBackupFile {
@@ -489,6 +592,14 @@ func runtimeDatabasePath() (string, error) {
 		return "", err
 	}
 	return filepath.Abs(filepath.Join(configDir, "ai-sign-in-gateway.db"))
+}
+
+func runtimeConfigDir() (string, error) {
+	info := GetRuntimeInfo()
+	if path := strings.TrimSpace(info.ConfigDir); path != "" {
+		return filepath.Abs(filepath.Clean(path))
+	}
+	return config.UserConfigDir()
 }
 
 func normalizeLocalFilePath(path string) (string, error) {
@@ -584,6 +695,70 @@ func copyFile(source string, target string, mode os.FileMode) error {
 		return syncErr
 	}
 	return closeErr
+}
+
+func writeConfigArchive(zipWriter *zip.Writer, configDir string) error {
+	root, err := filepath.Abs(filepath.Clean(configDir))
+	if err != nil {
+		return err
+	}
+	return filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == root {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if rel == "." || strings.HasPrefix(rel, "../") || strings.HasPrefix(rel, "/") {
+			return nil
+		}
+		header, err := zip.FileInfoHeader(info)
+		if err != nil {
+			return err
+		}
+		header.Name = rel
+		header.Method = zip.Deflate
+		writer, err := zipWriter.CreateHeader(header)
+		if err != nil {
+			return err
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		_, copyErr := io.Copy(writer, file)
+		closeErr := file.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		return closeErr
+	})
+}
+
+func contentDispositionAttachment(filename string) string {
+	cleanName := strings.ReplaceAll(filepath.Base(filename), `"`, "")
+	return fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, cleanName, url.PathEscape(cleanName))
 }
 
 func refreshRuntimePortOccupants() {

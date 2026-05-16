@@ -13,6 +13,7 @@ import (
 	"ai-sign-in-gateway/internal/database"
 	"ai-sign-in-gateway/internal/migrations"
 	"ai-sign-in-gateway/internal/models"
+	"ai-sign-in-gateway/internal/services"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -155,6 +156,74 @@ func TestGatewayRootV1PathUsesSub2APIModelProbeStrategy(t *testing.T) {
 	chatReq := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	if got := gatewayProxyTargetPath(chatReq.URL.Path); got != "chat/completions" {
 		t.Fatalf("chat target path = %q", got)
+	}
+
+	responsesReq := httptest.NewRequest(http.MethodPost, "/responses", nil)
+	if got := gatewayProxyTargetPath(responsesReq.URL.Path); got != "responses" {
+		t.Fatalf("responses target path = %q", got)
+	}
+
+	responsesSubpathReq := httptest.NewRequest(http.MethodPost, "/responses/compact", nil)
+	if got := gatewayProxyTargetPath(responsesSubpathReq.URL.Path); got != "responses/compact" {
+		t.Fatalf("responses subpath target path = %q", got)
+	}
+}
+
+func TestGatewayBareResponsesAliasRoutesToUpstreamV1Responses(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			t.Fatalf("unexpected upstream path: %s", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer route-key" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_1","model":"gpt-5.5","output":[]}`))
+	}))
+	defer upstream.Close()
+
+	db, err := database.Open(config.Config{DatabaseURL: "sqlite:///" + t.TempDir() + "/gateway_bare_responses.db"})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close(db) })
+	if err := migrations.Apply(db); err != nil {
+		t.Fatalf("migrations: %v", err)
+	}
+	site := models.Site{
+		Name:      "responses-upstream",
+		BaseURL:   upstream.URL,
+		PluginKey: "http-relay-station",
+		IsEnabled: true,
+		Credentials: models.JSONMap{
+			"api_key": "route-key",
+		},
+		PluginConfig: models.JSONMap{
+			"api_format": "codex",
+		},
+	}
+	if err := db.Create(&site).Error; err != nil {
+		t.Fatalf("create site: %v", err)
+	}
+	if err := db.Create(&models.SystemSetting{ID: 1, GatewayAPIKey: "gateway-key"}).Error; err != nil {
+		t.Fatalf("create settings: %v", err)
+	}
+	if _, err := services.SyncGatewayRoutes(db); err != nil {
+		t.Fatalf("sync routes: %v", err)
+	}
+
+	router := NewRouter(db, config.Config{})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/responses", strings.NewReader(`{"model":"gpt-5.5","input":"ping"}`))
+	req.Header.Set("Authorization", "Bearer gateway-key")
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); !strings.Contains(body, `"id":"resp_1"`) {
+		t.Fatalf("unexpected body: %s", body)
 	}
 }
 

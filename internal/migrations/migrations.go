@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"ai-sign-in-gateway/internal/database"
+	"ai-sign-in-gateway/internal/features"
 	"gorm.io/gorm"
 )
 
@@ -24,6 +25,12 @@ func Apply(db *gorm.DB) error {
 		return err
 	}
 	if err := ensureGatewayConcurrencyPeakTable(db); err != nil {
+		return err
+	}
+	if err := ensureGatewayRouteGroupTables(db); err != nil {
+		return err
+	}
+	if err := features.AutoMigrate(db); err != nil {
 		return err
 	}
 	return ensureIndexes(db)
@@ -49,12 +56,15 @@ func addMissingColumns(db *gorm.DB) error {
 		{table: "gateway_request_logs", column: "route_state_id", statement: "ALTER TABLE gateway_request_logs ADD COLUMN route_state_id INTEGER"},
 		{table: "gateway_request_logs", column: "prompt_tokens", statement: "ALTER TABLE gateway_request_logs ADD COLUMN prompt_tokens INTEGER"},
 		{table: "gateway_request_logs", column: "cached_input_tokens", statement: "ALTER TABLE gateway_request_logs ADD COLUMN cached_input_tokens INTEGER"},
+		{table: "gateway_request_logs", column: "cache_read_tokens", statement: "ALTER TABLE gateway_request_logs ADD COLUMN cache_read_tokens INTEGER"},
+		{table: "gateway_request_logs", column: "cache_write_tokens", statement: "ALTER TABLE gateway_request_logs ADD COLUMN cache_write_tokens INTEGER"},
 		{table: "gateway_request_logs", column: "completion_tokens", statement: "ALTER TABLE gateway_request_logs ADD COLUMN completion_tokens INTEGER"},
 		{table: "gateway_request_logs", column: "total_tokens", statement: "ALTER TABLE gateway_request_logs ADD COLUMN total_tokens INTEGER"},
 		{table: "gateway_request_logs", column: "usage_cost", statement: "ALTER TABLE gateway_request_logs ADD COLUMN usage_cost FLOAT"},
 		{table: "gateway_request_logs", column: "model", statement: "ALTER TABLE gateway_request_logs ADD COLUMN model TEXT NOT NULL DEFAULT ''"},
 		{table: "gateway_request_logs", column: "requested_model", statement: "ALTER TABLE gateway_request_logs ADD COLUMN requested_model TEXT NOT NULL DEFAULT ''"},
 		{table: "gateway_request_logs", column: "actual_model", statement: "ALTER TABLE gateway_request_logs ADD COLUMN actual_model TEXT NOT NULL DEFAULT ''"},
+		{table: "gateway_request_logs", column: "route_type", statement: "ALTER TABLE gateway_request_logs ADD COLUMN route_type TEXT NOT NULL DEFAULT ''"},
 		{table: "gateway_request_logs", column: "request_url", statement: "ALTER TABLE gateway_request_logs ADD COLUMN request_url TEXT NOT NULL DEFAULT ''"},
 		{table: "gateway_request_logs", column: "user_agent", statement: "ALTER TABLE gateway_request_logs ADD COLUMN user_agent TEXT NOT NULL DEFAULT ''"},
 		{table: "gateway_route_states", column: "ewma_latency_ms", statement: "ALTER TABLE gateway_route_states ADD COLUMN ewma_latency_ms FLOAT"},
@@ -63,6 +73,10 @@ func addMissingColumns(db *gorm.DB) error {
 		{table: "system_settings", column: "database_backup_dir", statement: "ALTER TABLE system_settings ADD COLUMN database_backup_dir TEXT NOT NULL DEFAULT ''"},
 		{table: "system_settings", column: "database_backup_interval_minutes", statement: "ALTER TABLE system_settings ADD COLUMN database_backup_interval_minutes INTEGER NOT NULL DEFAULT 1440"},
 		{table: "system_settings", column: "database_backup_retention", statement: "ALTER TABLE system_settings ADD COLUMN database_backup_retention INTEGER NOT NULL DEFAULT 7"},
+		{table: "system_settings", column: "log_retention_days", statement: "ALTER TABLE system_settings ADD COLUMN log_retention_days INTEGER NOT NULL DEFAULT 5"},
+		{table: "system_settings", column: "gateway_pricing_active_scheme_id", statement: "ALTER TABLE system_settings ADD COLUMN gateway_pricing_active_scheme_id TEXT NOT NULL DEFAULT 'official'"},
+		{table: "system_settings", column: "gateway_pricing_schemes", statement: "ALTER TABLE system_settings ADD COLUMN gateway_pricing_schemes TEXT NOT NULL DEFAULT '[]'"},
+		{table: "system_settings", column: "feature_flags", statement: "ALTER TABLE system_settings ADD COLUMN feature_flags JSON NOT NULL DEFAULT '{}'"},
 		{table: "system_settings", column: "gateway_smart_latency_bias", statement: "ALTER TABLE system_settings ADD COLUMN gateway_smart_latency_bias FLOAT NOT NULL DEFAULT 1"},
 		{table: "system_settings", column: "gateway_smart_concurrency_bias", statement: "ALTER TABLE system_settings ADD COLUMN gateway_smart_concurrency_bias FLOAT NOT NULL DEFAULT 1.5"},
 		{table: "system_settings", column: "gateway_smart_failure_bias", statement: "ALTER TABLE system_settings ADD COLUMN gateway_smart_failure_bias FLOAT NOT NULL DEFAULT 1"},
@@ -182,11 +196,41 @@ func ensureGatewayConcurrencyPeakTable(db *gorm.DB) error {
 	)`).Error
 }
 
+func ensureGatewayRouteGroupTables(db *gorm.DB) error {
+	statements := []string{
+		`CREATE TABLE IF NOT EXISTS gateway_route_groups (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL UNIQUE,
+			api_key TEXT NOT NULL DEFAULT '',
+			created_at DATETIME,
+			updated_at DATETIME
+		)`,
+		`CREATE TABLE IF NOT EXISTS gateway_route_group_members (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			group_id INTEGER NOT NULL,
+			route_state_id INTEGER NOT NULL,
+			created_at DATETIME,
+			CONSTRAINT fk_gateway_route_group_members_group FOREIGN KEY (group_id) REFERENCES gateway_route_groups(id) ON DELETE CASCADE,
+			CONSTRAINT fk_gateway_route_group_members_route_state FOREIGN KEY (route_state_id) REFERENCES gateway_route_states(id) ON DELETE CASCADE,
+			CONSTRAINT uq_gateway_route_group_member UNIQUE (group_id, route_state_id)
+		)`,
+	}
+	for _, statement := range statements {
+		if err := db.Exec(statement).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func ensureIndexes(db *gorm.DB) error {
 	statements := []string{
 		"CREATE INDEX IF NOT EXISTS ix_gateway_route_states_route_type ON gateway_route_states (route_type)",
 		"CREATE INDEX IF NOT EXISTS ix_gateway_route_states_route_priority ON gateway_route_states (route_priority)",
 		"CREATE INDEX IF NOT EXISTS ix_gateway_route_states_circuit_state ON gateway_route_states (circuit_state)",
+		"CREATE INDEX IF NOT EXISTS ix_gateway_route_groups_api_key ON gateway_route_groups (api_key)",
+		"CREATE INDEX IF NOT EXISTS ix_gateway_route_group_members_group_id ON gateway_route_group_members (group_id)",
+		"CREATE INDEX IF NOT EXISTS ix_gateway_route_group_members_route_state_id ON gateway_route_group_members (route_state_id)",
 		"CREATE INDEX IF NOT EXISTS ix_gateway_request_logs_created_at ON gateway_request_logs (created_at)",
 		"CREATE INDEX IF NOT EXISTS ix_gateway_request_logs_success ON gateway_request_logs (success)",
 		"CREATE INDEX IF NOT EXISTS ix_gateway_request_logs_is_stream ON gateway_request_logs (is_stream)",
@@ -194,6 +238,7 @@ func ensureIndexes(db *gorm.DB) error {
 		"CREATE INDEX IF NOT EXISTS ix_gateway_request_logs_model ON gateway_request_logs (model)",
 		"CREATE INDEX IF NOT EXISTS ix_gateway_request_logs_requested_model ON gateway_request_logs (requested_model)",
 		"CREATE INDEX IF NOT EXISTS ix_gateway_request_logs_actual_model ON gateway_request_logs (actual_model)",
+		"CREATE INDEX IF NOT EXISTS ix_gateway_request_logs_route_type ON gateway_request_logs (route_type)",
 		"CREATE INDEX IF NOT EXISTS ix_gateway_request_logs_request_url ON gateway_request_logs (request_url)",
 		"CREATE INDEX IF NOT EXISTS ix_chat_sessions_updated_at ON chat_sessions (updated_at)",
 		"CREATE INDEX IF NOT EXISTS ix_chat_sessions_site_id ON chat_sessions (site_id)",

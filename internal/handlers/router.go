@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"ai-sign-in-gateway/internal/config"
+	"ai-sign-in-gateway/internal/features"
 	"ai-sign-in-gateway/internal/middleware"
 	"ai-sign-in-gateway/internal/plugins"
 	"github.com/go-chi/chi/v5"
@@ -32,6 +33,7 @@ func NewRouter(db *gorm.DB, cfg config.Config) http.Handler {
 		protected.Get("/api/auth/me", app.Me)
 		protected.Put("/api/auth/account", app.UpdateAccount)
 		protected.Get("/api/overview", app.Overview)
+		protected.Get("/api/features", app.Features)
 		protected.Get("/api/plugins", app.Plugins)
 		protected.Get("/api/sites", app.ListSites)
 		protected.Post("/api/sites", app.CreateSite)
@@ -42,6 +44,19 @@ func NewRouter(db *gorm.DB, cfg config.Config) http.Handler {
 		protected.Route("/api/settings", app.SettingsRoutes)
 		protected.Route("/api/tools", app.ToolRoutes)
 		protected.Route("/api/gateway-admin", app.GatewayAdminRoutes)
+		for _, module := range features.List() {
+			if module.RoutePath == "" || module.RegisterRoutes == nil {
+				continue
+			}
+			module := module
+			protected.With(app.requireFeatureEnabled(module.Key)).Route(module.RoutePath, func(r chi.Router) {
+				module.RegisterRoutes(features.Runtime{
+					DB:            app.DB,
+					PluginManager: app.PluginManager,
+					Settings:      app.systemSettings,
+				}, r)
+			})
+		}
 	})
 
 	r.HandleFunc("/api/gateway/v1/*", app.GatewayProxy)
@@ -50,6 +65,8 @@ func NewRouter(db *gorm.DB, cfg config.Config) http.Handler {
 	r.HandleFunc("/api/gateway", app.GatewayProxy)
 	r.HandleFunc("/v1/*", app.GatewayProxy)
 	r.HandleFunc("/v1", app.GatewayProxy)
+	r.HandleFunc("/responses/*", app.GatewayProxy)
+	r.HandleFunc("/responses", app.GatewayProxy)
 	return r
 }
 

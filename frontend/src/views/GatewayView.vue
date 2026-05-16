@@ -25,7 +25,6 @@ import {
   updateGatewaySettings,
 } from '../api'
 import ShellLayout from '../components/ShellLayout.vue'
-import StatusPill from '../components/StatusPill.vue'
 import { useDebouncedTask } from '../composables/useDebouncedTask'
 import { useTableScrollHeights } from '../composables/useTableScrollHeights'
 import { balanceTone, formatBalance, formatGroupNames, normalizeBalanceUnit, normalizeGroupNames, parseGroupNames } from '../format'
@@ -288,14 +287,13 @@ const issueStateOptions: Array<{ label: string; value: 'with_error' | 'without_e
 
 const logColumns = [
   { title: '时间', key: 'created_at', width: 180, sorter: (a: GatewayLog, b: GatewayLog) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime() },
+  { title: '状态', key: 'status', width: 92, sorter: (a: GatewayLog, b: GatewayLog) => Number(a.success) - Number(b.success) },
   { title: '请求', key: 'request', width: 360, sorter: (a: GatewayLog, b: GatewayLog) => logRequestLabel(a).localeCompare(logRequestLabel(b), 'zh-CN') },
   { title: '路由', key: 'route', width: 300, sorter: (a: GatewayLog, b: GatewayLog) => logRouteLabel(a).localeCompare(logRouteLabel(b), 'zh-CN') },
-  { title: '模型', key: 'model', width: 260, sorter: (a: GatewayLog, b: GatewayLog) => logModelMeta(a).localeCompare(logModelMeta(b), 'zh-CN') },
+  { title: '模型', key: 'model', width: 300, sorter: (a: GatewayLog, b: GatewayLog) => logModelMeta(a).localeCompare(logModelMeta(b), 'zh-CN') },
   { title: 'UA', key: 'user_agent', width: 240, sorter: (a: GatewayLog, b: GatewayLog) => logUserAgent(a).localeCompare(logUserAgent(b), 'zh-CN') },
-  { title: '结果', key: 'status', width: 120, sorter: (a: GatewayLog, b: GatewayLog) => Number(a.success) - Number(b.success) },
   { title: '延迟', key: 'latency', width: 100, sorter: (a: GatewayLog, b: GatewayLog) => (a.latency_ms ?? Infinity) - (b.latency_ms ?? Infinity) },
   { title: '尝试', key: 'attempt', width: 90, sorter: (a: GatewayLog, b: GatewayLog) => a.attempt_index - b.attempt_index },
-  { title: '说明', key: 'reason' },
 ]
 
 const usageColumns = [
@@ -866,11 +864,36 @@ function logActualModel(log: GatewayLog) {
 }
 
 function logModelMeta(log: GatewayLog) {
-  return `请求 ${logRequestedModel(log)} · 命中 ${logActualModel(log)}`
+  return `请求 ${logRequestedModel(log)} / 命中 ${logActualModel(log)}`
 }
 
 function logRequestLabel(log: GatewayLog) {
   return `${log.method} ${logRequestURL(log)}`
+}
+
+function logMethodLabel(log: GatewayLog) {
+  return String(log.method || 'GET').trim().toUpperCase()
+}
+
+function requestMethodColor(method: string | null | undefined) {
+  switch (String(method || '').trim().toUpperCase()) {
+    case 'GET':
+      return 'green'
+    case 'POST':
+      return 'blue'
+    case 'PUT':
+      return 'purple'
+    case 'PATCH':
+      return 'orange'
+    case 'DELETE':
+      return 'red'
+    case 'OPTIONS':
+      return 'cyan'
+    case 'HEAD':
+      return 'geekblue'
+    default:
+      return 'default'
+  }
 }
 
 function logRequestURL(log: GatewayLog) {
@@ -3049,10 +3072,18 @@ onBeforeUnmount(() => {
               <template v-if="column.key === 'created_at'">
                 {{ formatTime(asLog(record).created_at) }}
               </template>
-              <template v-else-if="column.key === 'request'">
-                <a-tooltip :title="logRequestLabel(asLog(record))" placement="topLeft">
-                  <span class="table-ellipsis gateway-log-request-url">{{ logRequestLabel(asLog(record)) }}</span>
+              <template v-else-if="column.key === 'status'">
+                <a-tooltip :title="asLog(record).success ? '请求成功' : (asLog(record).failure_reason || '请求失败')">
+                  <a-tag :color="asLog(record).success ? 'success' : 'error'">{{ asLog(record).success ? '成功' : '失败' }}</a-tag>
                 </a-tooltip>
+              </template>
+              <template v-else-if="column.key === 'request'">
+                <div class="gateway-log-request">
+                  <a-tag class="gateway-log-method" :color="requestMethodColor(asLog(record).method)">{{ logMethodLabel(asLog(record)) }}</a-tag>
+                  <a-tooltip :title="logRequestLabel(asLog(record))" placement="topLeft">
+                    <span class="table-ellipsis gateway-log-request-url">{{ logRequestURL(asLog(record)) }}</span>
+                  </a-tooltip>
+                </div>
                 <a-tag v-if="asLog(record).is_stream" color="processing" class="stream-tag">流式</a-tag>
               </template>
               <template v-else-if="column.key === 'route'">
@@ -3066,16 +3097,9 @@ onBeforeUnmount(() => {
                 </div>
               </template>
               <template v-else-if="column.key === 'model'">
-                <div class="table-cell-compact gateway-log-models">
-                  <div class="table-cell-compact__meta">
-                    <span class="table-cell-compact__meta-label">请求</span>
-                    <span class="table-cell-compact__title">{{ logRequestedModel(asLog(record)) }}</span>
-                  </div>
-                  <div class="table-cell-compact__meta">
-                    <span class="table-cell-compact__meta-label">命中</span>
-                    <span class="table-cell-compact__title">{{ logActualModel(asLog(record)) }}</span>
-                  </div>
-                </div>
+                <a-tooltip :title="logModelMeta(asLog(record))" placement="topLeft">
+                  <span class="gateway-log-model-line">{{ logModelMeta(asLog(record)) }}</span>
+                </a-tooltip>
               </template>
               <template v-else-if="column.key === 'user_agent'">
                 <a-tooltip v-if="logUserAgent(asLog(record))" placement="topLeft" :title="logUserAgent(asLog(record))">
@@ -3083,20 +3107,11 @@ onBeforeUnmount(() => {
                 </a-tooltip>
                 <span v-else>暂无</span>
               </template>
-              <template v-else-if="column.key === 'status'">
-                <StatusPill :value="asLog(record).success ? 'success' : 'failed'" />
-              </template>
               <template v-else-if="column.key === 'latency'">
                 {{ asLog(record).latency_ms ? `${asLog(record).latency_ms} ms` : '暂无' }}
               </template>
               <template v-else-if="column.key === 'attempt'">
                 {{ asLog(record).attempt_index }}
-              </template>
-              <template v-else-if="column.key === 'reason'">
-                <a-tooltip v-if="asLog(record).failure_reason" placement="topLeft" :title="asLog(record).failure_reason">
-                  <span class="table-ellipsis">{{ compactText(asLog(record).failure_reason, 44) }}</span>
-                </a-tooltip>
-                <span v-else>请求成功</span>
               </template>
             </template>
           </a-table>
@@ -3129,10 +3144,18 @@ onBeforeUnmount(() => {
               <template v-if="column.key === 'created_at'">
                 {{ formatTime(asLog(record).created_at) }}
               </template>
-              <template v-else-if="column.key === 'request'">
-                <a-tooltip :title="logRequestLabel(asLog(record))" placement="topLeft">
-                  <span class="table-ellipsis gateway-log-request-url">{{ logRequestLabel(asLog(record)) }}</span>
+              <template v-else-if="column.key === 'status'">
+                <a-tooltip :title="asLog(record).success ? '请求成功' : (asLog(record).failure_reason || '请求失败')">
+                  <a-tag :color="asLog(record).success ? 'success' : 'error'">{{ asLog(record).success ? '成功' : '失败' }}</a-tag>
                 </a-tooltip>
+              </template>
+              <template v-else-if="column.key === 'request'">
+                <div class="gateway-log-request">
+                  <a-tag class="gateway-log-method" :color="requestMethodColor(asLog(record).method)">{{ logMethodLabel(asLog(record)) }}</a-tag>
+                  <a-tooltip :title="logRequestLabel(asLog(record))" placement="topLeft">
+                    <span class="table-ellipsis gateway-log-request-url">{{ logRequestURL(asLog(record)) }}</span>
+                  </a-tooltip>
+                </div>
                 <a-tag v-if="asLog(record).is_stream" color="processing" class="stream-tag">流式</a-tag>
               </template>
               <template v-else-if="column.key === 'route'">
@@ -3146,16 +3169,9 @@ onBeforeUnmount(() => {
                 </div>
               </template>
               <template v-else-if="column.key === 'model'">
-                <div class="table-cell-compact gateway-log-models">
-                  <div class="table-cell-compact__meta">
-                    <span class="table-cell-compact__meta-label">请求</span>
-                    <span class="table-cell-compact__title">{{ logRequestedModel(asLog(record)) }}</span>
-                  </div>
-                  <div class="table-cell-compact__meta">
-                    <span class="table-cell-compact__meta-label">命中</span>
-                    <span class="table-cell-compact__title">{{ logActualModel(asLog(record)) }}</span>
-                  </div>
-                </div>
+                <a-tooltip :title="logModelMeta(asLog(record))" placement="topLeft">
+                  <span class="gateway-log-model-line">{{ logModelMeta(asLog(record)) }}</span>
+                </a-tooltip>
               </template>
               <template v-else-if="column.key === 'user_agent'">
                 <a-tooltip v-if="logUserAgent(asLog(record))" placement="topLeft" :title="logUserAgent(asLog(record))">
@@ -3163,20 +3179,11 @@ onBeforeUnmount(() => {
                 </a-tooltip>
                 <span v-else>暂无</span>
               </template>
-              <template v-else-if="column.key === 'status'">
-                <StatusPill :value="asLog(record).success ? 'success' : 'failed'" />
-              </template>
               <template v-else-if="column.key === 'latency'">
                 {{ asLog(record).latency_ms ? `${asLog(record).latency_ms} ms` : '暂无' }}
               </template>
               <template v-else-if="column.key === 'attempt'">
                 {{ asLog(record).attempt_index }}
-              </template>
-              <template v-else-if="column.key === 'reason'">
-                <a-tooltip v-if="asLog(record).failure_reason" placement="topLeft" :title="asLog(record).failure_reason">
-                  <span class="table-ellipsis">{{ compactText(asLog(record).failure_reason, 44) }}</span>
-                </a-tooltip>
-                <span v-else>请求成功</span>
               </template>
             </template>
           </a-table>
@@ -3273,19 +3280,29 @@ onBeforeUnmount(() => {
   color: #94a3b8;
 }
 
-.gateway-log-models {
-  gap: 3px;
-}
-
-.gateway-log-models .table-cell-compact__meta {
+.gateway-log-request {
+  display: flex;
+  align-items: center;
   gap: 6px;
+  min-width: 0;
 }
 
-.gateway-log-models .table-cell-compact__title {
+.gateway-log-method {
+  flex: 0 0 auto;
+  margin-inline-end: 0;
+}
+
+.gateway-log-model-line {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
   color: #24334d;
   font-family: 'IBM Plex Mono', monospace;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
 }
 
 .table-info-icon {

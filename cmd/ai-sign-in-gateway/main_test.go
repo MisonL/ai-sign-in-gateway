@@ -167,3 +167,27 @@ func TestServeFrontendRejectsSiblingPrefixTraversal(t *testing.T) {
 		t.Fatalf("serveFrontend escaped dist: status=%d body=%q", rec.Code, rec.Body.String())
 	}
 }
+
+func TestServeFrontendWebManifestContentType(t *testing.T) {
+	dist := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dist, "index.html"), []byte("index"), 0o600); err != nil {
+		t.Fatalf("write index: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dist, "site.webmanifest"), []byte(`{"name":"app"}`), 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/site.webmanifest", nil)
+	serveFrontend(dist, rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/manifest+json") {
+		t.Fatalf("Content-Type = %q", got)
+	}
+	if !isStaticAssetRequest("/missing.webmanifest") {
+		t.Fatal(".webmanifest should be treated as a static asset")
+	}
+}

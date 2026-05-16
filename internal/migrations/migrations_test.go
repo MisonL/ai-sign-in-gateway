@@ -76,6 +76,12 @@ func TestApplyAddsGatewayModelColumnsToExistingSchema(t *testing.T) {
 		{"gateway_route_states", "manual_request_base_urls"},
 		{"gateway_request_logs", "requested_model"},
 		{"gateway_request_logs", "actual_model"},
+		{"gateway_request_logs", "route_type"},
+		{"gateway_request_logs", "cache_read_tokens"},
+		{"gateway_request_logs", "cache_write_tokens"},
+		{"system_settings", "log_retention_days"},
+		{"system_settings", "gateway_pricing_active_scheme_id"},
+		{"system_settings", "gateway_pricing_schemes"},
 		{"chat_sessions", "last_message_text"},
 		{"chat_messages", "reference_images"},
 	} {

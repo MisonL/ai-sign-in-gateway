@@ -25,14 +25,20 @@ func (a *App) GatewayAdminRoutes(r chi.Router) {
 	r.Get("/settings", a.GetGatewaySettings)
 	r.Put("/settings", a.UpdateGatewaySettings)
 	r.Post("/sync", a.SyncGatewayRoutes)
+	r.Get("/route-groups", a.GatewayRouteGroups)
+	r.Post("/route-groups", a.CreateGatewayRouteGroup)
+	r.Put("/route-groups/{groupID}", a.UpdateGatewayRouteGroup)
+	r.Delete("/route-groups/{groupID}", a.DeleteGatewayRouteGroup)
 	r.Get("/routes", a.GatewayRoutes)
 	r.Get("/active-requests", a.GatewayActiveRequests)
 	r.Post("/routes/probe", a.ProbeGatewayRoutes)
 	r.Post("/routes/priorities/reorder", a.ReorderGatewayRoutePriorities)
 	r.Post("/routes/disable-all", a.DisableAllGatewayRoutes)
+	r.Delete("/routes/{routeID}", a.DeleteGatewayRoute)
 	r.Post("/routes/{routeID}/toggle", a.ToggleGatewayRoute)
 	r.Post("/routes/{routeID}/enable-only", a.EnableOnlyGatewayRoute)
 	r.Post("/routes/{routeID}/reset-circuit", a.ResetGatewayCircuit)
+	r.Put("/routes/{routeID}/groups", a.UpdateGatewayRouteGroups)
 	r.Patch("/routes/{routeID}/type", a.UpdateGatewayRouteType)
 	r.Get("/routes/{routeID}/diagnose", a.DiagnoseGatewayRoute)
 	r.Post("/routes/{routeID}/probe", a.ProbeGatewayRoute)
@@ -79,7 +85,8 @@ func (a *App) GatewayOverview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	totalBalance, quantified := totalBalanceForRoutes(a.DB)
-	costSummary := gatewayUsageCostSummary(logs)
+	pricing := services.ResolveGatewayPricingScheme(settings.GatewayPricingActiveSchemeID, settings.GatewayPricingSchemes)
+	costSummary := gatewayUsageCostSummary(logs, pricing)
 	concurrencyPeaks, _ := services.GatewayConcurrencyPeakStats(a.DB, now)
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -203,7 +210,9 @@ func (a *App) GatewayUsage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, a.gatewayUsageResponse(logs, start, end))
+	settings, _ := a.systemSettings()
+	pricing := services.ResolveGatewayPricingScheme(settings.GatewayPricingActiveSchemeID, settings.GatewayPricingSchemes)
+	writeJSON(w, http.StatusOK, a.gatewayUsageResponse(logs, start, end, pricing))
 }
 
 func parseGatewayUsageTime(raw string) (time.Time, error) {
@@ -250,12 +259,6 @@ type gatewayUsageAgg struct {
 	lastUsedAt         time.Time
 }
 
-type gatewayModelPrice struct {
-	InputPerMTok  float64
-	CachedPerMTok float64
-	OutputPerMTok float64
-}
-
 type gatewayUsageCostAgg struct {
 	InputCost        float64
 	CachedCost       float64
@@ -279,7 +282,7 @@ type gatewayModelCostAgg struct {
 	KnownPrice bool
 }
 
-func (a *App) gatewayUsageResponse(logs []models.GatewayRequestLog, start, end time.Time) map[string]any {
+func (a *App) gatewayUsageResponse(logs []models.GatewayRequestLog, start, end time.Time, pricing models.GatewayPricingScheme) map[string]any {
 	routeByID, routeBySiteKey := a.gatewayLogRouteLookup(logs)
 	total := gatewayUsageAgg{}
 	groups := map[string]*gatewayUsageAgg{}
@@ -294,7 +297,7 @@ func (a *App) gatewayUsageResponse(logs []models.GatewayRequestLog, start, end t
 			total.StreamRequestCount++
 		}
 		addGatewayUsageTokens(&total, log)
-		addGatewayUsageCost(&total, log)
+		addGatewayUsageCost(&total, log, pricing)
 		addGatewayUsageLatency(&total, log)
 
 		state, matched := models.GatewayRouteState{}, false
@@ -333,7 +336,7 @@ func (a *App) gatewayUsageResponse(logs []models.GatewayRequestLog, start, end t
 				KeyName:        log.KeyName,
 				KeyFingerprint: log.KeyFingerprint,
 				GroupName:      log.GroupName,
-				RouteType:      state.RouteType,
+				RouteType:      gatewayLogRouteType(log, state, matched),
 				Model:          gatewayLogEffectiveModel(log),
 				RouteLabel:     gatewayLogRouteLabel(log, state, matched, siteName),
 			}
@@ -368,7 +371,7 @@ func (a *App) gatewayUsageResponse(logs []models.GatewayRequestLog, start, end t
 			}
 		}
 		addGatewayUsageTokens(agg, log)
-		addGatewayUsageCost(agg, log)
+		addGatewayUsageCost(agg, log, pricing)
 		addGatewayUsageLatency(agg, log)
 		if log.CreatedAt.After(agg.lastUsedAt) {
 			agg.lastUsedAt = log.CreatedAt
@@ -393,6 +396,8 @@ func addGatewayUsageTokens(agg *gatewayUsageAgg, log models.GatewayRequestLog) {
 	}
 	if log.CachedInputTokens != nil {
 		agg.CachedInputTokens += *log.CachedInputTokens
+	} else if log.CacheReadTokens != nil || log.CacheWriteTokens != nil {
+		agg.CachedInputTokens += intPtrValue(log.CacheReadTokens) + intPtrValue(log.CacheWriteTokens)
 	}
 	if log.CompletionTokens != nil {
 		agg.CompletionTokens += *log.CompletionTokens
@@ -409,12 +414,12 @@ func addGatewayUsageLatency(agg *gatewayUsageAgg, log models.GatewayRequestLog) 
 	}
 }
 
-func addGatewayUsageCost(agg *gatewayUsageAgg, log models.GatewayRequestLog) {
+func addGatewayUsageCost(agg *gatewayUsageAgg, log models.GatewayRequestLog, pricing models.GatewayPricingScheme) {
 	if log.UsageCost != nil {
 		agg.UsageCost += *log.UsageCost
 		agg.hasUsageCost = true
 	}
-	cost, known := gatewayComputedUsageCostForLog(log)
+	cost, known := gatewayComputedUsageCostForLog(log, pricing)
 	agg.ComputedInputCost += cost.InputCost
 	agg.ComputedCachedCost += cost.CachedCost
 	agg.ComputedOutputCost += cost.OutputCost
@@ -428,6 +433,16 @@ func addGatewayUsageCost(agg *gatewayUsageAgg, log models.GatewayRequestLog) {
 
 func gatewayLogEffectiveModel(log models.GatewayRequestLog) string {
 	return firstNonEmpty(log.ActualModel, log.RequestedModel, log.Model)
+}
+
+func gatewayLogRouteType(log models.GatewayRequestLog, state models.GatewayRouteState, matched bool) string {
+	if value := strings.TrimSpace(log.RouteType); value != "" {
+		return value
+	}
+	if matched {
+		return strings.TrimSpace(state.RouteType)
+	}
+	return ""
 }
 
 func gatewayUsageAggResponse(agg *gatewayUsageAgg) map[string]any {
@@ -478,10 +493,10 @@ func roundCost(value float64) float64 {
 	return float64(int64(value*1_000_000+0.5)) / 1_000_000
 }
 
-func gatewayUsageCostSummary(logs []models.GatewayRequestLog) map[string]any {
+func gatewayUsageCostSummary(logs []models.GatewayRequestLog, pricing models.GatewayPricingScheme) map[string]any {
 	agg := gatewayUsageCostAgg{TopModels: map[string]*gatewayModelCostAgg{}}
 	for _, log := range logs {
-		addGatewayUsageCostSummary(&agg, log)
+		addGatewayUsageCostSummary(&agg, log, pricing)
 	}
 	topModels := make([]map[string]any, 0, len(agg.TopModels))
 	for _, item := range agg.TopModels {
@@ -524,12 +539,14 @@ func gatewayUsageCostSummary(logs []models.GatewayRequestLog) map[string]any {
 	}
 }
 
-func addGatewayUsageCostSummary(agg *gatewayUsageCostAgg, log models.GatewayRequestLog) {
+func addGatewayUsageCostSummary(agg *gatewayUsageCostAgg, log models.GatewayRequestLog, pricing models.GatewayPricingScheme) {
 	if log.PromptTokens != nil {
 		agg.PromptTokens += *log.PromptTokens
 	}
 	if log.CachedInputTokens != nil {
 		agg.CachedTokens += *log.CachedInputTokens
+	} else if log.CacheReadTokens != nil || log.CacheWriteTokens != nil {
+		agg.CachedTokens += intPtrValue(log.CacheReadTokens) + intPtrValue(log.CacheWriteTokens)
 	}
 	if log.CompletionTokens != nil {
 		agg.OutputTokens += *log.CompletionTokens
@@ -541,7 +558,7 @@ func addGatewayUsageCostSummary(agg *gatewayUsageCostAgg, log models.GatewayRequ
 		agg.UpstreamCost += *log.UsageCost
 		agg.UpstreamRequests++
 	}
-	cost, known := gatewayComputedUsageCostForLog(log)
+	cost, known := gatewayComputedUsageCostForLog(log, pricing)
 	agg.InputCost += cost.InputCost
 	agg.CachedCost += cost.CachedCost
 	agg.OutputCost += cost.OutputCost
@@ -573,20 +590,29 @@ type gatewayComputedUsageCost struct {
 	TotalCost  float64
 }
 
-func gatewayComputedUsageCostForLog(log models.GatewayRequestLog) (gatewayComputedUsageCost, bool) {
-	price, ok := gatewayPriceForModel(gatewayLogEffectiveModel(log))
+func gatewayComputedUsageCostForLog(log models.GatewayRequestLog, pricing models.GatewayPricingScheme) (gatewayComputedUsageCost, bool) {
+	price, ok := services.GatewayPriceForModel(pricing, log.RouteType, gatewayLogEffectiveModel(log))
 	if !ok {
 		return gatewayComputedUsageCost{}, false
 	}
 	promptTokens := intPtrValue(log.PromptTokens)
-	cachedTokens := intPtrValue(log.CachedInputTokens)
+	cacheReadTokens := intPtrValue(log.CacheReadTokens)
+	cacheWriteTokens := intPtrValue(log.CacheWriteTokens)
+	hasSplitCache := log.CacheReadTokens != nil || log.CacheWriteTokens != nil
+	if !hasSplitCache {
+		cacheReadTokens = intPtrValue(log.CachedInputTokens)
+	}
 	outputTokens := intPtrValue(log.CompletionTokens)
-	billableInputTokens := promptTokens - cachedTokens
+	billableInputTokens := promptTokens
+	if !strings.EqualFold(strings.TrimSpace(log.RouteType), "claude") {
+		billableInputTokens = promptTokens - cacheReadTokens - cacheWriteTokens
+	}
 	if billableInputTokens < 0 {
 		billableInputTokens = 0
 	}
 	inputCost := float64(billableInputTokens) / 1_000_000 * price.InputPerMTok
-	cachedCost := float64(cachedTokens) / 1_000_000 * price.CachedPerMTok
+	cachedCost := float64(cacheReadTokens)/1_000_000*price.CachedInputPerMTok +
+		float64(cacheWriteTokens)/1_000_000*price.CacheWritePerMTok
 	outputCost := float64(outputTokens) / 1_000_000 * price.OutputPerMTok
 	return gatewayComputedUsageCost{
 		InputCost:  inputCost,
@@ -599,6 +625,8 @@ func gatewayComputedUsageCostForLog(log models.GatewayRequestLog) (gatewayComput
 func gatewayLogHasUsageTokens(log models.GatewayRequestLog) bool {
 	return intPtrValue(log.PromptTokens) > 0 ||
 		intPtrValue(log.CachedInputTokens) > 0 ||
+		intPtrValue(log.CacheReadTokens) > 0 ||
+		intPtrValue(log.CacheWriteTokens) > 0 ||
 		intPtrValue(log.CompletionTokens) > 0 ||
 		intPtrValue(log.TotalTokens) > 0
 }
@@ -608,32 +636,6 @@ func intPtrValue(value *int) int {
 		return 0
 	}
 	return *value
-}
-
-func gatewayPriceForModel(model string) (gatewayModelPrice, bool) {
-	model = strings.ToLower(strings.TrimSpace(model))
-	if model == "" {
-		return gatewayModelPrice{}, false
-	}
-	for _, item := range []struct {
-		prefix string
-		price  gatewayModelPrice
-	}{
-		{prefix: "gpt-5.5", price: gatewayModelPrice{InputPerMTok: 5, CachedPerMTok: 0.5, OutputPerMTok: 30}},
-		{prefix: "gpt-5.4-mini", price: gatewayModelPrice{InputPerMTok: 0.75, CachedPerMTok: 0.075, OutputPerMTok: 4.5}},
-		{prefix: "gpt-5.4-nano", price: gatewayModelPrice{InputPerMTok: 0.20, CachedPerMTok: 0.02, OutputPerMTok: 1.25}},
-		{prefix: "gpt-5.4", price: gatewayModelPrice{InputPerMTok: 2.5, CachedPerMTok: 0.25, OutputPerMTok: 15}},
-		{prefix: "gpt-5", price: gatewayModelPrice{InputPerMTok: 1.25, CachedPerMTok: 0.125, OutputPerMTok: 10}},
-		{prefix: "gpt-4.1", price: gatewayModelPrice{InputPerMTok: 2, CachedPerMTok: 0.5, OutputPerMTok: 8}},
-		{prefix: "gpt-4o", price: gatewayModelPrice{InputPerMTok: 2.5, CachedPerMTok: 1.25, OutputPerMTok: 10}},
-		{prefix: "o4-mini", price: gatewayModelPrice{InputPerMTok: 1.1, CachedPerMTok: 0.275, OutputPerMTok: 4.4}},
-		{prefix: "o3", price: gatewayModelPrice{InputPerMTok: 2, CachedPerMTok: 0.5, OutputPerMTok: 8}},
-	} {
-		if strings.HasPrefix(model, item.prefix) {
-			return item.price, true
-		}
-	}
-	return gatewayModelPrice{}, false
 }
 
 func sortGatewayUsageRoutes(routes []map[string]any) {
@@ -837,6 +839,151 @@ func (a *App) SyncGatewayRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "route_count": count})
 }
+
+func (a *App) GatewayRouteGroups(w http.ResponseWriter, r *http.Request) {
+	groups, err := services.ListGatewayRouteGroups(a.DB)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := make([]map[string]any, 0, len(groups))
+	for _, item := range groups {
+		out = append(out, gatewayRouteGroupResponse(item.Group, item.RouteCount))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (a *App) CreateGatewayRouteGroup(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		Name   string `json:"name"`
+		APIKey string `json:"api_key"`
+	}
+	if err := httpx.Decode(r, &payload); err != nil {
+		writeError(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	group, err := services.CreateGatewayRouteGroup(a.DB, services.GatewayRouteGroupInput{Name: payload.Name, APIKey: payload.APIKey})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, gatewayRouteGroupResponse(group, 0))
+}
+
+func (a *App) UpdateGatewayRouteGroup(w http.ResponseWriter, r *http.Request) {
+	groupID, err := strconv.ParseUint(chi.URLParam(r, "groupID"), 10, 64)
+	if err != nil || groupID == 0 {
+		writeError(w, http.StatusBadRequest, "分组 ID 无效")
+		return
+	}
+	var payload struct {
+		Name   string `json:"name"`
+		APIKey string `json:"api_key"`
+	}
+	if err := httpx.Decode(r, &payload); err != nil {
+		writeError(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	group, err := services.UpdateGatewayRouteGroup(a.DB, uint(groupID), services.GatewayRouteGroupInput{Name: payload.Name, APIKey: payload.APIKey})
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusNotFound
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, gatewayRouteGroupResponse(group, gatewayRouteGroupMemberCount(a.DB, group.ID)))
+}
+
+func (a *App) DeleteGatewayRouteGroup(w http.ResponseWriter, r *http.Request) {
+	groupID, err := strconv.ParseUint(chi.URLParam(r, "groupID"), 10, 64)
+	if err != nil || groupID == 0 {
+		writeError(w, http.StatusBadRequest, "分组 ID 无效")
+		return
+	}
+	if err := services.DeleteGatewayRouteGroup(a.DB, uint(groupID)); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "message": "分组已删除。"})
+}
+
+func (a *App) UpdateGatewayRouteGroups(w http.ResponseWriter, r *http.Request) {
+	routeID, err := strconv.ParseUint(chi.URLParam(r, "routeID"), 10, 64)
+	if err != nil || routeID == 0 {
+		writeError(w, http.StatusBadRequest, "路由 ID 无效")
+		return
+	}
+	var payload struct {
+		GroupIDs []uint `json:"group_ids"`
+	}
+	if err := httpx.Decode(r, &payload); err != nil {
+		writeError(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	if _, err := services.ReplaceGatewayRouteGroupMemberships(a.DB, uint(routeID), payload.GroupIDs); err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusNotFound
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	route, err := services.GetGatewayRoute(a.DB, strconv.FormatUint(routeID, 10))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, gatewayRouteResponse(route))
+}
+
+func (a *App) DeleteGatewayRoute(w http.ResponseWriter, r *http.Request) {
+	routeID, err := strconv.ParseUint(chi.URLParam(r, "routeID"), 10, 64)
+	if err != nil || routeID == 0 {
+		writeError(w, http.StatusBadRequest, "路由 ID 无效")
+		return
+	}
+	result, err := services.DeleteGatewayRoute(a.DB, uint(routeID))
+	if err != nil {
+		status := http.StatusInternalServerError
+		message := "删除路由失败"
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusNotFound
+			message = "网关路由不存在"
+		} else if strings.TrimSpace(err.Error()) != "" {
+			message = err.Error()
+		}
+		writeError(w, status, message)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":           "ok",
+		"message":          "路由已删除，对应站点 API Key 已移除。",
+		"deleted_route_id": result.RouteID,
+		"site_id":          result.SiteID,
+		"removed_api_key":  result.RemovedAPIKey,
+	})
+}
+
+func gatewayRouteGroupResponse(group models.GatewayRouteGroup, routeCount int) map[string]any {
+	return map[string]any{
+		"id":          group.ID,
+		"name":        group.Name,
+		"api_key":     group.APIKey,
+		"has_api_key": strings.TrimSpace(group.APIKey) != "",
+		"route_count": routeCount,
+		"created_at":  group.CreatedAt,
+		"updated_at":  group.UpdatedAt,
+	}
+}
+
+func gatewayRouteGroupMemberCount(db *gorm.DB, groupID uint) int {
+	var count int64
+	_ = db.Model(&models.GatewayRouteGroupMember{}).Where("group_id = ?", groupID).Count(&count).Error
+	return int(count)
+}
+
 func (a *App) GatewayRoutes(w http.ResponseWriter, r *http.Request) {
 	includeDisabled := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("include_disabled")), "true")
 	routes, err := services.ListGatewayRoutes(a.DB, r.URL.Query().Get("group"), includeDisabled)
@@ -955,6 +1102,7 @@ func (a *App) gatewayLogResponse(logs []models.GatewayRequestLog) []map[string]a
 			"key_name":             item.KeyName,
 			"key_fingerprint":      item.KeyFingerprint,
 			"group_name":           item.GroupName,
+			"route_type":           gatewayLogRouteType(item, routeState, routeMatched),
 			"target_path":          item.TargetPath,
 			"request_url":          item.RequestURL,
 			"user_agent":           item.UserAgent,
@@ -966,6 +1114,8 @@ func (a *App) gatewayLogResponse(logs []models.GatewayRequestLog) []map[string]a
 			"latency_ms":           item.LatencyMS,
 			"prompt_tokens":        item.PromptTokens,
 			"cached_input_tokens":  item.CachedInputTokens,
+			"cache_read_tokens":    item.CacheReadTokens,
+			"cache_write_tokens":   item.CacheWriteTokens,
 			"completion_tokens":    item.CompletionTokens,
 			"total_tokens":         item.TotalTokens,
 			"usage_cost":           item.UsageCost,
@@ -1345,13 +1495,37 @@ func (a *App) ProbeGatewayRouteBalance(w http.ResponseWriter, r *http.Request) {
 func (a *App) GatewayProxy(w http.ResponseWriter, r *http.Request) {
 	settings, _ := a.systemSettings()
 	gatewayAPIKey := strings.TrimSpace(settings.GatewayAPIKey)
-	if gatewayAPIKey == "" {
+	hasGroupKeys, err := services.HasGatewayRouteGroupAPIKeys(a.DB)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if gatewayAPIKey == "" && !hasGroupKeys {
 		writeError(w, http.StatusServiceUnavailable, "网关 API Key 未配置，公开网关已禁用")
 		return
 	}
-	header := r.Header.Get("Authorization")
-	expected := "Bearer " + gatewayAPIKey
-	if header != expected {
+	bearerKey := gatewayBearerToken(r.Header.Get("Authorization"))
+	requestGroup := strings.TrimSpace(r.URL.Query().Get("group"))
+	effectiveGroup := requestGroup
+	if bearerKey != "" && gatewayAPIKey != "" && bearerKey == gatewayAPIKey {
+		// Global key keeps the existing behavior: it may use all routes, or the
+		// optional group query to narrow the pool.
+	} else if bearerKey != "" {
+		group, matched, err := services.GatewayRouteGroupForAPIKey(a.DB, bearerKey)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if !matched {
+			writeError(w, http.StatusUnauthorized, "网关 API Key 无效")
+			return
+		}
+		if requestGroup != "" && !strings.EqualFold(requestGroup, group.Name) {
+			writeError(w, http.StatusUnauthorized, "分组 API Key 与请求分组不匹配")
+			return
+		}
+		effectiveGroup = group.Name
+	} else {
 		writeError(w, http.StatusUnauthorized, "网关 API Key 无效")
 		return
 	}
@@ -1373,11 +1547,11 @@ func (a *App) GatewayProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	opts := services.ProxyGatewayOptions{
 		ResponseWriter:     w,
-		Group:              r.URL.Query().Get("group"),
+		Group:              effectiveGroup,
 		RouteType:          normalizeGatewayRouteType(firstNonEmpty(r.URL.Query().Get("type"), r.URL.Query().Get("route_type"))),
 		ModelProbeStrategy: gatewayModelProbeStrategy(r),
 	}
-	_, err := services.ProxyGatewayRequestWithOptions(r.Context(), a.DB, r, targetPath, opts, policy)
+	_, err = services.ProxyGatewayRequestWithOptions(r.Context(), a.DB, r, targetPath, opts, policy)
 	if err != nil {
 		// service did not write anything yet (no candidate)
 		status := http.StatusBadGateway
@@ -1398,6 +1572,14 @@ func (a *App) GatewayProxy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, err.Error())
 		return
 	}
+}
+
+func gatewayBearerToken(header string) string {
+	header = strings.TrimSpace(header)
+	if len(header) >= 7 && strings.EqualFold(header[:7], "Bearer ") {
+		return strings.TrimSpace(header[7:])
+	}
+	return ""
 }
 
 func gatewayProxyTargetPath(path string) string {
@@ -1469,6 +1651,17 @@ func gatewayRouteResponse(route services.GatewayRoute) map[string]any {
 	if state.RequestCount > 0 {
 		successRate = round2(float64(state.SuccessCount) / float64(state.RequestCount) * 100)
 	}
+	groups := make([]map[string]any, 0, len(route.Groups))
+	groupNames := make([]string, 0, len(route.Groups))
+	for _, group := range route.Groups {
+		groups = append(groups, gatewayRouteGroupResponse(group, 0))
+		groupNames = append(groupNames, group.Name)
+	}
+	groupName := state.GroupName
+	if len(groupNames) > 0 {
+		sort.Strings(groupNames)
+		groupName = strings.Join(groupNames, ", ")
+	}
 	out := map[string]any{
 		"id":                       state.ID,
 		"site_id":                  state.SiteID,
@@ -1482,7 +1675,8 @@ func gatewayRouteResponse(route services.GatewayRoute) map[string]any {
 		"site_base_url_snapshot":   state.SiteBaseURLSnapshot,
 		"site_missing":             route.Site.ID == 0,
 		"has_api_key":              route.APIKey != "",
-		"group_name":               state.GroupName,
+		"group_name":               groupName,
+		"groups":                   groups,
 		"last_balance":             services.GatewayRouteBalance(route),
 		"balance_display":          balanceDisplayWithUnit(services.GatewayRouteBalance(route), services.GatewayRouteBalanceUnit(route)),
 		"balance_unit":             services.GatewayRouteBalanceUnit(route),

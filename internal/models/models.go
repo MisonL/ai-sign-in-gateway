@@ -59,6 +59,10 @@ type SystemSetting struct {
 	DatabaseBackupDir                  string    `gorm:"type:text;default:''" json:"database_backup_dir"`
 	DatabaseBackupIntervalMinutes      int       `gorm:"default:1440" json:"database_backup_interval_minutes"`
 	DatabaseBackupRetention            int       `gorm:"default:7" json:"database_backup_retention"`
+	LogRetentionDays                   int       `gorm:"default:5" json:"log_retention_days"`
+	GatewayPricingActiveSchemeID       string    `gorm:"size:80;default:official" json:"gateway_pricing_active_scheme_id"`
+	GatewayPricingSchemes              string    `gorm:"type:text;default:'[]'" json:"gateway_pricing_schemes"`
+	FeatureFlags                       JSONMap   `gorm:"type:json" json:"feature_flags"`
 	GatewayRouteStrategy               string    `gorm:"size:30;default:round_robin" json:"gateway_route_strategy"`
 	GatewayFailureThreshold            int       `gorm:"default:3" json:"gateway_failure_threshold"`
 	GatewayCooldownSeconds             int       `gorm:"default:180" json:"gateway_cooldown_seconds"`
@@ -75,6 +79,25 @@ type SystemSetting struct {
 	GatewayAPIKey                      string    `gorm:"size:255;default:''" json:"gateway_api_key"`
 	SiteGroupCatalog                   string    `gorm:"type:text;default:'[]'" json:"site_group_catalog"`
 	UpdatedAt                          time.Time `json:"updated_at"`
+}
+
+type GatewayPricingScheme struct {
+	ID       string              `json:"id"`
+	Name     string              `json:"name"`
+	Currency string              `json:"currency"`
+	Readonly bool                `json:"readonly"`
+	Source   string              `json:"source"`
+	Prices   []GatewayModelPrice `json:"prices"`
+}
+
+type GatewayModelPrice struct {
+	Provider           string  `json:"provider"`
+	ModelPrefix        string  `json:"model_prefix"`
+	DisplayName        string  `json:"display_name"`
+	InputPerMTok       float64 `json:"input_per_mtok"`
+	CachedInputPerMTok float64 `json:"cached_input_per_mtok"`
+	CacheWritePerMTok  float64 `json:"cache_write_per_mtok"`
+	OutputPerMTok      float64 `json:"output_per_mtok"`
 }
 
 type GatewayRouteState struct {
@@ -125,6 +148,24 @@ type GatewayRouteState struct {
 	Site                  Site       `json:"-"`
 }
 
+type GatewayRouteGroup struct {
+	ID        uint                      `gorm:"primaryKey" json:"id"`
+	Name      string                    `gorm:"size:100;uniqueIndex;not null" json:"name"`
+	APIKey    string                    `gorm:"size:255;default:''" json:"api_key"`
+	CreatedAt time.Time                 `json:"created_at"`
+	UpdatedAt time.Time                 `json:"updated_at"`
+	Members   []GatewayRouteGroupMember `gorm:"foreignKey:GroupID;constraint:OnDelete:CASCADE" json:"-"`
+}
+
+type GatewayRouteGroupMember struct {
+	ID           uint              `gorm:"primaryKey" json:"id"`
+	GroupID      uint              `gorm:"uniqueIndex:uq_gateway_route_group_member;index;not null" json:"group_id"`
+	RouteStateID uint              `gorm:"uniqueIndex:uq_gateway_route_group_member;index;not null" json:"route_state_id"`
+	CreatedAt    time.Time         `json:"created_at"`
+	Group        GatewayRouteGroup `gorm:"constraint:OnDelete:CASCADE" json:"-"`
+	RouteState   GatewayRouteState `gorm:"constraint:OnDelete:CASCADE" json:"-"`
+}
+
 type GatewayRequestLog struct {
 	ID                 uint      `gorm:"primaryKey" json:"id"`
 	RequestID          string    `gorm:"size:40;index" json:"request_id"`
@@ -136,6 +177,7 @@ type GatewayRequestLog struct {
 	Model              string    `gorm:"size:120;default:'';index" json:"model"`
 	RequestedModel     string    `gorm:"size:120;default:'';index" json:"requested_model"`
 	ActualModel        string    `gorm:"size:120;default:'';index" json:"actual_model"`
+	RouteType          string    `gorm:"size:30;default:'';index" json:"route_type"`
 	TargetPath         string    `gorm:"size:255;default:''" json:"target_path"`
 	RequestURL         string    `gorm:"type:text;default:''" json:"request_url"`
 	UserAgent          string    `gorm:"type:text;default:''" json:"user_agent"`
@@ -147,6 +189,8 @@ type GatewayRequestLog struct {
 	LatencyMS          *float64  `json:"latency_ms,omitempty"`
 	PromptTokens       *int      `json:"prompt_tokens,omitempty"`
 	CachedInputTokens  *int      `json:"cached_input_tokens,omitempty"`
+	CacheReadTokens    *int      `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens   *int      `json:"cache_write_tokens,omitempty"`
 	CompletionTokens   *int      `json:"completion_tokens,omitempty"`
 	TotalTokens        *int      `json:"total_tokens,omitempty"`
 	UsageCost          *float64  `json:"usage_cost,omitempty"`
@@ -227,6 +271,8 @@ func All() []any {
 		&CheckinRun{},
 		&SystemSetting{},
 		&GatewayRouteState{},
+		&GatewayRouteGroup{},
+		&GatewayRouteGroupMember{},
 		&GatewayRequestLog{},
 		&GatewayConcurrencyPeak{},
 		&SiteQueueTask{},

@@ -339,6 +339,9 @@ export interface SettingsData {
   database_backup_dir: string
   database_backup_interval_minutes: number
   database_backup_retention: number
+  log_retention_days: number
+  gateway_pricing_active_scheme_id: string
+  gateway_pricing_schemes: GatewayPricingScheme[]
   feature_flags: Record<string, boolean>
   features: FeatureMeta[]
   desktop_frontend_default_port: number
@@ -355,6 +358,25 @@ export interface SettingsData {
   runtime_database_path: string
   runtime_pending_config_dir: string
   security_warnings: string[]
+}
+
+export interface GatewayPricingScheme {
+  id: string
+  name: string
+  currency: string
+  readonly: boolean
+  source: string
+  prices: GatewayModelPrice[]
+}
+
+export interface GatewayModelPrice {
+  provider: 'codex' | 'claude' | 'gemini' | string
+  model_prefix: string
+  display_name: string
+  input_per_mtok: number
+  cached_input_per_mtok: number
+  cache_write_per_mtok: number
+  output_per_mtok: number
 }
 
 export interface RuntimeStopPortResult {
@@ -668,6 +690,7 @@ export interface GatewayRoute {
   site_missing?: boolean
   has_api_key?: boolean
   group_name: string
+  groups?: GatewayRouteGroup[]
   supported_models: string[]
   last_balance?: number | null
   balance_display?: string | null
@@ -710,6 +733,24 @@ export interface GatewayRoute {
   last_success_at: string | null
   last_failure_at: string | null
   circuit_open_until: string | null
+}
+
+export interface GatewayRouteGroup {
+  id: number
+  name: string
+  api_key: string
+  has_api_key?: boolean
+  route_count: number
+  created_at?: string
+  updated_at?: string
+}
+
+export interface GatewayRouteDeleteResult {
+  status: string
+  message: string
+  deleted_route_id: number
+  site_id: number
+  removed_api_key: boolean
 }
 
 export interface GatewayRouteProbeResult {
@@ -771,6 +812,7 @@ export interface GatewayLog {
   key_name: string
   key_fingerprint: string
   group_name: string
+  route_type?: string
   target_path: string
   request_url: string
   user_agent: string
@@ -782,6 +824,8 @@ export interface GatewayLog {
   latency_ms: number | null
   prompt_tokens: number | null
   cached_input_tokens: number | null
+  cache_read_tokens?: number | null
+  cache_write_tokens?: number | null
   completion_tokens: number | null
   total_tokens: number | null
   usage_cost: number | null

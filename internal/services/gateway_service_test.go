@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -1240,8 +1241,8 @@ func TestGatewayChatRouteOverridesClientWireAPIQuery(t *testing.T) {
 	}
 }
 
-func TestGatewayProxyUsesConfiguredSiteUserAgent(t *testing.T) {
-	const configuredUserAgent = "ConfiguredBrowser/1.0"
+func TestGatewayProxyReplacesBrowserConfiguredSiteUserAgent(t *testing.T) {
+	const configuredUserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0"
 	var upstreamUserAgent string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/chat/completions" {
@@ -1292,6 +1293,70 @@ func TestGatewayProxyUsesConfiguredSiteUserAgent(t *testing.T) {
 	if !result.Success {
 		t.Fatalf("proxy failed: status=%d body=%s error=%s", result.StatusCode, result.Body, result.Error)
 	}
+	if upstreamUserAgent != DefaultCodexCLIUserAgent {
+		t.Fatalf("upstream User-Agent = %q, want %q", upstreamUserAgent, DefaultCodexCLIUserAgent)
+	}
+	var log models.GatewayRequestLog
+	if err := db.Order("created_at desc").First(&log).Error; err != nil {
+		t.Fatal(err)
+	}
+	if log.UserAgent != DefaultCodexCLIUserAgent {
+		t.Fatalf("logged User-Agent = %q, want %q", log.UserAgent, DefaultCodexCLIUserAgent)
+	}
+}
+
+func TestGatewayProxyKeepsOfficialConfiguredSiteUserAgent(t *testing.T) {
+	const configuredUserAgent = "OpenAI/JS 6.34.0"
+	var upstreamUserAgent string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		upstreamUserAgent = r.Header.Get("User-Agent")
+		_, _ = w.Write([]byte(`{"provider":"gpt-chat"}`))
+	}))
+	defer upstream.Close()
+
+	db := newGatewayTestDB(t)
+	site := models.Site{
+		Name:      "site-official-user-agent",
+		BaseURL:   upstream.URL,
+		PluginKey: "api-supplier",
+		IsEnabled: true,
+		Credentials: models.JSONMap{
+			"user_agent": configuredUserAgent,
+			"api_keys": []any{
+				map[string]any{
+					"name":              "chat",
+					"key":               "chat-key",
+					"status":            "active",
+					"route_type":        "gpt",
+					"route_path":        "chat/completions",
+					"supported_models":  []any{"gpt-5.5"},
+					"request_base_urls": []any{upstream.URL},
+				},
+			},
+		},
+		PluginConfig: models.JSONMap{"api_format": "openai"},
+	}
+	if err := db.Create(&site).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count, err := SyncGatewayRoutes(db); err != nil || count != 1 {
+		t.Fatalf("SyncGatewayRoutes count=%d err=%v", count, err)
+	}
+
+	body := []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"ping"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/v1/chat/completions", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "client-wire-user-agent/1.0")
+	result, err := ProxyGatewayRequest(req.Context(), db, req, "chat/completions", "", "", GatewayPolicy{RequestTimeout: 5, MaxAttempts: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Success {
+		t.Fatalf("proxy failed: status=%d body=%s error=%s", result.StatusCode, result.Body, result.Error)
+	}
 	if upstreamUserAgent != configuredUserAgent {
 		t.Fatalf("upstream User-Agent = %q, want %q", upstreamUserAgent, configuredUserAgent)
 	}
@@ -1301,6 +1366,70 @@ func TestGatewayProxyUsesConfiguredSiteUserAgent(t *testing.T) {
 	}
 	if log.UserAgent != configuredUserAgent {
 		t.Fatalf("logged User-Agent = %q, want %q", log.UserAgent, configuredUserAgent)
+	}
+}
+
+func TestGatewayProxyReplacesBrowserConfiguredKeyUserAgent(t *testing.T) {
+	const configuredUserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0"
+	var upstreamUserAgent string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		upstreamUserAgent = r.Header.Get("User-Agent")
+		_, _ = w.Write([]byte(`{"provider":"gpt-chat"}`))
+	}))
+	defer upstream.Close()
+
+	db := newGatewayTestDB(t)
+	site := models.Site{
+		Name:      "key-browser-user-agent",
+		BaseURL:   upstream.URL,
+		PluginKey: "api-supplier",
+		IsEnabled: true,
+		Credentials: models.JSONMap{
+			"api_keys": []any{
+				map[string]any{
+					"name":              "chat",
+					"key":               "chat-key",
+					"status":            "active",
+					"user_agent":        configuredUserAgent,
+					"route_type":        "gpt",
+					"route_path":        "chat/completions",
+					"supported_models":  []any{"gpt-5.5"},
+					"request_base_urls": []any{upstream.URL},
+				},
+			},
+		},
+		PluginConfig: models.JSONMap{"api_format": "openai"},
+	}
+	if err := db.Create(&site).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count, err := SyncGatewayRoutes(db); err != nil || count != 1 {
+		t.Fatalf("SyncGatewayRoutes count=%d err=%v", count, err)
+	}
+
+	body := []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"ping"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/v1/chat/completions", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "client-wire-user-agent/1.0")
+	result, err := ProxyGatewayRequest(req.Context(), db, req, "chat/completions", "", "", GatewayPolicy{RequestTimeout: 5, MaxAttempts: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Success {
+		t.Fatalf("proxy failed: status=%d body=%s error=%s", result.StatusCode, result.Body, result.Error)
+	}
+	if upstreamUserAgent != DefaultCodexCLIUserAgent {
+		t.Fatalf("upstream User-Agent = %q, want %q", upstreamUserAgent, DefaultCodexCLIUserAgent)
+	}
+	var log models.GatewayRequestLog
+	if err := db.Order("created_at desc").First(&log).Error; err != nil {
+		t.Fatal(err)
+	}
+	if log.UserAgent != DefaultCodexCLIUserAgent {
+		t.Fatalf("logged User-Agent = %q, want %q", log.UserAgent, DefaultCodexCLIUserAgent)
 	}
 }
 
@@ -1346,7 +1475,7 @@ func TestGatewayProxyForwardsOfficialUserAgentWhenUnconfigured(t *testing.T) {
 }
 
 func TestGatewayProxyReplacesUnofficialUserAgentWhenUnconfigured(t *testing.T) {
-	const clientUserAgent = "opencode/local ai-sdk/provider-utils/4.0.23 runtime/node.js/24"
+	const clientUserAgent = "curl/8.5.0"
 	var upstreamUserAgent string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/chat/completions" {
@@ -1430,7 +1559,12 @@ func TestGatewayOfficialUserAgentForClient(t *testing.T) {
 		{
 			name:            "opencode",
 			clientUserAgent: "opencode/local ai-sdk/provider-utils/4.0.23 runtime/node.js/24",
-			want:            "",
+			want:            "opencode/local ai-sdk/provider-utils/4.0.23 runtime/node.js/24",
+		},
+		{
+			name:            "opencodex",
+			clientUserAgent: "opencodex/0.130.0",
+			want:            "opencodex/0.130.0",
 		},
 	}
 	for _, tt := range tests {
@@ -1597,6 +1731,103 @@ func TestGatewayRoutePathOverridesClientRequestPath(t *testing.T) {
 			t.Fatalf("body = %s", result.Body)
 		}
 	})
+}
+
+func TestGatewayProxyPreservesCodexReasoningAndFastMode(t *testing.T) {
+	var captured map[string]any
+	var capturedQuery string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		capturedQuery = r.URL.RawQuery
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatalf("decode upstream body: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"provider":"codex-response"}`))
+	}))
+	defer upstream.Close()
+
+	db := newGatewayTestDB(t)
+	site := models.Site{
+		Name:      "codex-fast-mode",
+		BaseURL:   "https://panel.example",
+		PluginKey: "api-supplier",
+		IsEnabled: true,
+		Credentials: models.JSONMap{
+			"api_keys": []any{
+				map[string]any{
+					"name":              "responses",
+					"key":               "responses-key",
+					"status":            "active",
+					"route_type":        "codex",
+					"route_path":        "responses",
+					"supported_models":  []any{"gpt-5.5"},
+					"request_base_urls": []any{upstream.URL},
+				},
+			},
+		},
+		PluginConfig: models.JSONMap{"api_format": "openai"},
+	}
+	if err := db.Create(&site).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count, err := SyncGatewayRoutes(db); err != nil || count != 1 {
+		t.Fatalf("SyncGatewayRoutes count=%d err=%v", count, err)
+	}
+
+	body := []byte(`{
+		"model":"gpt-5.5",
+		"input":"ping",
+		"reasoning":{"effort":"xhigh","summary":"auto"},
+		"model_reasoning_effort":"xhigh",
+		"service_tier":"priority",
+		"text":{"verbosity":"low"},
+		"metadata":{"codex_session_id":"session-fast"}
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/v1/responses?wire_api=responses&model_reasoning_effort=xhigh&service_tier=priority&codex_speed=fast", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	result, err := ProxyGatewayRequest(req.Context(), db, req, "responses", "", "", GatewayPolicy{RequestTimeout: 5, MaxAttempts: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(result.Body), `"provider":"codex-response"`) {
+		t.Fatalf("body = %s", result.Body)
+	}
+
+	query, err := url.ParseQuery(capturedQuery)
+	if err != nil {
+		t.Fatalf("parse upstream query: %v", err)
+	}
+	for key, want := range map[string]string{
+		"wire_api":               "responses",
+		"model_reasoning_effort": "xhigh",
+		"service_tier":           "priority",
+		"codex_speed":            "fast",
+	} {
+		if got := query.Get(key); got != want {
+			t.Fatalf("query %s = %q, want %q; raw=%s", key, got, want, capturedQuery)
+		}
+	}
+
+	reasoning, _ := captured["reasoning"].(map[string]any)
+	if reasoning["effort"] != "xhigh" || reasoning["summary"] != "auto" {
+		t.Fatalf("reasoning payload = %#v", captured["reasoning"])
+	}
+	if captured["model_reasoning_effort"] != "xhigh" {
+		t.Fatalf("model_reasoning_effort = %#v", captured["model_reasoning_effort"])
+	}
+	if captured["service_tier"] != "priority" {
+		t.Fatalf("service_tier = %#v", captured["service_tier"])
+	}
+	text, _ := captured["text"].(map[string]any)
+	if text["verbosity"] != "low" {
+		t.Fatalf("text payload = %#v", captured["text"])
+	}
+	metadata, _ := captured["metadata"].(map[string]any)
+	if metadata["codex_session_id"] != "session-fast" {
+		t.Fatalf("metadata payload = %#v", captured["metadata"])
+	}
 }
 
 func TestGatewayGeneralRouteUsesClientRequestModeAndForwardsWireAPI(t *testing.T) {
@@ -2536,8 +2767,8 @@ func TestGatewayProbeEmptyModelsDefaultsOpenAISupportedModels(t *testing.T) {
 	}
 }
 
-func TestGatewayProbeUsesConfiguredSiteUserAgent(t *testing.T) {
-	const configuredUserAgent = "ConfiguredProbeBrowser/1.0"
+func TestGatewayProbeReplacesBrowserConfiguredSiteUserAgent(t *testing.T) {
+	const configuredUserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0"
 	var upstreamUserAgent string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/models" {
@@ -2579,8 +2810,8 @@ func TestGatewayProbeUsesConfiguredSiteUserAgent(t *testing.T) {
 	if !result.OK {
 		t.Fatalf("probe failed: %s", result.Message)
 	}
-	if upstreamUserAgent != configuredUserAgent {
-		t.Fatalf("upstream User-Agent = %q, want %q", upstreamUserAgent, configuredUserAgent)
+	if upstreamUserAgent != DefaultCodexCLIUserAgent {
+		t.Fatalf("upstream User-Agent = %q, want %q", upstreamUserAgent, DefaultCodexCLIUserAgent)
 	}
 }
 
@@ -2978,6 +3209,9 @@ func TestGatewayUsageLoggedFromOpenAIResponse(t *testing.T) {
 	if log.CachedInputTokens == nil || *log.CachedInputTokens != 4 {
 		t.Fatalf("cached input tokens = %v", log.CachedInputTokens)
 	}
+	if log.CacheReadTokens == nil || *log.CacheReadTokens != 4 {
+		t.Fatalf("cache read tokens = %v", log.CacheReadTokens)
+	}
 	if log.CompletionTokens == nil || *log.CompletionTokens != 8 {
 		t.Fatalf("completion tokens = %v", log.CompletionTokens)
 	}
@@ -2992,6 +3226,46 @@ func TestGatewayUsageLoggedFromOpenAIResponse(t *testing.T) {
 	}
 	if log.RequestedModel != "gpt-5.5" || log.ActualModel != "gpt-5.4" {
 		t.Fatalf("requested=%q actual=%q", log.RequestedModel, log.ActualModel)
+	}
+}
+
+func TestExtractGatewayUsageSupportsClaudeAndGeminiUsageShapes(t *testing.T) {
+	claude := ExtractGatewayUsage([]byte(`{"usage":{"input_tokens":10,"cache_creation_input_tokens":20,"cache_read_input_tokens":30,"output_tokens":40}}`))
+	if claude.PromptTokens == nil || *claude.PromptTokens != 10 {
+		t.Fatalf("claude prompt tokens = %v", claude.PromptTokens)
+	}
+	if claude.CacheWriteTokens == nil || *claude.CacheWriteTokens != 20 {
+		t.Fatalf("claude cache write tokens = %v", claude.CacheWriteTokens)
+	}
+	if claude.CacheReadTokens == nil || *claude.CacheReadTokens != 30 {
+		t.Fatalf("claude cache read tokens = %v", claude.CacheReadTokens)
+	}
+	if claude.CachedInputTokens == nil || *claude.CachedInputTokens != 50 {
+		t.Fatalf("claude cached input tokens = %v", claude.CachedInputTokens)
+	}
+	if claude.TotalTokens == nil || *claude.TotalTokens != 100 {
+		t.Fatalf("claude total tokens = %v", claude.TotalTokens)
+	}
+
+	gemini := ExtractGatewayUsage([]byte(`{"usageMetadata":{"promptTokenCount":12,"cachedContentTokenCount":5,"candidatesTokenCount":8,"totalTokenCount":20}}`))
+	if gemini.PromptTokens == nil || *gemini.PromptTokens != 12 {
+		t.Fatalf("gemini prompt tokens = %v", gemini.PromptTokens)
+	}
+	if gemini.CacheReadTokens == nil || *gemini.CacheReadTokens != 5 {
+		t.Fatalf("gemini cache read tokens = %v", gemini.CacheReadTokens)
+	}
+	if gemini.TotalTokens == nil || *gemini.TotalTokens != 20 {
+		t.Fatalf("gemini total tokens = %v", gemini.TotalTokens)
+	}
+}
+
+func TestExtractGatewayUsageFromStream(t *testing.T) {
+	usage, model := ExtractGatewayUsageFromStream([]byte("data: {\"model\":\"gpt-5.5\",\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":8,\"total_tokens\":20}}\n\ndata: [DONE]\n"))
+	if model != "gpt-5.5" {
+		t.Fatalf("model = %q", model)
+	}
+	if usage.TotalTokens == nil || *usage.TotalTokens != 20 {
+		t.Fatalf("stream total tokens = %v", usage.TotalTokens)
 	}
 }
 

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"ai-sign-in-gateway/internal/config"
 	"ai-sign-in-gateway/internal/database"
@@ -21,7 +23,7 @@ import (
 )
 
 func TestGetSettingsIncludesRuntimeInfo(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("file:settings-runtime-info?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -89,6 +91,99 @@ func TestGetSettingsIncludesRuntimeInfo(t *testing.T) {
 	}
 	if response["desktop_backend_default_port_occupant"] != "ai-sign-in-gateway(pid:1234)" {
 		t.Fatalf("desktop_backend_default_port_occupant = %v", response["desktop_backend_default_port_occupant"])
+	}
+	if warnings, ok := response["security_warnings"].([]any); !ok || len(warnings) == 0 {
+		t.Fatalf("security_warnings = %#v", response["security_warnings"])
+	}
+	if response["log_retention_days"] != float64(5) {
+		t.Fatalf("log_retention_days = %v", response["log_retention_days"])
+	}
+	if response["gateway_pricing_active_scheme_id"] != "official" {
+		t.Fatalf("gateway_pricing_active_scheme_id = %v", response["gateway_pricing_active_scheme_id"])
+	}
+	if schemes, ok := response["gateway_pricing_schemes"].([]any); !ok || len(schemes) == 0 {
+		t.Fatalf("gateway_pricing_schemes = %#v", response["gateway_pricing_schemes"])
+	}
+}
+
+func TestUpdateSettingsPersistsLogRetentionDaysAndPrunesOldLogs(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:settings-log-retention?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(models.All()...); err != nil {
+		t.Fatalf("auto migrate: %v", err)
+	}
+	if err := db.Create(&models.SystemSetting{ID: 1, Timezone: "Asia/Shanghai", LogRetentionDays: 5}).Error; err != nil {
+		t.Fatalf("create settings: %v", err)
+	}
+	now := time.Now().UTC()
+	oldTime := now.AddDate(0, 0, -4)
+	recentTime := now.AddDate(0, 0, -1)
+	if err := db.Create(&[]models.CheckinRun{
+		{Status: "success", Message: "old", StartedAt: oldTime},
+		{Status: "success", Message: "recent", StartedAt: recentTime},
+	}).Error; err != nil {
+		t.Fatalf("create checkin runs: %v", err)
+	}
+	if err := db.Create(&[]models.GatewayRequestLog{
+		{RequestID: "old", Method: "POST", CreatedAt: oldTime},
+		{RequestID: "recent", Method: "POST", CreatedAt: recentTime},
+	}).Error; err != nil {
+		t.Fatalf("create gateway logs: %v", err)
+	}
+
+	payload := map[string]any{
+		"timezone":                         "Asia/Shanghai",
+		"schedule_enabled":                 true,
+		"daily_run_time":                   "09:00",
+		"checkin_concurrency":              1,
+		"checkin_global_concurrency":       4,
+		"checkin_interval_seconds":         1,
+		"retry_count":                      1,
+		"request_timeout":                  20,
+		"only_enabled_sites":               true,
+		"desktop_keep_running":             false,
+		"database_backup_enabled":          false,
+		"database_backup_dir":              "",
+		"database_backup_interval_minutes": 1440,
+		"database_backup_retention":        7,
+		"log_retention_days":               3,
+		"feature_flags":                    map[string]bool{},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/api/settings", bytes.NewReader(body))
+	app := &App{DB: db}
+	app.UpdateSettings(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", recorder.Code, recorder.Body.String())
+	}
+	var settings models.SystemSetting
+	if err := db.First(&settings, 1).Error; err != nil {
+		t.Fatal(err)
+	}
+	if settings.LogRetentionDays != 3 {
+		t.Fatalf("log retention days = %d, want 3", settings.LogRetentionDays)
+	}
+	var checkinCount int64
+	if err := db.Model(&models.CheckinRun{}).Count(&checkinCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if checkinCount != 1 {
+		t.Fatalf("checkin count = %d, want 1", checkinCount)
+	}
+	var gatewayCount int64
+	if err := db.Model(&models.GatewayRequestLog{}).Count(&gatewayCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if gatewayCount != 1 {
+		t.Fatalf("gateway log count = %d, want 1", gatewayCount)
 	}
 }
 
@@ -280,6 +375,157 @@ func TestRuntimeDatabaseBackupLifecycle(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(backupDir, createResponse.Backup.Name)); !os.IsNotExist(err) {
 		t.Fatalf("backup file still exists or stat failed unexpectedly: %v", err)
+	}
+}
+
+func TestRuntimeDatabaseBackupFallsBackFromForeignLinuxHomeDir(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "data", "ai-sign-in-gateway.db")
+	defaultBackupDir := filepath.Join(filepath.Dir(dbPath), "backups")
+	db := openTestSQLite(t, dbPath)
+	if err := db.Create(&models.AdminUser{Username: "admin", PasswordHash: "hash"}).Error; err != nil {
+		t.Fatalf("create admin: %v", err)
+	}
+	settings := models.SystemSetting{
+		ID:                    1,
+		Timezone:              "Asia/Shanghai",
+		DatabaseBackupEnabled: true,
+		DatabaseBackupDir:     "/home/__ai_gateway_foreign_user__/.ai-sign-in-gateway/backups",
+	}
+	if err := db.Create(&settings).Error; err != nil {
+		t.Fatalf("create settings: %v", err)
+	}
+	SetRuntimeInfo(RuntimeInfo{
+		ConfigDir:    filepath.Dir(dbPath),
+		DatabasePath: dbPath,
+	})
+	t.Cleanup(func() {
+		SetRuntimeInfo(RuntimeInfo{})
+	})
+
+	app := &App{DB: db}
+	createRecorder := httptest.NewRecorder()
+	app.BackupRuntimeDatabaseNow(createRecorder, httptest.NewRequest(http.MethodPost, "/api/settings/runtime/database/backups", nil))
+	if createRecorder.Code != http.StatusOK {
+		t.Fatalf("create status = %d body = %s", createRecorder.Code, createRecorder.Body.String())
+	}
+	var createResponse struct {
+		BackupDir string `json:"backup_dir"`
+		Backup    struct {
+			Name string `json:"name"`
+			Path string `json:"path"`
+		} `json:"backup"`
+	}
+	if err := json.Unmarshal(createRecorder.Body.Bytes(), &createResponse); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if createResponse.BackupDir != defaultBackupDir {
+		t.Fatalf("backup dir = %q, want %q", createResponse.BackupDir, defaultBackupDir)
+	}
+	if _, err := os.Stat(createResponse.Backup.Path); err != nil {
+		t.Fatalf("backup file missing: %v", err)
+	}
+}
+
+func TestDownloadRuntimeDatabaseBackup(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "data", "ai-sign-in-gateway.db")
+	backupDir := filepath.Join(tempDir, "backups")
+	db := openTestSQLite(t, dbPath)
+	if err := db.Create(&models.AdminUser{Username: "admin", PasswordHash: "hash"}).Error; err != nil {
+		t.Fatalf("create admin: %v", err)
+	}
+	settings := models.SystemSetting{
+		ID:                    1,
+		Timezone:              "Asia/Shanghai",
+		DatabaseBackupEnabled: true,
+		DatabaseBackupDir:     backupDir,
+	}
+	if err := db.Create(&settings).Error; err != nil {
+		t.Fatalf("create settings: %v", err)
+	}
+	SetRuntimeInfo(RuntimeInfo{
+		ConfigDir:    filepath.Dir(dbPath),
+		DatabasePath: dbPath,
+	})
+	t.Cleanup(func() {
+		SetRuntimeInfo(RuntimeInfo{})
+	})
+
+	app := &App{DB: db}
+	createRecorder := httptest.NewRecorder()
+	app.BackupRuntimeDatabaseNow(createRecorder, httptest.NewRequest(http.MethodPost, "/api/settings/runtime/database/backups", nil))
+	if createRecorder.Code != http.StatusOK {
+		t.Fatalf("create status = %d body = %s", createRecorder.Code, createRecorder.Body.String())
+	}
+	var createResponse struct {
+		Backup struct {
+			Name string `json:"name"`
+		} `json:"backup"`
+	}
+	if err := json.Unmarshal(createRecorder.Body.Bytes(), &createResponse); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/settings/runtime/database/backups/"+createResponse.Backup.Name+"/download", nil)
+	routeCtx := chi.NewRouteContext()
+	routeCtx.URLParams.Add("name", createResponse.Backup.Name)
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, routeCtx))
+	recorder := httptest.NewRecorder()
+	app.DownloadRuntimeDatabaseBackup(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("download status = %d body = %s", recorder.Code, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Content-Disposition"); got == "" {
+		t.Fatalf("missing content disposition")
+	}
+	if !bytes.HasPrefix(recorder.Body.Bytes(), []byte("SQLite format 3\x00")) {
+		t.Fatalf("download does not look like sqlite")
+	}
+}
+
+func TestDownloadRuntimeConfigArchive(t *testing.T) {
+	tempDir := t.TempDir()
+	configDir := filepath.Join(tempDir, "config")
+	if err := os.MkdirAll(filepath.Join(configDir, "logs"), 0o755); err != nil {
+		t.Fatalf("mkdir config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "launcher.json"), []byte(`{"active_config_dir":"`+configDir+`"}`), 0o600); err != nil {
+		t.Fatalf("write launcher: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "logs", "shell.log"), []byte("hello"), 0o600); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+	dbPath := filepath.Join(configDir, "ai-sign-in-gateway.db")
+	db := openTestSQLite(t, dbPath)
+	if err := db.Create(&models.SystemSetting{ID: 1, Timezone: "Asia/Shanghai"}).Error; err != nil {
+		t.Fatalf("create settings: %v", err)
+	}
+	SetRuntimeInfo(RuntimeInfo{
+		ConfigDir:    configDir,
+		DatabasePath: dbPath,
+	})
+	t.Cleanup(func() {
+		SetRuntimeInfo(RuntimeInfo{})
+	})
+
+	recorder := httptest.NewRecorder()
+	(&App{DB: db}).DownloadRuntimeConfigArchive(recorder, httptest.NewRequest(http.MethodGet, "/api/settings/runtime/config-dir/archive", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("archive status = %d body = %s", recorder.Code, recorder.Body.String())
+	}
+	reader, err := zip.NewReader(bytes.NewReader(recorder.Body.Bytes()), int64(recorder.Body.Len()))
+	if err != nil {
+		t.Fatalf("open zip: %v", err)
+	}
+	names := map[string]bool{}
+	for _, file := range reader.File {
+		names[file.Name] = true
+	}
+	for _, name := range []string{"launcher.json", "logs/shell.log", "ai-sign-in-gateway.db"} {
+		if !names[name] {
+			t.Fatalf("zip missing %s, got %#v", name, names)
+		}
 	}
 }
 
