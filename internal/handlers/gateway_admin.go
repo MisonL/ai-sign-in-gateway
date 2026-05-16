@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"errors"
 	"io"
 	"net/http"
@@ -58,35 +59,11 @@ func (a *App) GatewayOverview(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now().UTC()
 	since24h := now.Add(-24 * time.Hour)
-	var logs []models.GatewayRequestLog
-	_ = a.DB.Where("created_at >= ?", since24h).Order("created_at desc").Find(&logs).Error
-
-	requestIDs := map[string]struct{}{}
-	successCount := 0
-	latencySum := 0.0
-	latencySamples := 0
-	for _, log := range logs {
-		requestIDs[log.RequestID] = struct{}{}
-		if log.Success {
-			successCount++
-			if log.LatencyMS != nil {
-				latencySum += *log.LatencyMS
-				latencySamples++
-			}
-		}
-	}
-	successRate := 0.0
-	if len(logs) > 0 {
-		successRate = round2(float64(successCount) / float64(len(logs)) * 100)
-	}
-	var avgLatency any = nil
-	if latencySamples > 0 {
-		avgLatency = round2(latencySum / float64(latencySamples))
-	}
+	overviewStats, _ := gatewayOverviewStats(a.DB, since24h)
 
 	totalBalance, quantified := totalBalanceForRoutes(a.DB)
 	pricing := services.ResolveGatewayPricingScheme(settings.GatewayPricingActiveSchemeID, settings.GatewayPricingSchemes)
-	costSummary := gatewayUsageCostSummary(logs, pricing)
+	costSummary := gatewayUsageCostSummaryStream(a.DB, since24h, pricing)
 	concurrencyPeaks, _ := services.GatewayConcurrencyPeakStats(a.DB, now)
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -100,11 +77,11 @@ func (a *App) GatewayOverview(w http.ResponseWriter, r *http.Request) {
 		"active_concurrency":            services.RouteTotalActive(),
 		"max_concurrency_all_time":      concurrencyPeaks.AllTime,
 		"max_concurrency_today":         concurrencyPeaks.Today,
-		"request_count_24h":             len(requestIDs),
-		"success_rate_24h":              successRate,
-		"avg_latency_ms_24h":            avgLatency,
+		"request_count_24h":             overviewStats.RequestCount24h,
+		"success_rate_24h":              overviewStats.SuccessRate,
+		"avg_latency_ms_24h":            overviewStats.AvgLatency,
 		"usage_cost_24h":                costSummary,
-		"strategy_breakdown_24h":        strategyBreakdown24h(logs),
+		"strategy_breakdown_24h":        strategyBreakdown24hStream(a.DB, since24h),
 		"route_strategy":                settings.GatewayRouteStrategy,
 		"failure_threshold":             settings.GatewayFailureThreshold,
 		"cooldown_seconds":              settings.GatewayCooldownSeconds,
@@ -119,6 +96,45 @@ func (a *App) GatewayOverview(w http.ResponseWriter, r *http.Request) {
 
 func round2(v float64) float64 {
 	return float64(int64(v*100+0.5)) / 100
+}
+
+type gatewayOverviewAgg struct {
+	TotalRows       int64
+	SuccessRows     int64
+	LatencySamples  int64
+	LatencySum      sql.NullFloat64
+	RequestCount24h int64
+	SuccessRate     float64 `gorm:"-"`
+	AvgLatency      any     `gorm:"-"`
+}
+
+func gatewayOverviewStats(db *gormDB, since24h time.Time) (gatewayOverviewAgg, error) {
+	stats := gatewayOverviewAgg{}
+	if db == nil {
+		return stats, nil
+	}
+	if err := db.Model(&models.GatewayRequestLog{}).
+		Where("created_at >= ?", since24h).
+		Select(
+			"COUNT(*) AS total_rows",
+			"COALESCE(SUM(CASE WHEN success THEN 1 ELSE 0 END), 0) AS success_rows",
+			"COALESCE(SUM(CASE WHEN success AND latency_ms IS NOT NULL THEN latency_ms ELSE 0 END), 0) AS latency_sum",
+			"COALESCE(SUM(CASE WHEN success AND latency_ms IS NOT NULL THEN 1 ELSE 0 END), 0) AS latency_samples",
+		).
+		Scan(&stats).Error; err != nil {
+		return stats, err
+	}
+	_ = db.Model(&models.GatewayRequestLog{}).
+		Where("created_at >= ?", since24h).
+		Distinct("request_id").
+		Count(&stats.RequestCount24h).Error
+	if stats.TotalRows > 0 {
+		stats.SuccessRate = round2(float64(stats.SuccessRows) / float64(stats.TotalRows) * 100)
+	}
+	if stats.LatencySamples > 0 && stats.LatencySum.Valid {
+		stats.AvgLatency = round2(stats.LatencySum.Float64 / float64(stats.LatencySamples))
+	}
+	return stats, nil
 }
 
 func totalBalanceForRoutes(db *gormDB) (any, int) {
@@ -205,14 +221,14 @@ func (a *App) GatewayUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var logs []models.GatewayRequestLog
-	if err := a.DB.Preload("Site").Where("created_at >= ? AND created_at < ?", start, end).Order("created_at desc").Find(&logs).Error; err != nil {
+	settings, _ := a.systemSettings()
+	pricing := services.ResolveGatewayPricingScheme(settings.GatewayPricingActiveSchemeID, settings.GatewayPricingSchemes)
+	out, err := a.gatewayUsageResponseStream(start, end, pricing)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	settings, _ := a.systemSettings()
-	pricing := services.ResolveGatewayPricingScheme(settings.GatewayPricingActiveSchemeID, settings.GatewayPricingSchemes)
-	writeJSON(w, http.StatusOK, a.gatewayUsageResponse(logs, start, end, pricing))
+	writeJSON(w, http.StatusOK, out)
 }
 
 func parseGatewayUsageTime(raw string) (time.Time, error) {
@@ -284,106 +300,199 @@ type gatewayModelCostAgg struct {
 
 func (a *App) gatewayUsageResponse(logs []models.GatewayRequestLog, start, end time.Time, pricing models.GatewayPricingScheme) map[string]any {
 	routeByID, routeBySiteKey := a.gatewayLogRouteLookup(logs)
+	siteByID := map[uint]models.Site{}
+	for _, log := range logs {
+		if log.Site != nil {
+			siteByID[log.Site.ID] = *log.Site
+		}
+	}
+	return gatewayUsageResponseFromLogs(logs, start, end, pricing, routeByID, routeBySiteKey, siteByID)
+}
+
+func (a *App) gatewayUsageResponseStream(start, end time.Time, pricing models.GatewayPricingScheme) (map[string]any, error) {
+	routeIDSet := map[uint]bool{}
+	siteIDSet := map[uint]bool{}
+	metaRows, err := a.DB.Model(&models.GatewayRequestLog{}).
+		Select("route_state_id", "site_id").
+		Where("created_at >= ? AND created_at < ?", start, end).
+		Rows()
+	if err != nil {
+		return nil, err
+	}
+	for metaRows.Next() {
+		var routeID sql.NullInt64
+		var siteID sql.NullInt64
+		if err := metaRows.Scan(&routeID, &siteID); err != nil {
+			metaRows.Close()
+			return nil, err
+		}
+		if routeID.Valid && routeID.Int64 > 0 {
+			routeIDSet[uint(routeID.Int64)] = true
+		}
+		if siteID.Valid && siteID.Int64 > 0 {
+			siteIDSet[uint(siteID.Int64)] = true
+		}
+	}
+	if err := metaRows.Close(); err != nil {
+		return nil, err
+	}
+
+	routeByID, routeBySiteKey := a.gatewayLogRouteLookupForIDs(routeIDSet, siteIDSet)
+	siteByID := a.gatewaySiteLookupForIDs(siteIDSet)
+
+	rows, err := a.DB.Model(&models.GatewayRequestLog{}).
+		Select("id", "request_id", "route_state_id", "site_id", "key_fingerprint", "key_name", "group_name", "model", "requested_model", "actual_model", "route_type", "success", "latency_ms", "prompt_tokens", "cached_input_tokens", "cache_read_tokens", "cache_write_tokens", "completion_tokens", "total_tokens", "usage_cost", "is_stream", "created_at").
+		Where("created_at >= ? AND created_at < ?", start, end).
+		Order("created_at desc").
+		Rows()
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	total := gatewayUsageAgg{}
+	groups := map[string]*gatewayUsageAgg{}
+	for rows.Next() {
+		var log models.GatewayRequestLog
+		if err := a.DB.ScanRows(rows, &log); err != nil {
+			return nil, err
+		}
+		addGatewayUsageLog(&total, groups, log, pricing, routeByID, routeBySiteKey, siteByID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return gatewayUsageResponseFromAggs(&total, groups, start, end), nil
+}
+
+func gatewayUsageResponseFromLogs(
+	logs []models.GatewayRequestLog,
+	start, end time.Time,
+	pricing models.GatewayPricingScheme,
+	routeByID map[uint]models.GatewayRouteState,
+	routeBySiteKey map[string]models.GatewayRouteState,
+	siteByID map[uint]models.Site,
+) map[string]any {
 	total := gatewayUsageAgg{}
 	groups := map[string]*gatewayUsageAgg{}
 	for _, log := range logs {
-		total.RequestCount++
-		if log.Success {
-			total.SuccessCount++
-		} else {
-			total.FailureCount++
-		}
-		if log.IsStream {
-			total.StreamRequestCount++
-		}
-		addGatewayUsageTokens(&total, log)
-		addGatewayUsageCost(&total, log, pricing)
-		addGatewayUsageLatency(&total, log)
+		addGatewayUsageLog(&total, groups, log, pricing, routeByID, routeBySiteKey, siteByID)
+	}
+	return gatewayUsageResponseFromAggs(&total, groups, start, end)
+}
 
-		state, matched := models.GatewayRouteState{}, false
-		if log.RouteStateID != nil {
-			state, matched = routeByID[*log.RouteStateID]
-		}
-		if !matched && log.SiteID != nil {
-			state, matched = routeBySiteKey[gatewayLogRouteKey(*log.SiteID, log.KeyFingerprint)]
-		}
+func addGatewayUsageLog(
+	total *gatewayUsageAgg,
+	groups map[string]*gatewayUsageAgg,
+	log models.GatewayRequestLog,
+	pricing models.GatewayPricingScheme,
+	routeByID map[uint]models.GatewayRouteState,
+	routeBySiteKey map[string]models.GatewayRouteState,
+	siteByID map[uint]models.Site,
+) {
+	total.RequestCount++
+	if log.Success {
+		total.SuccessCount++
+	} else {
+		total.FailureCount++
+	}
+	if log.IsStream {
+		total.StreamRequestCount++
+	}
+	addGatewayUsageTokens(total, log)
+	addGatewayUsageCost(total, log, pricing)
+	addGatewayUsageLatency(total, log)
 
-		routeID := log.RouteStateID
-		if matched {
-			id := state.ID
-			routeID = &id
-		}
-		routeKey := "unknown"
-		if routeID != nil && *routeID > 0 {
-			routeKey = "route:" + strconv.FormatUint(uint64(*routeID), 10)
-		} else if log.SiteID != nil {
-			routeKey = gatewayLogRouteKey(*log.SiteID, log.KeyFingerprint)
-		}
-		agg, ok := groups[routeKey]
-		if !ok {
-			var siteName *string
-			if log.Site != nil {
-				siteName = &log.Site.Name
-			}
-			if siteName == nil && matched {
-				name := services.GatewayRouteSiteLabel(services.GatewayRoute{State: state, Site: state.Site})
-				siteName = &name
-			}
-			agg = &gatewayUsageAgg{
-				RouteID:        routeID,
-				SiteID:         log.SiteID,
-				SiteName:       siteName,
-				KeyName:        log.KeyName,
-				KeyFingerprint: log.KeyFingerprint,
-				GroupName:      log.GroupName,
-				RouteType:      gatewayLogRouteType(log, state, matched),
-				Model:          gatewayLogEffectiveModel(log),
-				RouteLabel:     gatewayLogRouteLabel(log, state, matched, siteName),
-			}
-			if matched {
-				if agg.SiteID == nil {
-					siteID := state.SiteID
-					agg.SiteID = &siteID
-				}
-				if strings.TrimSpace(agg.KeyName) == "" {
-					agg.KeyName = state.KeyName
-				}
-				if strings.TrimSpace(agg.GroupName) == "" {
-					agg.GroupName = state.GroupName
-				}
-			}
-			groups[routeKey] = agg
-		}
-		agg.RequestCount++
-		if log.Success {
-			agg.SuccessCount++
-		} else {
-			agg.FailureCount++
-		}
-		if log.IsStream {
-			agg.StreamRequestCount++
-		}
-		if logModel := gatewayLogEffectiveModel(log); logModel != "" {
-			if strings.TrimSpace(agg.Model) == "" {
-				agg.Model = logModel
-			} else if agg.Model != logModel {
-				agg.Model = "mixed"
-			}
-		}
-		addGatewayUsageTokens(agg, log)
-		addGatewayUsageCost(agg, log, pricing)
-		addGatewayUsageLatency(agg, log)
-		if log.CreatedAt.After(agg.lastUsedAt) {
-			agg.lastUsedAt = log.CreatedAt
-		}
+	state, matched := models.GatewayRouteState{}, false
+	if log.RouteStateID != nil {
+		state, matched = routeByID[*log.RouteStateID]
+	}
+	if !matched && log.SiteID != nil {
+		state, matched = routeBySiteKey[gatewayLogRouteKey(*log.SiteID, log.KeyFingerprint)]
 	}
 
+	routeID := log.RouteStateID
+	if matched {
+		id := state.ID
+		routeID = &id
+	}
+	routeKey := "unknown"
+	if routeID != nil && *routeID > 0 {
+		routeKey = "route:" + strconv.FormatUint(uint64(*routeID), 10)
+	} else if log.SiteID != nil {
+		routeKey = gatewayLogRouteKey(*log.SiteID, log.KeyFingerprint)
+	}
+	agg, ok := groups[routeKey]
+	if !ok {
+		var siteName *string
+		if log.Site != nil {
+			siteName = &log.Site.Name
+		}
+		if siteName == nil && log.SiteID != nil {
+			if site, ok := siteByID[*log.SiteID]; ok {
+				siteName = &site.Name
+			}
+		}
+		if siteName == nil && matched {
+			name := services.GatewayRouteSiteLabel(services.GatewayRoute{State: state, Site: state.Site})
+			siteName = &name
+		}
+		agg = &gatewayUsageAgg{
+			RouteID:        routeID,
+			SiteID:         log.SiteID,
+			SiteName:       siteName,
+			KeyName:        log.KeyName,
+			KeyFingerprint: log.KeyFingerprint,
+			GroupName:      log.GroupName,
+			RouteType:      gatewayLogRouteType(log, state, matched),
+			Model:          gatewayLogEffectiveModel(log),
+			RouteLabel:     gatewayLogRouteLabel(log, state, matched, siteName),
+		}
+		if matched {
+			if agg.SiteID == nil {
+				siteID := state.SiteID
+				agg.SiteID = &siteID
+			}
+			if strings.TrimSpace(agg.KeyName) == "" {
+				agg.KeyName = state.KeyName
+			}
+			if strings.TrimSpace(agg.GroupName) == "" {
+				agg.GroupName = state.GroupName
+			}
+		}
+		groups[routeKey] = agg
+	}
+	agg.RequestCount++
+	if log.Success {
+		agg.SuccessCount++
+	} else {
+		agg.FailureCount++
+	}
+	if log.IsStream {
+		agg.StreamRequestCount++
+	}
+	if logModel := gatewayLogEffectiveModel(log); logModel != "" {
+		if strings.TrimSpace(agg.Model) == "" {
+			agg.Model = logModel
+		} else if agg.Model != logModel {
+			agg.Model = "mixed"
+		}
+	}
+	addGatewayUsageTokens(agg, log)
+	addGatewayUsageCost(agg, log, pricing)
+	addGatewayUsageLatency(agg, log)
+	if log.CreatedAt.After(agg.lastUsedAt) {
+		agg.lastUsedAt = log.CreatedAt
+	}
+}
+
+func gatewayUsageResponseFromAggs(total *gatewayUsageAgg, groups map[string]*gatewayUsageAgg, start, end time.Time) map[string]any {
 	routes := make([]map[string]any, 0, len(groups))
 	for _, agg := range groups {
 		routes = append(routes, gatewayUsageAggResponse(agg))
 	}
 	sortGatewayUsageRoutes(routes)
-	out := gatewayUsageAggResponse(&total)
+	out := gatewayUsageAggResponse(total)
 	out["start"] = start.Format(time.RFC3339)
 	out["end"] = end.Format(time.RFC3339)
 	out["routes"] = routes
@@ -498,6 +607,33 @@ func gatewayUsageCostSummary(logs []models.GatewayRequestLog, pricing models.Gat
 	for _, log := range logs {
 		addGatewayUsageCostSummary(&agg, log, pricing)
 	}
+	return gatewayUsageCostSummaryResponse(agg)
+}
+
+func gatewayUsageCostSummaryStream(db *gormDB, since time.Time, pricing models.GatewayPricingScheme) map[string]any {
+	agg := gatewayUsageCostAgg{TopModels: map[string]*gatewayModelCostAgg{}}
+	if db == nil {
+		return gatewayUsageCostSummaryResponse(agg)
+	}
+	rows, err := db.Model(&models.GatewayRequestLog{}).
+		Select("route_type", "model", "requested_model", "actual_model", "prompt_tokens", "cached_input_tokens", "cache_read_tokens", "cache_write_tokens", "completion_tokens", "total_tokens", "usage_cost").
+		Where("created_at >= ?", since).
+		Rows()
+	if err != nil {
+		return gatewayUsageCostSummaryResponse(agg)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var log models.GatewayRequestLog
+		if err := db.ScanRows(rows, &log); err != nil {
+			continue
+		}
+		addGatewayUsageCostSummary(&agg, log, pricing)
+	}
+	return gatewayUsageCostSummaryResponse(agg)
+}
+
+func gatewayUsageCostSummaryResponse(agg gatewayUsageCostAgg) map[string]any {
 	topModels := make([]map[string]any, 0, len(agg.TopModels))
 	for _, item := range agg.TopModels {
 		topModels = append(topModels, map[string]any{
@@ -666,14 +802,15 @@ func nullableTime(value time.Time) any {
 type strategyAgg struct {
 	requests   int
 	successes  int
-	latencies  []float64
+	latencySum float64
+	latencies  int
 	stream     int
 	streamSucc int
-	streamLat  []float64
+	streamLat  float64
+	streamTTFB int
 }
 
 func strategyBreakdown24h(logs []models.GatewayRequestLog) []map[string]any {
-	order := []string{"smart", "round_robin", "latency_first", "priority"}
 	groups := map[string]*strategyAgg{}
 	for _, log := range logs {
 		strategy := strings.TrimSpace(log.RouteStrategy)
@@ -691,7 +828,8 @@ func strategyBreakdown24h(logs []models.GatewayRequestLog) []map[string]any {
 		if log.Success {
 			agg.successes++
 			if log.LatencyMS != nil {
-				agg.latencies = append(agg.latencies, *log.LatencyMS)
+				agg.latencySum += *log.LatencyMS
+				agg.latencies++
 			}
 		}
 		if log.IsStream {
@@ -699,11 +837,17 @@ func strategyBreakdown24h(logs []models.GatewayRequestLog) []map[string]any {
 			if log.Success {
 				agg.streamSucc++
 				if log.LatencyMS != nil {
-					agg.streamLat = append(agg.streamLat, *log.LatencyMS)
+					agg.streamLat += *log.LatencyMS
+					agg.streamTTFB++
 				}
 			}
 		}
 	}
+	return strategyBreakdownResponse(groups)
+}
+
+func strategyBreakdownResponse(groups map[string]*strategyAgg) []map[string]any {
+	order := []string{"smart", "round_robin", "latency_first", "priority"}
 	out := []map[string]any{}
 	for _, key := range order {
 		agg, ok := groups[key]
@@ -711,12 +855,12 @@ func strategyBreakdown24h(logs []models.GatewayRequestLog) []map[string]any {
 			continue
 		}
 		var avgLatency any
-		if len(agg.latencies) > 0 {
-			avgLatency = round2(sumFloat(agg.latencies) / float64(len(agg.latencies)))
+		if agg.latencies > 0 {
+			avgLatency = round2(agg.latencySum / float64(agg.latencies))
 		}
 		var avgStreamTTFB any
-		if len(agg.streamLat) > 0 {
-			avgStreamTTFB = round2(sumFloat(agg.streamLat) / float64(len(agg.streamLat)))
+		if agg.streamTTFB > 0 {
+			avgStreamTTFB = round2(agg.streamLat / float64(agg.streamTTFB))
 		}
 		streamSuccessRate := 0.0
 		if agg.stream > 0 {
@@ -735,12 +879,29 @@ func strategyBreakdown24h(logs []models.GatewayRequestLog) []map[string]any {
 	return out
 }
 
-func sumFloat(in []float64) float64 {
-	total := 0.0
-	for _, v := range in {
-		total += v
+func strategyBreakdown24hStream(db *gormDB, since time.Time) []map[string]any {
+	if db == nil {
+		return nil
 	}
-	return total
+	rows, err := db.Model(&models.GatewayRequestLog{}).
+		Select("route_strategy, COUNT(*) AS requests, COALESCE(SUM(CASE WHEN success THEN 1 ELSE 0 END), 0) AS successes, COALESCE(SUM(CASE WHEN success AND latency_ms IS NOT NULL THEN latency_ms ELSE 0 END), 0) AS latency_sum, COALESCE(SUM(CASE WHEN success AND latency_ms IS NOT NULL THEN 1 ELSE 0 END), 0) AS latencies, COALESCE(SUM(CASE WHEN is_stream THEN 1 ELSE 0 END), 0) AS stream, COALESCE(SUM(CASE WHEN is_stream AND success THEN 1 ELSE 0 END), 0) AS stream_succ, COALESCE(SUM(CASE WHEN is_stream AND success AND latency_ms IS NOT NULL THEN latency_ms ELSE 0 END), 0) AS stream_lat, COALESCE(SUM(CASE WHEN is_stream AND success AND latency_ms IS NOT NULL THEN 1 ELSE 0 END), 0) AS stream_ttfb").
+		Where("created_at >= ? AND route_strategy IN ?", since, []string{"smart", "round_robin", "latency_first", "priority"}).
+		Group("route_strategy").
+		Rows()
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	groups := map[string]*strategyAgg{}
+	for rows.Next() {
+		var strategy string
+		var agg strategyAgg
+		if err := rows.Scan(&strategy, &agg.requests, &agg.successes, &agg.latencySum, &agg.latencies, &agg.stream, &agg.streamSucc, &agg.streamLat, &agg.streamTTFB); err != nil {
+			continue
+		}
+		groups[strings.TrimSpace(strategy)] = &agg
+	}
+	return strategyBreakdownResponse(groups)
 }
 
 func (a *App) GetGatewaySettings(w http.ResponseWriter, r *http.Request) {
@@ -1142,6 +1303,10 @@ func (a *App) gatewayLogRouteLookup(logs []models.GatewayRequestLog) (map[uint]m
 			siteIDSet[*item.SiteID] = true
 		}
 	}
+	return a.gatewayLogRouteLookupForIDs(routeIDSet, siteIDSet)
+}
+
+func (a *App) gatewayLogRouteLookupForIDs(routeIDSet, siteIDSet map[uint]bool) (map[uint]models.GatewayRouteState, map[string]models.GatewayRouteState) {
 	routeIDs := make([]uint, 0, len(routeIDSet))
 	for id := range routeIDSet {
 		routeIDs = append(routeIDs, id)
@@ -1150,14 +1315,17 @@ func (a *App) gatewayLogRouteLookup(logs []models.GatewayRequestLog) (map[uint]m
 	for id := range siteIDSet {
 		siteIDs = append(siteIDs, id)
 	}
+	if len(routeIDs) == 0 && len(siteIDs) == 0 {
+		return map[uint]models.GatewayRouteState{}, map[string]models.GatewayRouteState{}
+	}
 
 	states := make([]models.GatewayRouteState, 0)
-	if len(routeIDs) > 0 {
+	if len(routeIDs) > 0 && a.DB != nil {
 		var byID []models.GatewayRouteState
 		_ = a.DB.Preload("Site").Where("id IN ?", routeIDs).Find(&byID).Error
 		states = append(states, byID...)
 	}
-	if len(siteIDs) > 0 {
+	if len(siteIDs) > 0 && a.DB != nil {
 		var bySite []models.GatewayRouteState
 		_ = a.DB.Preload("Site").Where("site_id IN ?", siteIDs).Find(&bySite).Error
 		states = append(states, bySite...)
@@ -1170,6 +1338,23 @@ func (a *App) gatewayLogRouteLookup(logs []models.GatewayRequestLog) (map[uint]m
 		routeBySiteKey[gatewayLogRouteKey(state.SiteID, state.KeyFingerprint)] = state
 	}
 	return routeByID, routeBySiteKey
+}
+
+func (a *App) gatewaySiteLookupForIDs(siteIDSet map[uint]bool) map[uint]models.Site {
+	siteIDs := make([]uint, 0, len(siteIDSet))
+	for id := range siteIDSet {
+		siteIDs = append(siteIDs, id)
+	}
+	if len(siteIDs) == 0 || a.DB == nil {
+		return map[uint]models.Site{}
+	}
+	var sites []models.Site
+	_ = a.DB.Where("id IN ?", siteIDs).Find(&sites).Error
+	siteByID := map[uint]models.Site{}
+	for _, site := range sites {
+		siteByID[site.ID] = site
+	}
+	return siteByID
 }
 
 func gatewayLogRouteKey(siteID uint, fingerprint string) string {

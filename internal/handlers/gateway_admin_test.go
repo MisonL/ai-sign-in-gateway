@@ -559,6 +559,118 @@ func TestGatewayUsageCostSummaryUsesCustomPricingScheme(t *testing.T) {
 	}
 }
 
+func TestGatewayUsageStreamsAndPreservesRouteGrouping(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:gateway-usage-stream?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(models.All()...); err != nil {
+		t.Fatalf("auto migrate: %v", err)
+	}
+	if err := db.Create(&models.SystemSetting{ID: 1, GatewayPricingActiveSchemeID: services.OfficialGatewayPricingSchemeID}).Error; err != nil {
+		t.Fatalf("create settings: %v", err)
+	}
+	site := models.Site{
+		Name:      "usage-site",
+		BaseURL:   "https://usage.example",
+		PluginKey: "api-supplier",
+		GroupName: "usage-group",
+		IsEnabled: true,
+	}
+	if err := db.Create(&site).Error; err != nil {
+		t.Fatalf("create site: %v", err)
+	}
+	state := models.GatewayRouteState{
+		SiteID:         site.ID,
+		KeyFingerprint: "fingerprint-a",
+		KeyName:        "usage-key",
+		GroupName:      "usage-group",
+		RouteType:      "codex",
+		IsEnabled:      true,
+		CircuitState:   "closed",
+	}
+	if err := db.Create(&state).Error; err != nil {
+		t.Fatalf("create route state: %v", err)
+	}
+
+	start := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	end := start.Add(2 * time.Hour)
+	latency := 120.0
+	prompt, completion, totalTokens := 1000, 500, 1500
+	logs := []models.GatewayRequestLog{
+		{
+			RequestID:        "usage-a",
+			RouteStateID:     &state.ID,
+			SiteID:           &site.ID,
+			KeyFingerprint:   state.KeyFingerprint,
+			KeyName:          state.KeyName,
+			GroupName:        state.GroupName,
+			RouteType:        "codex",
+			RequestedModel:   "gpt-5.1",
+			Success:          true,
+			LatencyMS:        &latency,
+			PromptTokens:     &prompt,
+			CompletionTokens: &completion,
+			TotalTokens:      &totalTokens,
+			IsStream:         true,
+			CreatedAt:        start.Add(time.Minute),
+		},
+		{
+			RequestID:      "usage-b",
+			SiteID:         &site.ID,
+			KeyFingerprint: state.KeyFingerprint,
+			KeyName:        state.KeyName,
+			GroupName:      state.GroupName,
+			RouteType:      "codex",
+			RequestedModel: "gpt-5.1",
+			Success:        false,
+			CreatedAt:      start.Add(2 * time.Minute),
+		},
+		{
+			RequestID:      "usage-old",
+			SiteID:         &site.ID,
+			KeyFingerprint: state.KeyFingerprint,
+			Success:        true,
+			CreatedAt:      start.Add(-time.Second),
+		},
+	}
+	if err := db.Create(&logs).Error; err != nil {
+		t.Fatalf("create logs: %v", err)
+	}
+
+	app := &App{DB: db}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/gateway-admin/usage?start="+start.Format(time.RFC3339)+"&end="+end.Format(time.RFC3339), nil)
+	app.GatewayUsage(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("usage status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var response map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response["request_count"] != float64(2) || response["success_count"] != float64(1) || response["failure_count"] != float64(1) {
+		t.Fatalf("usage totals = %#v", response)
+	}
+	if response["stream_request_count"] != float64(1) || response["total_tokens"] != float64(1500) {
+		t.Fatalf("usage token totals = %#v", response)
+	}
+	routes, ok := response["routes"].([]any)
+	if !ok || len(routes) != 1 {
+		t.Fatalf("routes = %#v", response["routes"])
+	}
+	route, ok := routes[0].(map[string]any)
+	if !ok {
+		t.Fatalf("route type = %T", routes[0])
+	}
+	if route["route_id"] != float64(state.ID) || route["site_name"] != site.Name || route["request_count"] != float64(2) {
+		t.Fatalf("route usage = %#v", route)
+	}
+	if route["avg_latency_ms"] != float64(120) || route["model"] != "gpt-5.1" || route["route_type"] != "codex" {
+		t.Fatalf("route details = %#v", route)
+	}
+}
+
 func TestGatewayLogResponseIncludesUserAgent(t *testing.T) {
 	app := &App{}
 	const upstreamUserAgent = "ConfiguredBrowser/1.0"
@@ -613,5 +725,93 @@ func TestGatewayOverviewIncludesConcurrencyPeaks(t *testing.T) {
 	}
 	if response["max_concurrency_today"] != float64(4) {
 		t.Fatalf("max_concurrency_today = %v", response["max_concurrency_today"])
+	}
+}
+
+func testIntPtr(value int) *int {
+	return &value
+}
+
+func TestGatewayOverviewStatsAggregateFromDatabase(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:gateway-overview-db-agg?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(models.All()...); err != nil {
+		t.Fatalf("auto migrate: %v", err)
+	}
+	if err := db.Create(&models.SystemSetting{ID: 1, GatewayRouteConcurrencyLimit: 5}).Error; err != nil {
+		t.Fatalf("create settings: %v", err)
+	}
+	now := time.Now().UTC()
+	latencyFast := 100.0
+	latencySlow := 500.0
+	logs := []models.GatewayRequestLog{
+		{
+			RequestID:        "req-a",
+			Success:          true,
+			LatencyMS:        &latencyFast,
+			RouteStrategy:    "smart",
+			IsStream:         true,
+			RouteType:        "codex",
+			RequestedModel:   "gpt-5.1",
+			PromptTokens:     testIntPtr(1000),
+			CompletionTokens: testIntPtr(500),
+			TotalTokens:      testIntPtr(1500),
+			CreatedAt:        now.Add(-time.Hour),
+		},
+		{
+			RequestID:      "req-a",
+			Success:        false,
+			RouteStrategy:  "smart",
+			IsStream:       true,
+			RouteType:      "codex",
+			RequestedModel: "gpt-5.1",
+			CreatedAt:      now.Add(-50 * time.Minute),
+		},
+		{
+			RequestID:      "req-b",
+			Success:        true,
+			LatencyMS:      &latencySlow,
+			RouteStrategy:  "priority",
+			RouteType:      "codex",
+			RequestedModel: "gpt-5.1",
+			CreatedAt:      now.Add(-30 * time.Minute),
+		},
+	}
+	if err := db.Create(&logs).Error; err != nil {
+		t.Fatalf("create logs: %v", err)
+	}
+
+	app := &App{DB: db}
+	rec := httptest.NewRecorder()
+	app.GatewayOverview(rec, httptest.NewRequest(http.MethodGet, "/gateway-admin/overview", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("overview status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var response map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response["request_count_24h"] != float64(2) {
+		t.Fatalf("request_count_24h = %v", response["request_count_24h"])
+	}
+	if response["success_rate_24h"] != float64(66.67) {
+		t.Fatalf("success_rate_24h = %v", response["success_rate_24h"])
+	}
+	if response["avg_latency_ms_24h"] != float64(300) {
+		t.Fatalf("avg_latency_ms_24h = %v", response["avg_latency_ms_24h"])
+	}
+	strategies, ok := response["strategy_breakdown_24h"].([]any)
+	if !ok || len(strategies) != 2 {
+		t.Fatalf("strategy_breakdown_24h = %#v", response["strategy_breakdown_24h"])
+	}
+	first, ok := strategies[0].(map[string]any)
+	if !ok || first["route_strategy"] != "smart" || first["request_count"] != float64(2) || first["stream_request_count"] != float64(2) {
+		t.Fatalf("smart strategy stats = %#v", first)
+	}
+	usageCost, ok := response["usage_cost_24h"].(map[string]any)
+	if !ok || usageCost["known_requests"] != float64(3) || usageCost["total_tokens"] != float64(1500) {
+		t.Fatalf("usage_cost_24h = %#v", response["usage_cost_24h"])
 	}
 }
