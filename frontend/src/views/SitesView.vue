@@ -143,6 +143,9 @@ const storageAnalyzeTimer = ref<ReturnType<typeof window.setTimeout> | null>(nul
 const lastAutoAnalyzedStorageRaw = ref('')
 const batchRegisterEnabled = ref(false)
 const batchRegisterResult = ref<SiteRegistrationBatchResult | null>(null)
+const storageManagedTimers = new Set<ReturnType<typeof window.setTimeout>>()
+const storageDelayResolvers = new Set<() => void>()
+let mounted = false
 
 const { pageTableY, pageTableContainer, modalTableY, drawerTableY } = useTableScrollHeights()
 const tablePageSize = 20
@@ -253,6 +256,39 @@ type SiteApiKeyEntry = {
 
 function bindPageTableContainer(element: Element | ComponentPublicInstance | null) {
   pageTableContainer.value = element instanceof HTMLElement ? element : null
+}
+
+function scheduleManagedTimeout(callback: () => void, delay = 0) {
+  const timer = window.setTimeout(() => {
+    storageManagedTimers.delete(timer)
+    if (mounted) {
+      callback()
+    }
+  }, delay)
+  storageManagedTimers.add(timer)
+  return timer
+}
+
+function clearManagedTimeout(timer: ReturnType<typeof window.setTimeout> | null) {
+  if (!timer) {
+    return
+  }
+  window.clearTimeout(timer)
+  storageManagedTimers.delete(timer)
+}
+
+function waitStorageDelay(ms: number) {
+  return new Promise<void>((resolve) => {
+    let timer: ReturnType<typeof window.setTimeout>
+    const done = () => {
+      storageManagedTimers.delete(timer)
+      storageDelayResolvers.delete(done)
+      resolve()
+    }
+    timer = window.setTimeout(done, ms)
+    storageManagedTimers.add(timer)
+    storageDelayResolvers.add(done)
+  })
 }
 
 type CCSwitchPreviewRow = {
@@ -2620,7 +2656,7 @@ async function handleAnalyzeLocalStorage() {
 }
 
 function handleStoragePayloadPaste() {
-  window.setTimeout(() => {
+  scheduleManagedTimeout(() => {
     if (localStorageRawText.value.trim()) {
       void handleAnalyzeLocalStorage()
     }
@@ -2630,14 +2666,17 @@ function handleStoragePayloadPaste() {
 async function ensureStorageAnalysisFinished() {
   const rawText = localStorageRawText.value.trim()
   if (storageAnalyzeTimer.value) {
-    window.clearTimeout(storageAnalyzeTimer.value)
+    clearManagedTimeout(storageAnalyzeTimer.value)
     storageAnalyzeTimer.value = null
   }
   if (drawerOpen.value && rawText && rawText !== lastAutoAnalyzedStorageRaw.value && isStorageJsonCandidate(rawText)) {
     await handleAnalyzeLocalStorage()
   }
   while (localStorageAnalyzeLoading.value) {
-    await new Promise<void>((resolve) => window.setTimeout(() => resolve(), 50))
+    await waitStorageDelay(50)
+    if (!mounted) {
+      return
+    }
   }
 }
 
@@ -3035,14 +3074,14 @@ watch(
   localStorageRawText,
   (value) => {
     if (storageAnalyzeTimer.value) {
-      window.clearTimeout(storageAnalyzeTimer.value)
+      clearManagedTimeout(storageAnalyzeTimer.value)
       storageAnalyzeTimer.value = null
     }
     const rawText = value.trim()
     if (!drawerOpen.value || !rawText || rawText === lastAutoAnalyzedStorageRaw.value || !isStorageJsonCandidate(rawText)) {
       return
     }
-    storageAnalyzeTimer.value = window.setTimeout(() => {
+    storageAnalyzeTimer.value = scheduleManagedTimeout(() => {
       storageAnalyzeTimer.value = null
       const latest = localStorageRawText.value.trim()
       if (latest && latest !== lastAutoAnalyzedStorageRaw.value && !localStorageAnalyzeLoading.value) {
@@ -3057,6 +3096,7 @@ async function handleSiteGroupsChanged() {
 }
 
 onMounted(async () => {
+  mounted = true
   window.addEventListener('site-groups:changed', handleSiteGroupsChanged)
   await loadData(null)
   await loadCheckinExtras()
@@ -3064,10 +3104,16 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  mounted = false
   window.removeEventListener('site-groups:changed', handleSiteGroupsChanged)
   if (storageAnalyzeTimer.value) {
-    window.clearTimeout(storageAnalyzeTimer.value)
+    clearManagedTimeout(storageAnalyzeTimer.value)
+    storageAnalyzeTimer.value = null
   }
+  storageManagedTimers.forEach((timer) => window.clearTimeout(timer))
+  storageManagedTimers.clear()
+  storageDelayResolvers.forEach((resolve) => resolve())
+  storageDelayResolvers.clear()
 })
 </script>
 

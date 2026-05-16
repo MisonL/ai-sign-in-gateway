@@ -15,6 +15,7 @@ import {
   getGatewayRoutes,
   getGatewaySettings,
   getSiteGroups,
+  isAbortError,
   probeGatewayRouteBalance,
   refreshSiteSummaries,
   reorderGatewayRoutePriorities,
@@ -160,9 +161,16 @@ let autoRefreshTimer: number | null = null
 let activeRequestRefreshTimer: number | null = null
 let lastAutoRefreshAt = 0
 let lastActiveRequestRefreshAt = 0
+let mounted = false
+let loadDataController: AbortController | null = null
+let autoRefreshController: AbortController | null = null
+let activeRequestsController: AbortController | null = null
+let gatewayUsageController: AbortController | null = null
+let probeProgressClearTimer: number | null = null
+let balanceProgressClearTimer: number | null = null
 const gatewayTablePageSize = 20
-const gatewayRouteAutoRefreshMs = 60_000
-const gatewayMonitorAutoRefreshMs = 60_000
+const gatewayRouteAutoRefreshMs = 180_000
+const gatewayMonitorAutoRefreshMs = 30_000
 const gatewayActiveRequestRefreshMs = 1_000
 const selectedGroups = ref<string[]>([])
 const addUpstreamGroupNames = ref<string[]>([])
@@ -1436,15 +1444,29 @@ async function loadGatewayUsage(silent = false) {
     }
     return
   }
+  gatewayUsageController?.abort()
+  const controller = new AbortController()
+  gatewayUsageController = controller
   usageLoading.value = true
   try {
-    gatewayUsage.value = await getGatewayUsage({ start, end })
+    const usage = await getGatewayUsage({ start, end, signal: controller.signal })
+    if (mounted && !controller.signal.aborted) {
+      gatewayUsage.value = usage
+    }
   } catch (err) {
+    if (isAbortError(err) || !mounted) {
+      return
+    }
     if (!silent) {
       toast.error(err instanceof Error ? err.message : '网关消耗加载失败')
     }
   } finally {
-    usageLoading.value = false
+    if (gatewayUsageController === controller) {
+      gatewayUsageController = null
+    }
+    if (mounted) {
+      usageLoading.value = false
+    }
   }
 }
 
@@ -1458,31 +1480,53 @@ async function handleUsageToday() {
 }
 
 async function loadActiveRequests(silent = false) {
+  activeRequestsController?.abort()
+  const controller = new AbortController()
+  activeRequestsController = controller
   try {
-    const snapshot = await getGatewayActiveRequests()
+    const snapshot = await getGatewayActiveRequests({ signal: controller.signal })
+    if (!mounted || controller.signal.aborted) {
+      return
+    }
     activeRequests.value = snapshot
     applyActiveRequestSnapshot(snapshot)
   } catch (err) {
+    if (isAbortError(err) || !mounted) {
+      return
+    }
     if (!silent) {
       toast.error(err instanceof Error ? err.message : '网关实时请求加载失败')
+    }
+  } finally {
+    if (activeRequestsController === controller) {
+      activeRequestsController = null
     }
   }
 }
 
 async function loadData() {
+  loadDataController?.abort()
+  const controller = new AbortController()
+  loadDataController = controller
   loading.value = true
   try {
-    const [overviewData, settingsData, routeData, logData, groupData, usageData] = await Promise.all([
-      getGatewayOverview(),
-      getGatewaySettings(),
-      getGatewayRoutes({ includeDisabled: includeDisabled.value }),
-      getGatewayLogs(80),
-      getSiteGroups(),
-      isGatewayMonitor.value ? getGatewayUsage({
+    const loadLogs = isGatewayMonitor.value
+    const [overviewData, settingsData, routeData, logData, groupData, usageData, activeRequestData] = await Promise.all([
+      getGatewayOverview({ signal: controller.signal }),
+      getGatewaySettings({ signal: controller.signal }),
+      getGatewayRoutes({ includeDisabled: includeDisabled.value, signal: controller.signal }),
+      loadLogs ? getGatewayLogs(80, { signal: controller.signal }) : Promise.resolve([] as GatewayLog[]),
+      getSiteGroups({ signal: controller.signal }),
+      isGatewayMonitor.value && !gatewayUsage.value ? getGatewayUsage({
         start: datetimeLocalToISOString(usageRange.start),
         end: datetimeLocalToISOString(usageRange.end),
-      }) : Promise.resolve(null),
+        signal: controller.signal,
+      }) : Promise.resolve(gatewayUsage.value),
+      isGatewayMonitor.value ? getGatewayActiveRequests({ signal: controller.signal }) : Promise.resolve([] as GatewayActiveRequest[]),
     ])
+    if (!mounted || controller.signal.aborted) {
+      return
+    }
     overview.value = overviewData
     Object.assign(settingsForm, settingsData)
     const normalizedRoutes = routeData.map(normalizeGatewayRoute)
@@ -1491,11 +1535,22 @@ async function loadData() {
     logs.value = logData
     siteGroups.value = groupData
     gatewayUsage.value = usageData
-    await loadActiveRequests()
+    activeRequests.value = activeRequestData
+    if (isGatewayMonitor.value) {
+      applyActiveRequestSnapshot(activeRequestData)
+    }
   } catch (err) {
+    if (isAbortError(err) || !mounted) {
+      return
+    }
     toast.error(err instanceof Error ? err.message : '网关数据加载失败')
   } finally {
-    loading.value = false
+    if (loadDataController === controller) {
+      loadDataController = null
+    }
+    if (mounted) {
+      loading.value = false
+    }
   }
 }
 
@@ -1509,33 +1564,44 @@ async function refreshRealtimeData() {
   }
   lastAutoRefreshAt = now
   autoRefreshing.value = true
+  autoRefreshController?.abort()
+  const controller = new AbortController()
+  autoRefreshController = controller
   try {
-    const [overviewData, routeData, logData, usageData] = await Promise.all([
-      getGatewayOverview(),
-      getGatewayRoutes({ includeDisabled: includeDisabled.value }),
-      getGatewayLogs(80),
-      isGatewayMonitor.value ? getGatewayUsage({
-        start: datetimeLocalToISOString(usageRange.start),
-        end: datetimeLocalToISOString(usageRange.end),
-      }) : Promise.resolve(null),
+    const loadLogs = isGatewayMonitor.value || logsDrawerOpen.value
+    const [overviewData, routeData, logData] = await Promise.all([
+      getGatewayOverview({ signal: controller.signal }),
+      getGatewayRoutes({ includeDisabled: includeDisabled.value, signal: controller.signal }),
+      loadLogs ? getGatewayLogs(80, { signal: controller.signal }) : Promise.resolve(logs.value),
     ])
+    if (!mounted || controller.signal.aborted) {
+      return
+    }
     overview.value = overviewData
     routes.value = routeData.map(normalizeGatewayRoute)
-    gatewayUsage.value = usageData
     if (!priorityDialogOpen.value) {
       priorityRoutes.value = routeData.map(normalizeGatewayRoute)
     }
     logs.value = logData
-    await loadActiveRequests(true)
-  } catch {
-    // 自动刷新静默失败，避免请求波动时持续打扰。
+    if (isGatewayMonitor.value) {
+      await refreshActiveRequests(true)
+    }
+  } catch (err) {
+    if (!isAbortError(err)) {
+      // 自动刷新静默失败，避免请求波动时持续打扰。
+    }
   } finally {
-    autoRefreshing.value = false
+    if (autoRefreshController === controller) {
+      autoRefreshController = null
+    }
+    if (mounted) {
+      autoRefreshing.value = false
+    }
   }
 }
 
 async function refreshActiveRequests(silent = true) {
-  if (activeRequestsRefreshing.value || document.visibilityState !== 'visible') {
+  if (!isGatewayMonitor.value || activeRequestsRefreshing.value || document.visibilityState !== 'visible') {
     return
   }
   const now = Date.now()
@@ -1554,12 +1620,18 @@ async function refreshActiveRequests(silent = true) {
 function startAutoRefresh() {
   stopAutoRefresh()
   autoRefreshTimer = window.setInterval(refreshRealtimeData, isGatewayMonitor.value ? gatewayMonitorAutoRefreshMs : gatewayRouteAutoRefreshMs)
-  activeRequestRefreshTimer = window.setInterval(() => {
-    void refreshActiveRequests(true)
-  }, gatewayActiveRequestRefreshMs)
+  if (isGatewayMonitor.value) {
+    activeRequestRefreshTimer = window.setInterval(() => {
+      void refreshActiveRequests(true)
+    }, gatewayActiveRequestRefreshMs)
+  }
 }
 
 function stopAutoRefresh() {
+  autoRefreshController?.abort()
+  autoRefreshController = null
+  activeRequestsController?.abort()
+  activeRequestsController = null
   if (autoRefreshTimer !== null) {
     window.clearInterval(autoRefreshTimer)
     autoRefreshTimer = null
@@ -1573,7 +1645,9 @@ function stopAutoRefresh() {
 function handleVisibilityChange() {
   if (document.visibilityState === 'visible') {
     void refreshRealtimeData()
-    void refreshActiveRequests(true)
+    if (isGatewayMonitor.value) {
+      void refreshActiveRequests(true)
+    }
   }
 }
 
@@ -1794,7 +1868,11 @@ async function handleProbeAll() {
   } finally {
     probeLoading.value = false
     probingRouteIds.value = probingRouteIds.value.filter((item) => !routeIds.includes(item))
-    window.setTimeout(() => {
+    if (probeProgressClearTimer !== null) {
+      window.clearTimeout(probeProgressClearTimer)
+    }
+    probeProgressClearTimer = window.setTimeout(() => {
+      probeProgressClearTimer = null
       if (!probeLoading.value) {
         probeAllProgress.value = null
       }
@@ -1826,7 +1904,11 @@ async function handleUpdateAllBalances() {
     toast.error(err instanceof Error ? err.message : '余额更新失败')
   } finally {
     balanceProbeAllLoading.value = false
-    window.setTimeout(() => {
+    if (balanceProgressClearTimer !== null) {
+      window.clearTimeout(balanceProgressClearTimer)
+    }
+    balanceProgressClearTimer = window.setTimeout(() => {
+      balanceProgressClearTimer = null
       if (!balanceProbeAllLoading.value) {
         balanceProbeAllProgress.value = null
       }
@@ -1985,16 +2067,33 @@ async function saveSettings() {
 }
 
 onMounted(async () => {
+  mounted = true
   window.addEventListener('site-groups:changed', handleSiteGroupsChanged)
   document.addEventListener('visibilitychange', handleVisibilityChange)
   resetUsageRangeToToday()
   await loadData()
+  if (!mounted) {
+    return
+  }
   startAutoRefresh()
   scheduleRouteSummaryRefresh()
 })
 
 onBeforeUnmount(() => {
+  mounted = false
   stopAutoRefresh()
+  loadDataController?.abort()
+  loadDataController = null
+  gatewayUsageController?.abort()
+  gatewayUsageController = null
+  if (probeProgressClearTimer !== null) {
+    window.clearTimeout(probeProgressClearTimer)
+    probeProgressClearTimer = null
+  }
+  if (balanceProgressClearTimer !== null) {
+    window.clearTimeout(balanceProgressClearTimer)
+    balanceProgressClearTimer = null
+  }
   window.removeEventListener('site-groups:changed', handleSiteGroupsChanged)
   document.removeEventListener('visibilitychange', handleVisibilityChange)
 })

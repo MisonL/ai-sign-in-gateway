@@ -15,6 +15,7 @@ import {
   getGatewayOverview,
   getOverview,
   getSettings,
+  isAbortError,
   logout,
   openRuntimeUrl,
 } from '../api'
@@ -29,6 +30,9 @@ const loading = ref(false)
 const overview = ref<OverviewData | null>(null)
 const gatewayOverview = ref<GatewayOverview | null>(null)
 let refreshTimer: number | null = null
+let mounted = false
+let refreshController: AbortController | null = null
+let refreshInFlight = false
 
 const settings = reactive<SettingsData>({
   timezone: 'Asia/Shanghai',
@@ -181,13 +185,23 @@ async function copyUrl(url: string) {
 }
 
 async function refreshAll(showToast = false) {
+  if (refreshInFlight || !mounted) {
+    return
+  }
+  refreshInFlight = true
+  refreshController?.abort()
+  const controller = new AbortController()
+  refreshController = controller
   loading.value = true
   try {
     const [settingsData, overviewData, gatewayData] = await Promise.all([
-      getSettings(),
-      getOverview(),
-      getGatewayOverview(),
+      getSettings({ signal: controller.signal }),
+      getOverview({ signal: controller.signal }),
+      getGatewayOverview({ signal: controller.signal }),
     ])
+    if (!mounted || controller.signal.aborted) {
+      return
+    }
     Object.assign(settings, settingsData)
     overview.value = overviewData
     gatewayOverview.value = gatewayData
@@ -195,9 +209,18 @@ async function refreshAll(showToast = false) {
       toast.success('服务状态已刷新。')
     }
   } catch (err) {
+    if (isAbortError(err) || !mounted) {
+      return
+    }
     toast.error(err instanceof Error ? err.message : '刷新失败')
   } finally {
-    loading.value = false
+    if (refreshController === controller) {
+      refreshController = null
+    }
+    refreshInFlight = false
+    if (mounted) {
+      loading.value = false
+    }
   }
 }
 
@@ -207,11 +230,18 @@ function signOut() {
 }
 
 onMounted(async () => {
+  mounted = true
   await refreshAll()
+  if (!mounted) {
+    return
+  }
   refreshTimer = window.setInterval(() => refreshAll(), 30_000)
 })
 
 onBeforeUnmount(() => {
+  mounted = false
+  refreshController?.abort()
+  refreshController = null
   if (refreshTimer !== null) {
     window.clearInterval(refreshTimer)
     refreshTimer = null

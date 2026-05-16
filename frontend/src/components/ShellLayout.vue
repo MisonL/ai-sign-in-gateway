@@ -11,7 +11,7 @@ import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import sidebarGatewayArtwork from '../assets/design/sidebar-gateway.png'
 import sidebarSkylineArtwork from '../assets/design/sidebar-skyline.png'
-import { getGatewayOverview, getMe, logout } from '../api'
+import { getGatewayOverview, getMe, isAbortError, logout } from '../api'
 import { onGatewayOverviewChanged } from '../gatewayOverviewEvents'
 import GroupManagerButton from './GroupManagerButton.vue'
 import type { AdminUser, GatewayOverview } from '../types'
@@ -23,6 +23,10 @@ const collapsed = ref(false)
 const gatewayOverview = ref<GatewayOverview | null>(null)
 let kpiTimer: number | null = null
 let stopGatewayOverviewListener: (() => void) | null = null
+let mounted = false
+let adminController: AbortController | null = null
+let kpiController: AbortController | null = null
+let kpiLoading = false
 
 const enabledFeatureKeys = new Set([
   'overview',
@@ -94,19 +98,50 @@ const headerKpis = computed(() => {
 })
 
 async function loadAdmin() {
+  adminController?.abort()
+  const controller = new AbortController()
+  adminController = controller
   try {
-    admin.value = await getMe()
-  } catch {
+    const adminData = await getMe({ signal: controller.signal })
+    if (!mounted || controller.signal.aborted) {
+      return
+    }
+    admin.value = adminData
+  } catch (err) {
+    if (isAbortError(err) || !mounted) {
+      return
+    }
     logout()
     router.push('/login')
+  } finally {
+    if (adminController === controller) {
+      adminController = null
+    }
   }
 }
 
 async function loadGatewayKpi() {
+  if (kpiLoading || !mounted) {
+    return
+  }
+  kpiLoading = true
+  kpiController?.abort()
+  const controller = new AbortController()
+  kpiController = controller
   try {
-    gatewayOverview.value = await getGatewayOverview()
-  } catch {
-    // 静默失败，避免在登录前/无权限时刷新报错
+    const overview = await getGatewayOverview({ signal: controller.signal })
+    if (mounted && !controller.signal.aborted) {
+      gatewayOverview.value = overview
+    }
+  } catch (err) {
+    if (!isAbortError(err)) {
+      // 静默失败，避免在登录前/无权限时刷新报错
+    }
+  } finally {
+    if (kpiController === controller) {
+      kpiController = null
+    }
+    kpiLoading = false
   }
 }
 
@@ -120,15 +155,27 @@ function signOut() {
 }
 
 onMounted(async () => {
+  mounted = true
   await loadAdmin()
+  if (!mounted) {
+    return
+  }
   await loadGatewayKpi()
+  if (!mounted) {
+    return
+  }
   stopGatewayOverviewListener = onGatewayOverviewChanged(loadGatewayKpi)
   kpiTimer = window.setInterval(loadGatewayKpi, 30_000)
 })
 
 onBeforeUnmount(() => {
+  mounted = false
   stopGatewayOverviewListener?.()
   stopGatewayOverviewListener = null
+  adminController?.abort()
+  adminController = null
+  kpiController?.abort()
+  kpiController = null
   if (kpiTimer !== null) {
     window.clearInterval(kpiTimer)
     kpiTimer = null

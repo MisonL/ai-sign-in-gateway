@@ -55,6 +55,10 @@ import type {
 
 const API_BASE = import.meta.env.VITE_API_BASE || '/api'
 
+export type RequestOptions = {
+  signal?: AbortSignal
+}
+
 export class ApiError extends Error {
   status: number
 
@@ -118,6 +122,10 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
   }
 
   return data as T
+}
+
+export function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === 'AbortError'
 }
 
 async function requestForm<T>(path: string, body: FormData): Promise<T> {
@@ -220,8 +228,8 @@ export function logout(): void {
   clearToken()
 }
 
-export function getMe(): Promise<AdminUser> {
-  return request('/auth/me')
+export function getMe(options: RequestOptions = {}): Promise<AdminUser> {
+  return request('/auth/me', { signal: options.signal })
 }
 
 export function getPublicInvites(): Promise<PublicInvite[]> {
@@ -253,16 +261,16 @@ export async function updateAdminAccount(
   return result
 }
 
-export function getOverview(): Promise<OverviewData> {
-  return request('/overview')
+export function getOverview(options: RequestOptions = {}): Promise<OverviewData> {
+  return request('/overview', { signal: options.signal })
 }
 
 export function getPlugins(): Promise<PluginMeta[]> {
   return request('/plugins')
 }
 
-export function getFeatures(): Promise<FeatureMeta[]> {
-  return request('/features')
+export function getFeatures(options: RequestOptions = {}): Promise<FeatureMeta[]> {
+  return request('/features', { signal: options.signal })
 }
 
 export function getSites(): Promise<Site[]> {
@@ -425,8 +433,8 @@ export function analyzeLocalStorage(raw_text: string): Promise<LocalStorageAnaly
   })
 }
 
-export function getSiteGroups(): Promise<SiteGroup[]> {
-  return request('/sites/groups')
+export function getSiteGroups(options: RequestOptions = {}): Promise<SiteGroup[]> {
+  return request('/sites/groups', { signal: options.signal })
 }
 
 export function createSiteGroup(name: string): Promise<SiteGroup> {
@@ -508,8 +516,8 @@ export function runBatch(siteIds: number[] = [], onlyEnabled = true): Promise<Ch
   })
 }
 
-export function getSettings(): Promise<SettingsData> {
-  return request('/settings')
+export function getSettings(options: RequestOptions = {}): Promise<SettingsData> {
+  return request('/settings', { signal: options.signal })
 }
 
 export function updateSettings(payload: SettingsData): Promise<SettingsData> {
@@ -661,11 +669,11 @@ export function testMcp(payload: {
   })
 }
 
-export function getGatewayOverview(): Promise<GatewayOverview> {
-  return request('/gateway-admin/overview')
+export function getGatewayOverview(options: RequestOptions = {}): Promise<GatewayOverview> {
+  return request('/gateway-admin/overview', { signal: options.signal })
 }
 
-export function getGatewayUsage(options?: { start?: string; end?: string }): Promise<GatewayUsage> {
+export function getGatewayUsage(options?: { start?: string; end?: string; signal?: AbortSignal }): Promise<GatewayUsage> {
   const params = new URLSearchParams()
   if (options?.start) {
     params.set('start', options.start)
@@ -674,11 +682,11 @@ export function getGatewayUsage(options?: { start?: string; end?: string }): Pro
     params.set('end', options.end)
   }
   const suffix = params.toString() ? `?${params.toString()}` : ''
-  return request(`/gateway-admin/usage${suffix}`)
+  return request(`/gateway-admin/usage${suffix}`, { signal: options?.signal })
 }
 
-export function getGatewaySettings(): Promise<GatewaySettingsData> {
-  return request('/gateway-admin/settings')
+export function getGatewaySettings(options: RequestOptions = {}): Promise<GatewaySettingsData> {
+  return request('/gateway-admin/settings', { signal: options.signal })
 }
 
 export function updateGatewaySettings(payload: GatewaySettingsData): Promise<GatewaySettingsData> {
@@ -694,7 +702,7 @@ export function syncGatewayRoutes(): Promise<{ status: string; route_count: numb
   })
 }
 
-export function getGatewayRoutes(options?: { group?: string; includeDisabled?: boolean }): Promise<GatewayRoute[]> {
+export function getGatewayRoutes(options?: { group?: string; includeDisabled?: boolean; signal?: AbortSignal }): Promise<GatewayRoute[]> {
   const params = new URLSearchParams()
   if (options?.group) {
     params.set('group', options.group)
@@ -703,7 +711,7 @@ export function getGatewayRoutes(options?: { group?: string; includeDisabled?: b
     params.set('include_disabled', String(options.includeDisabled))
   }
   const suffix = params.toString() ? `?${params.toString()}` : ''
-  return request(`/gateway-admin/routes${suffix}`)
+  return request(`/gateway-admin/routes${suffix}`, { signal: options?.signal })
 }
 
 export function toggleGatewayRoute(id: number): Promise<{ id: number; is_enabled: boolean; is_enabled_manual?: boolean; circuit_state: string }> {
@@ -775,12 +783,12 @@ export function probeGatewayRoutes(routeIds: number[]): Promise<GatewayRouteProb
   })
 }
 
-export function getGatewayLogs(limit = 80): Promise<GatewayLog[]> {
-  return request(`/gateway-admin/logs?limit=${limit}`)
+export function getGatewayLogs(limit = 80, options: RequestOptions = {}): Promise<GatewayLog[]> {
+  return request(`/gateway-admin/logs?limit=${limit}`, { signal: options.signal })
 }
 
-export function getGatewayActiveRequests(): Promise<GatewayActiveRequest[]> {
-  return request('/gateway-admin/active-requests')
+export function getGatewayActiveRequests(options: RequestOptions = {}): Promise<GatewayActiveRequest[]> {
+  return request('/gateway-admin/active-requests', { signal: options.signal })
 }
 
 export function getGatewayRouteLogs(routeId: number, limit = 80): Promise<GatewayLog[]> {
