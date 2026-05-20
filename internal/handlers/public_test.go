@@ -178,7 +178,7 @@ func TestGatewayBareResponsesAliasRoutesToUpstreamV1Responses(t *testing.T) {
 			t.Fatalf("Authorization = %q", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"resp_1","model":"gpt-5.5","output":[]}`))
+		_, _ = w.Write([]byte(`{"id":"resp_1","model":"gpt-5.5","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}`))
 	}))
 	defer upstream.Close()
 

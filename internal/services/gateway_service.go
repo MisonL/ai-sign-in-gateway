@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -1648,9 +1649,10 @@ func proxyGatewayAttempt(ctx context.Context, db *gorm.DB, r *http.Request, body
 		defer cancel()
 	}
 
+	upstreamBody := sanitizeGatewayRequestBodyForProxy(upstreamTargetPath, body)
 	var bodyReader io.Reader
-	if len(body) > 0 {
-		bodyReader = bytes.NewReader(body)
+	if len(upstreamBody) > 0 {
+		bodyReader = bytes.NewReader(upstreamBody)
 	}
 	req, err := http.NewRequestWithContext(reqCtx, r.Method, upstreamURL, bodyReader)
 	if err != nil {
@@ -1678,11 +1680,24 @@ func proxyGatewayAttempt(ctx context.Context, db *gorm.DB, r *http.Request, body
 	is2xx := statusCode >= 200 && statusCode < 300
 
 	if is2xx && streaming && opts.ResponseWriter != nil {
+		sanitizeResponses := gatewayResponsesTargetPath(upstreamTargetPath)
+		streamReader, firstChunk, bootstrapErr := prepareGatewayStreamBootstrap(resp.Body, sanitizeResponses)
+		if bootstrapErr != nil {
+			_ = resp.Body.Close()
+			reason := bootstrapErr.Error()
+			if errors.Is(bootstrapErr, io.EOF) {
+				reason = "upstream stream closed before first payload"
+			}
+			end := time.Now()
+			actualLatency := float64(end.Sub(start).Microseconds()) / 1000.0
+			UpdateRouteFailure(db, &route.State, reason, actualLatency, &statusCode, policy)
+			return GatewayProxyResult{Route: route, StatusCode: statusCode, Header: resp.Header.Clone(), TargetPath: upstreamTargetPath, RequestURL: upstreamURL, UserAgent: upstreamUserAgent, LatencyMS: actualLatency, Success: false, Error: reason, ActualModel: requestedModel}, true, nil
+		}
 		if opts.BeforeWrite != nil {
 			opts.BeforeWrite(statusCode, resp.Header.Clone())
 		}
 		writeStreamHeaders(opts.ResponseWriter, resp.Header, statusCode)
-		written, usage, actualModel, copyErr := streamBody(opts.ResponseWriter, resp.Body)
+		written, usage, actualModel, copyErr := streamBodyWithInitial(opts.ResponseWriter, streamReader, sanitizeResponses, firstChunk)
 		_ = resp.Body.Close()
 		end := time.Now()
 		actualLatency := float64(end.Sub(start).Microseconds()) / 1000.0
@@ -1725,6 +1740,34 @@ func proxyGatewayAttempt(ctx context.Context, db *gorm.DB, r *http.Request, body
 	if is2xx {
 		usage := ExtractGatewayUsage(respBody)
 		actualModel := firstNonEmpty(ExtractGatewayModelFromResponseBody(respBody), requestedModel)
+		rawRespBody := append([]byte(nil), respBody...)
+		respBody = sanitizeGatewayResponseBodyForProxy(upstreamTargetPath, respBody)
+		if gatewayResponsesTargetPath(upstreamTargetPath) &&
+			gatewayResponseBodyHasStructuredPayload(rawRespBody) &&
+			!gatewayResponseBodyHasVisiblePayload(respBody) {
+			reason := "upstream response has no visible payload"
+			UpdateRouteFailure(db, &route.State, reason, latency, &statusCode, policy)
+			return GatewayProxyResult{
+				Route:             route,
+				StatusCode:        statusCode,
+				Header:            resp.Header.Clone(),
+				Body:              respBody,
+				TargetPath:        upstreamTargetPath,
+				RequestURL:        upstreamURL,
+				UserAgent:         upstreamUserAgent,
+				LatencyMS:         latency,
+				Success:           false,
+				Error:             reason,
+				PromptTokens:      usage.PromptTokens,
+				CachedInputTokens: usage.CachedInputTokens,
+				CacheReadTokens:   usage.CacheReadTokens,
+				CacheWriteTokens:  usage.CacheWriteTokens,
+				CompletionTokens:  usage.CompletionTokens,
+				TotalTokens:       usage.TotalTokens,
+				UsageCost:         usage.UsageCost,
+				ActualModel:       actualModel,
+			}, true, nil
+		}
 		route.State.LastRequestBaseURL = route.RequestBaseURL
 		UpdateRouteSuccess(db, &route.State, statusCode, latency)
 		if opts.ResponseWriter != nil {
@@ -1835,6 +1878,11 @@ func normalizeGatewayTargetPath(value string) string {
 		value = strings.TrimPrefix(value, "v1/")
 	}
 	return value
+}
+
+func gatewayResponsesTargetPath(value string) bool {
+	normalized := normalizeGatewayTargetPath(value)
+	return normalized == "responses" || strings.HasPrefix(normalized, "responses/")
 }
 
 func gatewayModelProbeResponse(db *gorm.DB, opts ProxyGatewayOptions, policy GatewayPolicy) (GatewayProxyResult, error) {
@@ -1952,7 +2000,10 @@ func (c *gatewayStreamCapture) Write(p []byte) {
 	}
 }
 
-func streamBody(w http.ResponseWriter, src io.Reader) (int, GatewayUsage, string, error) {
+func streamBody(w http.ResponseWriter, src io.Reader, sanitizeResponses bool) (int, GatewayUsage, string, error) {
+	if sanitizeResponses {
+		return streamResponsesBody(w, src)
+	}
 	flusher, _ := w.(http.Flusher)
 	buf := make([]byte, 32*1024)
 	capture := gatewayStreamCapture{max: 1 << 20}
@@ -1979,6 +2030,215 @@ func streamBody(w http.ResponseWriter, src io.Reader) (int, GatewayUsage, string
 			return written, usage, model, err
 		}
 	}
+}
+
+func streamResponsesBody(w http.ResponseWriter, src io.Reader) (int, GatewayUsage, string, error) {
+	flusher, _ := w.(http.Flusher)
+	reader := bufio.NewReaderSize(src, 32*1024)
+	capture := gatewayStreamCapture{max: 1 << 20}
+	written := 0
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			nextLine, dropLine := sanitizeGatewayResponseSSELineForProxy(line)
+			if !dropLine && len(nextLine) > 0 {
+				n, werr := w.Write(nextLine)
+				if werr != nil {
+					usage, model := ExtractGatewayUsageFromStream(capture.data)
+					return written, usage, model, werr
+				}
+				capture.Write(nextLine[:n])
+				written += n
+				if flusher != nil {
+					flusher.Flush()
+				}
+			}
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				usage, model := ExtractGatewayUsageFromStream(capture.data)
+				return written, usage, model, nil
+			}
+			usage, model := ExtractGatewayUsageFromStream(capture.data)
+			return written, usage, model, err
+		}
+	}
+}
+
+func prepareGatewayStreamBootstrap(src io.Reader, sanitizeResponses bool) (io.Reader, []byte, error) {
+	if src == nil {
+		return bytes.NewReader(nil), nil, io.EOF
+	}
+	if sanitizeResponses {
+		return prepareGatewayResponsesStreamBootstrap(src)
+	}
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := src.Read(buf)
+		if n > 0 {
+			firstChunk := append([]byte(nil), buf[:n]...)
+			return src, firstChunk, nil
+		}
+		if err != nil {
+			return src, nil, err
+		}
+	}
+}
+
+func prepareGatewayResponsesStreamBootstrap(src io.Reader) (io.Reader, []byte, error) {
+	reader := bufio.NewReaderSize(src, 32*1024)
+	var firstChunk bytes.Buffer
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			nextLine, dropLine := sanitizeGatewayResponseSSELineForProxy(line)
+			if !dropLine {
+				if gatewayResponseSSELineHasVisiblePayload(nextLine) {
+					firstChunk.Write(nextLine)
+					return reader, firstChunk.Bytes(), nil
+				}
+				if !gatewayResponseSSELineIsDone(nextLine) {
+					firstChunk.Write(nextLine)
+				}
+			}
+		}
+		if err != nil {
+			return reader, nil, err
+		}
+	}
+}
+
+func streamBodyWithInitial(w http.ResponseWriter, src io.Reader, sanitizeResponses bool, firstChunk []byte) (int, GatewayUsage, string, error) {
+	if len(firstChunk) > 0 {
+		src = io.MultiReader(bytes.NewReader(firstChunk), src)
+	}
+	return streamBody(w, src, sanitizeResponses)
+}
+
+func gatewayResponseBodyHasStructuredPayload(body []byte) bool {
+	body = bytes.TrimSpace(body)
+	if len(body) == 0 {
+		return false
+	}
+	var payload any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return false
+	}
+	return gatewayResponseValueHasStructuredPayload(payload)
+}
+
+func gatewayResponseBodyHasVisiblePayload(body []byte) bool {
+	body = bytes.TrimSpace(body)
+	if len(body) == 0 {
+		return false
+	}
+	var payload any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return true
+	}
+	return gatewayResponseValueHasVisiblePayload(payload)
+}
+
+func gatewayResponseValueHasStructuredPayload(value any) bool {
+	switch typed := value.(type) {
+	case []any:
+		for _, item := range typed {
+			if gatewayResponseValueHasStructuredPayload(item) {
+				return true
+			}
+		}
+	case map[string]any:
+		return gatewayResponseMapHasStructuredPayload(typed)
+	}
+	return false
+}
+
+func gatewayResponseMapHasStructuredPayload(obj map[string]any) bool {
+	for _, key := range []string{
+		"choices",
+		"output",
+		"message",
+		"content",
+		"delta",
+		"text",
+		"tool_calls",
+		"tool_call",
+		"function_call",
+		"function",
+	} {
+		if _, ok := obj[key]; ok {
+			return true
+		}
+	}
+	for _, key := range []string{"choices", "output", "message", "content", "tool_calls", "tool_call", "function_call", "function"} {
+		if gatewayResponseValueHasStructuredPayload(obj[key]) {
+			return true
+		}
+	}
+	return false
+}
+
+func gatewayResponseSSELineHasVisiblePayload(line []byte) bool {
+	trimmed := strings.TrimSpace(string(line))
+	if trimmed == "" {
+		return false
+	}
+	if strings.HasPrefix(strings.ToLower(trimmed), "data:") {
+		trimmed = strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
+	}
+	if trimmed == "" || trimmed == "[DONE]" {
+		return false
+	}
+	if !strings.HasPrefix(trimmed, "{") && !strings.HasPrefix(trimmed, "[") {
+		return true
+	}
+	return gatewayResponseBodyHasVisiblePayload([]byte(trimmed))
+}
+
+func gatewayResponseSSELineIsDone(line []byte) bool {
+	trimmed := strings.TrimSpace(string(line))
+	if trimmed == "" {
+		return false
+	}
+	if !strings.HasPrefix(strings.ToLower(trimmed), "data:") {
+		return false
+	}
+	trimmed = strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
+	return trimmed == "[DONE]"
+}
+
+func gatewayResponseValueHasVisiblePayload(value any) bool {
+	switch typed := value.(type) {
+	case []any:
+		for _, item := range typed {
+			if gatewayResponseValueHasVisiblePayload(item) {
+				return true
+			}
+		}
+	case map[string]any:
+		return gatewayResponseMapHasVisiblePayload(typed)
+	case string:
+		return strings.TrimSpace(typed) != ""
+	}
+	return false
+}
+
+func gatewayResponseMapHasVisiblePayload(obj map[string]any) bool {
+	if value, ok := obj["text"]; ok && strings.TrimSpace(fmt.Sprint(value)) != "" {
+		return true
+	}
+	if value, ok := obj["delta"]; ok && strings.TrimSpace(fmt.Sprint(value)) != "" {
+		return true
+	}
+	if value, ok := obj["arguments"]; ok && strings.TrimSpace(fmt.Sprint(value)) != "" {
+		return true
+	}
+	for _, key := range []string{"content", "output", "choices", "tool_calls", "tool_call", "function_call", "function", "message", "response", "item", "output_item"} {
+		if gatewayResponseValueHasVisiblePayload(obj[key]) {
+			return true
+		}
+	}
+	return false
 }
 
 func ExtractGatewayUsageFromStream(body []byte) (GatewayUsage, string) {
@@ -2057,6 +2317,178 @@ func readLimitedGatewayBody(src io.Reader, limit int64, label string) ([]byte, e
 		return nil, GatewayBodyTooLargeError{Kind: kind, Limit: limit}
 	}
 	return body, nil
+}
+
+func sanitizeGatewayRequestBodyForProxy(targetPath string, body []byte) []byte {
+	if len(body) == 0 || !gatewayResponsesTargetPath(targetPath) {
+		return body
+	}
+	next, _, changed := sanitizeGatewayJSONBodyForProxy(body)
+	if !changed {
+		return body
+	}
+	return next
+}
+
+func sanitizeGatewayResponseBodyForProxy(targetPath string, body []byte) []byte {
+	if len(body) == 0 || !gatewayResponsesTargetPath(targetPath) {
+		return body
+	}
+	next, _, changed := sanitizeGatewayJSONBodyForProxy(body)
+	if !changed {
+		return body
+	}
+	return next
+}
+
+func sanitizeGatewayJSONBodyForProxy(body []byte) ([]byte, bool, bool) {
+	var payload any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return body, false, false
+	}
+	sanitized, changed, remove := sanitizeGatewaySignedThinkingValue(payload)
+	if !changed {
+		return body, false, false
+	}
+	if remove {
+		return []byte(`{}`), true, true
+	}
+	next, err := json.Marshal(sanitized)
+	if err != nil {
+		return body, false, false
+	}
+	return next, false, true
+}
+
+func sanitizeGatewayResponseSSELineForProxy(line []byte) ([]byte, bool) {
+	lineText := string(line)
+	trimmedLeft := strings.TrimLeft(lineText, " \t")
+	leading := lineText[:len(lineText)-len(trimmedLeft)]
+	if !strings.HasPrefix(trimmedLeft, "data:") {
+		return line, false
+	}
+	payloadText := strings.TrimPrefix(trimmedLeft, "data:")
+	ending := ""
+	switch {
+	case strings.HasSuffix(payloadText, "\r\n"):
+		ending = "\r\n"
+		payloadText = strings.TrimSuffix(payloadText, "\r\n")
+	case strings.HasSuffix(payloadText, "\n"):
+		ending = "\n"
+		payloadText = strings.TrimSuffix(payloadText, "\n")
+	case strings.HasSuffix(payloadText, "\r"):
+		ending = "\r"
+		payloadText = strings.TrimSuffix(payloadText, "\r")
+	}
+	payloadText = strings.TrimSpace(payloadText)
+	if payloadText == "" || payloadText == "[DONE]" || !strings.HasPrefix(payloadText, "{") {
+		return line, false
+	}
+	body, remove, changed := sanitizeGatewayJSONBodyForProxy([]byte(payloadText))
+	if !changed {
+		return line, false
+	}
+	if remove {
+		return nil, true
+	}
+	return []byte(leading + "data: " + string(body) + ending), false
+}
+
+func sanitizeGatewaySignedThinkingValue(value any) (any, bool, bool) {
+	switch typed := value.(type) {
+	case []any:
+		next := make([]any, 0, len(typed))
+		changed := false
+		for _, item := range typed {
+			cleaned, itemChanged, remove := sanitizeGatewaySignedThinkingValue(item)
+			changed = changed || itemChanged
+			if remove {
+				continue
+			}
+			next = append(next, cleaned)
+		}
+		return next, changed, false
+	case map[string]any:
+		if isGatewaySignedThinkingObject(typed) {
+			return nil, true, true
+		}
+		if isGatewaySignedThinkingEventObject(typed) {
+			return nil, true, true
+		}
+		next := make(map[string]any, len(typed))
+		changed := false
+		for key, item := range typed {
+			cleaned, itemChanged, remove := sanitizeGatewaySignedThinkingValue(item)
+			changed = changed || itemChanged
+			if remove {
+				continue
+			}
+			next[key] = cleaned
+		}
+		return next, changed, false
+	default:
+		return value, false, false
+	}
+}
+
+func isGatewaySignedThinkingObject(value any) bool {
+	obj, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	itemType := strings.ToLower(strings.TrimSpace(fmt.Sprint(obj["type"])))
+	if itemType != "reasoning" && itemType != "thinking" && itemType != "redacted_thinking" {
+		return false
+	}
+	return gatewayObjectHasAnyKey(obj,
+		"signature",
+		"encrypted_content",
+		"encrypted_content_type",
+		"encrypted_reasoning",
+		"encrypted_reasoning_content",
+		"encryptedContent",
+		"encryptedReasoning",
+		"encryptedReasoningContent",
+		"thinking_signature",
+		"thinkingSignature",
+		"redacted_thinking",
+		"redactedThinking",
+	)
+}
+
+func isGatewaySignedThinkingEventObject(obj map[string]any) bool {
+	itemType := strings.ToLower(strings.TrimSpace(fmt.Sprint(obj["type"])))
+	for _, key := range []string{"item", "output_item", "delta"} {
+		if isGatewaySignedThinkingObject(obj[key]) {
+			return true
+		}
+	}
+	if !strings.Contains(itemType, "reasoning") && !strings.Contains(itemType, "thinking") {
+		return false
+	}
+	return gatewayObjectHasAnyKey(obj,
+		"signature",
+		"encrypted_content",
+		"encrypted_content_type",
+		"encrypted_reasoning",
+		"encrypted_reasoning_content",
+		"encryptedContent",
+		"encryptedReasoning",
+		"encryptedReasoningContent",
+		"thinking_signature",
+		"thinkingSignature",
+		"redacted_thinking",
+		"redactedThinking",
+	)
+}
+
+func gatewayObjectHasAnyKey(obj map[string]any, keys ...string) bool {
+	for _, key := range keys {
+		if value, ok := obj[key]; ok && fmt.Sprint(value) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func isStreamingRequest(r *http.Request, body []byte) bool {

@@ -3067,6 +3067,275 @@ func createTypedGatewaySite(t *testing.T, db *gorm.DB, name, baseURL, apiKey, ap
 	}
 }
 
+func TestGatewayProxyStripsSignedThinkingFromNonStreamingResponses(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"resp_1",
+			"model":"gpt-5.5",
+			"output":[
+				{"type":"reasoning","encrypted_content":"gAAA-response","signature":"sig-response"},
+				{"type":"message","content":[{"type":"output_text","text":"ok"}]}
+			],
+			"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}
+		}`))
+	}))
+	defer upstream.Close()
+
+	db := newGatewayTestDB(t)
+	site := models.Site{
+		Name:      "codex-response-cleanup",
+		BaseURL:   "https://panel.example",
+		PluginKey: "api-supplier",
+		IsEnabled: true,
+		Credentials: models.JSONMap{
+			"api_keys": []any{
+				map[string]any{
+					"name":              "responses",
+					"key":               "responses-key",
+					"status":            "active",
+					"route_type":        "codex",
+					"route_path":        "responses",
+					"supported_models":  []any{"gpt-5.5"},
+					"request_base_urls": []any{upstream.URL},
+				},
+			},
+		},
+		PluginConfig: models.JSONMap{"api_format": "openai"},
+	}
+	if err := db.Create(&site).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count, err := SyncGatewayRoutes(db); err != nil || count != 1 {
+		t.Fatalf("SyncGatewayRoutes count=%d err=%v", count, err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/v1/responses", strings.NewReader(`{"model":"gpt-5.5","input":"ping","stream":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	result, err := ProxyGatewayRequest(req.Context(), db, req, "responses", "", "", GatewayPolicy{RequestTimeout: 5, MaxAttempts: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := string(result.Body)
+	if strings.Contains(raw, "encrypted_content") || strings.Contains(raw, "gAAA-response") || strings.Contains(raw, "sig-response") {
+		t.Fatalf("signed thinking response was returned: %s", raw)
+	}
+	if !strings.Contains(raw, `"text":"ok"`) {
+		t.Fatalf("normal response content missing: %s", raw)
+	}
+	if result.TotalTokens == nil || *result.TotalTokens != 5 {
+		t.Fatalf("usage was not extracted before sanitizing: total=%v", result.TotalTokens)
+	}
+}
+
+func TestGatewayNonStreamingResponsesRetriesWhenSanitizedBodyHasNoClientPayload(t *testing.T) {
+	ResetGatewayCountersForTest()
+
+	emptyHits := 0
+	empty := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		emptyHits++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"resp_empty",
+			"model":"gpt-5.5",
+			"output":[
+				{"type":"reasoning","encrypted_content":"gAAA-empty","signature":"sig-empty"}
+			],
+			"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}
+		}`))
+	}))
+	defer empty.Close()
+
+	healthyHits := 0
+	healthy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		healthyHits++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"resp_ok",
+			"model":"gpt-5.5",
+			"output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]
+		}`))
+	}))
+	defer healthy.Close()
+
+	db := newGatewayTestDB(t)
+	createTypedGatewaySite(t, db, "aaa-empty", empty.URL, "empty-key", "openai")
+	createTypedGatewaySite(t, db, "zzz-healthy", healthy.URL, "healthy-key", "openai")
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+	var states []models.GatewayRouteState
+	if err := db.Find(&states).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range states {
+		state.RouteType = "codex"
+		state.RoutePath = "responses"
+		state.SupportedModels = EncodeGatewaySupportedModels([]string{"gpt-5.5"})
+		if err := db.Save(&state).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/v1/responses", strings.NewReader(`{"model":"gpt-5.5","input":"ping","stream":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	result, err := ProxyGatewayRequestWithOptions(req.Context(), db, req, "responses", ProxyGatewayOptions{}, GatewayPolicy{
+		RouteStrategy:    "priority",
+		RequestTimeout:   5,
+		MaxAttempts:      2,
+		FailureRetryMode: "all",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Success {
+		t.Fatalf("expected fallback success, got err=%q", result.Error)
+	}
+	if emptyHits != 1 || healthyHits != 1 {
+		t.Fatalf("emptyHits=%d healthyHits=%d", emptyHits, healthyHits)
+	}
+	raw := string(result.Body)
+	if strings.Contains(raw, "encrypted_content") || strings.Contains(raw, "gAAA-empty") || strings.Contains(raw, "sig-empty") {
+		t.Fatalf("signed thinking response was returned: %s", raw)
+	}
+	if !strings.Contains(raw, `"text":"ok"`) {
+		t.Fatalf("fallback response content missing: %s", raw)
+	}
+}
+
+func TestGatewayStreamingResponsesStripSignedThinkingDeltas(t *testing.T) {
+	ResetGatewayCountersForTest()
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"reasoning\",\"encrypted_content\":\"gAAA-stream\",\"signature\":\"sig-stream\"}}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"model\":\"gpt-5.5\",\"usage\":{\"input_tokens\":3,\"output_tokens\":2,\"total_tokens\":5}}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer upstream.Close()
+
+	db := newGatewayTestDB(t)
+	site := models.Site{
+		Name:      "codex-stream-cleanup",
+		BaseURL:   "https://panel.example",
+		PluginKey: "api-supplier",
+		IsEnabled: true,
+		Credentials: models.JSONMap{
+			"api_keys": []any{
+				map[string]any{
+					"name":              "responses",
+					"key":               "responses-key",
+					"status":            "active",
+					"route_type":        "codex",
+					"route_path":        "responses",
+					"supported_models":  []any{"gpt-5.5"},
+					"request_base_urls": []any{upstream.URL},
+				},
+			},
+		},
+		PluginConfig: models.JSONMap{"api_format": "openai"},
+	}
+	if err := db.Create(&site).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count, err := SyncGatewayRoutes(db); err != nil || count != 1 {
+		t.Fatalf("SyncGatewayRoutes count=%d err=%v", count, err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/v1/responses", strings.NewReader(`{"model":"gpt-5.5","input":"ping","stream":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	result, err := ProxyGatewayRequestWithOptions(req.Context(), db, req, "responses", ProxyGatewayOptions{ResponseWriter: rec}, GatewayPolicy{RequestTimeout: 5, MaxAttempts: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := rec.Body.String()
+	if strings.Contains(raw, "encrypted_content") || strings.Contains(raw, "gAAA-stream") || strings.Contains(raw, "sig-stream") {
+		t.Fatalf("signed thinking stream was returned: %s", raw)
+	}
+	if !strings.Contains(raw, `"delta":"ok"`) || !strings.Contains(raw, "[DONE]") {
+		t.Fatalf("normal stream events missing: %s", raw)
+	}
+	if result.TotalTokens == nil || *result.TotalTokens != 5 {
+		t.Fatalf("stream usage was not extracted: total=%v", result.TotalTokens)
+	}
+}
+
+func TestGatewayStreamingResponsesRetriesWhenSanitizedStreamHasNoClientPayload(t *testing.T) {
+	ResetGatewayCountersForTest()
+
+	emptyHits := 0
+	empty := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		emptyHits++
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"reasoning\",\"encrypted_content\":\"gAAA-empty\",\"signature\":\"sig-empty\"}}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer empty.Close()
+
+	healthyHits := 0
+	healthy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		healthyHits++
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_ok\",\"model\":\"gpt-5.5\"}}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer healthy.Close()
+
+	db := newGatewayTestDB(t)
+	createTypedGatewaySite(t, db, "aaa-empty", empty.URL, "empty-key", "openai")
+	createTypedGatewaySite(t, db, "zzz-healthy", healthy.URL, "healthy-key", "openai")
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+	var states []models.GatewayRouteState
+	if err := db.Find(&states).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range states {
+		state.RouteType = "codex"
+		state.RoutePath = "responses"
+		state.SupportedModels = EncodeGatewaySupportedModels([]string{"gpt-5.5"})
+		if err := db.Save(&state).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/v1/responses", strings.NewReader(`{"model":"gpt-5.5","stream":true,"input":"ping"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	result, err := ProxyGatewayRequestWithOptions(req.Context(), db, req, "responses", ProxyGatewayOptions{ResponseWriter: rec}, GatewayPolicy{
+		RouteStrategy:    "priority",
+		RequestTimeout:   5,
+		MaxAttempts:      2,
+		FailureRetryMode: "all",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Success {
+		t.Fatalf("expected fallback success, got err=%q", result.Error)
+	}
+	if emptyHits != 1 || healthyHits != 1 {
+		t.Fatalf("emptyHits=%d healthyHits=%d", emptyHits, healthyHits)
+	}
+	raw := rec.Body.String()
+	if strings.Contains(raw, "encrypted_content") || strings.Contains(raw, "gAAA-empty") || strings.Contains(raw, "sig-empty") {
+		t.Fatalf("signed thinking stream reached downstream: %s", raw)
+	}
+	if !strings.Contains(raw, `"delta":"ok"`) || !strings.Contains(raw, "resp_ok") {
+		t.Fatalf("fallback stream content missing: %s", raw)
+	}
+}
+
 func TestGatewayStreamingForwarding(t *testing.T) {
 	ResetGatewayCountersForTest()
 
