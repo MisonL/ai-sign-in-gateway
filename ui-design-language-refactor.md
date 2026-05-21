@@ -9,7 +9,7 @@
 - [x] 任务 1: 收敛全局 token 和 Ant Design Vue theme，统一颜色、圆角、边框、阴影、字体密度。验证: `npm run build`、`npm audit --audit-level=high`、`git diff --check` 已通过。
 - [x] 任务 2: 重构 `ShellLayout.vue` 的侧边导航和顶部栏。验证: `npm run build`、`npm audit --audit-level=high`、`git diff --check`、1440px/390px 浏览器几何检查已通过。
 - [x] 任务 3: 重构 `OverviewView.vue` 为参考站式总览页。验证: `npm run build`、`npm audit --audit-level=high`、`git diff --check`、真实空数据 1440px/1024px/390px、临时 visual fixture 有数据 1440px/390px 浏览器几何检查已通过。
-- [ ] 任务 4: 统一 `GatewayView.vue` 和 `SitesView.vue` 的表格、筛选区、弹窗、抽屉视觉。验证: 路由管理、网关监控、站点中心主要操作不丢失。
+- [x] 任务 4: 统一 `GatewayView.vue` 和 `SitesView.vue` 的表格、筛选区、弹窗、抽屉视觉。验证: `npm run build`、`npm audit --audit-level=high`、`git diff --check`、装饰符号/tab 扫描、路由管理/网关监控/站点中心 1440px/1024px/390px 浏览器几何检查已通过。
 - [ ] 任务 5: 统一 `ChatTestView.vue`、`SettingsView.vue`、`DesktopServiceView.vue` 与登录页的面板语言。验证: 输入区、设置表单、登录流程保持原行为。
 - [ ] 任务 6: 做响应式和可访问性检查。验证: 1440px、1024px、390px 宽度下无重叠、无不可点击按钮、文本不溢出。
 - [ ] 任务 7: 执行构建和运行态验证。验证: `npm run build` 通过，必要时 `docker compose up -d --build` 后访问 `http://127.0.0.1:8972` 验证主要页面。

@@ -139,3 +139,17 @@
 - 浏览器验证: Vite dev server `http://127.0.0.1:5174/overview` 登录后验证。真实空数据在 1440px、1024px、390px 下均无文档级横向溢出，4 个指标卡和 3 个面板均可见。
 - 浏览器验证: 临时只拦截 `/api/overview` 的 visual fixture 有数据场景。1440px 下 5 条 feed 行可见且无横向溢出；390px 移动模拟下 5 条 feed 行可见，最大行右边界 359px，小于 390px 视口，文档无横向溢出。
 - DevTools console: error/warn 为空。
+
+## 任务 4 验证记录
+
+日期: 2026-05-21
+
+- 范围: `frontend/src/views/GatewayView.vue`、`frontend/src/views/SitesView.vue`、`frontend/src/styles/management-surfaces.css`、`ui-design-language-refactor.md`。
+- 改动: 新增管理页共享样式，统一路由管理、网关监控和站点中心的表格、筛选区、弹窗、抽屉、触控按钮尺寸；移除站点编辑弹窗的装饰插画和装饰符号；将相关分隔符改为 ASCII 文本。
+- `npm run build`: 通过。包含 `vue-tsc -b` 和 Vite production build。仍有既有大 chunk 与 plugin timing 警告。
+- `npm audit --audit-level=high`: 通过，0 个漏洞。
+- `git diff --check`: 通过。
+- 纯文本约束扫描: 装饰符号扫描和 tab 扫描均已覆盖任务 4 代码文件，结果无命中。
+- 浏览器验证: Vite dev server `http://127.0.0.1:5174/` 代理当前 Docker 后端 `8972`，`/api/health` 返回 200。
+- 浏览器验证: Playwright 登录后检查 `/gateway/routes`、`/gateway/monitor`、`/sites`，覆盖 1440px、1024px、390px；同时打开网关策略弹窗、最近请求抽屉、站点编辑弹窗。18 个页面状态均无文档级横向溢出、无关键表面越界、无按钮文本溢出、无触控尺寸 warning。
+- DevTools console: error/warn 为空。

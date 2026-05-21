@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import {
+  CloseOutlined,
   DeleteOutlined,
   PlusOutlined,
   ReloadOutlined,
@@ -13,9 +14,6 @@ import {
 } from '@ant-design/icons-vue'
 import { Modal } from 'ant-design-vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type ComponentPublicInstance } from 'vue'
-import siteEditorAccountArtwork from '../assets/site-editor-account.png'
-import siteEditorCloudArtwork from '../assets/site-editor-cloud.png'
-import siteEditorGatewayArtwork from '../assets/site-editor-gateway.png'
 import {
   analyzeLocalStorage,
   convertCCSwitchSql,
@@ -88,6 +86,7 @@ import type {
   SiteSummary,
   TotpPreview,
 } from '../types'
+import '../styles/management-surfaces.css'
 
 const toast = useToast()
 const plugins = ref<PluginMeta[]>([])
@@ -3459,12 +3458,12 @@ onBeforeUnmount(() => {
         class="site-editor-modal"
       >
         <template #closeIcon>
-          <span class="site-editor-modal__close">×</span>
+          <span class="site-editor-modal__close"><CloseOutlined /></span>
         </template>
         <div class="site-editor-modal__frame">
           <div class="site-editor-modal__header">
             <div class="site-editor-modal__title">
-              {{ editingId ? `编辑站点 · ${editingSite?.name ?? ''}` : '新建站点' }}
+              {{ editingId ? `编辑站点 - ${editingSite?.name ?? ''}` : '新建站点' }}
             </div>
           </div>
 
@@ -3508,12 +3507,8 @@ onBeforeUnmount(() => {
                 <div class="site-editor-grid">
                   <div class="site-editor-column site-editor-column--primary">
                     <section class="site-editor-card site-editor-card--info site-editor-card--gateway">
-                      <div class="site-editor-card__art site-editor-card__art--gateway" aria-hidden="true">
-                        <img :src="siteEditorGatewayArtwork" alt="" />
-                      </div>
                       <div class="site-editor-card__content">
                         <div class="site-editor-section-head">
-                          <div class="site-editor-section-head__badge">◫</div>
                           <h3>基础信息</h3>
                         </div>
 
@@ -3625,7 +3620,6 @@ onBeforeUnmount(() => {
                         <div class="site-editor-section-head site-editor-section-head--between">
                           <div>
                             <div class="site-editor-section-head">
-                              <div class="site-editor-section-head__badge">⌘</div>
                               <h3>浏览器存储导入</h3>
                             </div>
                             <p>在目标站点控制台运行采集脚本，粘贴输出后自动识别插件类型并回填账号凭证。</p>
@@ -3666,14 +3660,10 @@ onBeforeUnmount(() => {
                     </section>
 
                     <section v-if="currentPlugin" class="site-editor-card site-editor-card--wide site-editor-card--account">
-                      <div class="site-editor-card__art site-editor-card__art--account" aria-hidden="true">
-                        <img :src="siteEditorAccountArtwork" alt="" />
-                      </div>
                       <div class="site-editor-card__content">
                         <div class="site-editor-section-head site-editor-section-head--between">
                           <div>
                             <div class="site-editor-section-head">
-                              <div class="site-editor-section-head__badge">◎</div>
                               <h3>账号凭证</h3>
                             </div>
                             <p>{{ currentPlugin.auth_hint || '可先在站点侧完成登录，再回到后台回填最终凭证。' }}</p>
@@ -3788,19 +3778,15 @@ onBeforeUnmount(() => {
                               </a-form-item>
                             </a-col>
                           </a-row>
-	                        </div>
-	                      </div>
-	                    </section>
+                        </div>
+                      </div>
+                    </section>
                   </div>
 
                   <div class="site-editor-column site-editor-column--secondary">
                     <section v-if="currentPlugin" class="site-editor-card site-editor-card--config site-editor-card--cloud">
-                      <div class="site-editor-card__art site-editor-card__art--cloud" aria-hidden="true">
-                        <img :src="siteEditorCloudArtwork" alt="" />
-                      </div>
                       <div class="site-editor-card__content">
                         <div class="site-editor-section-head">
-                          <div class="site-editor-section-head__badge">▣</div>
                           <h3>插件配置</h3>
                         </div>
                         <a-alert
@@ -4064,7 +4050,7 @@ onBeforeUnmount(() => {
 
       <a-modal
         v-model:open="inviteDialogOpen"
-        :title="`邀请信息 · ${inviteDialogSiteName}`"
+        :title="`邀请信息 - ${inviteDialogSiteName}`"
         width="720px"
         :footer="null"
         destroy-on-close

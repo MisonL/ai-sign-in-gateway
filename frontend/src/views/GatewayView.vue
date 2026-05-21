@@ -33,6 +33,7 @@ import { applyGatewayActiveConcurrency } from '../gatewayRouteConcurrency'
 import { notifyGatewayOverviewChanged } from '../gatewayOverviewEvents'
 import { useToast } from '../toast'
 import type { BalanceProbeResult, GatewayActiveRequest, GatewayLog, GatewayOverview, GatewayRoute, GatewayRouteDiagnosis, GatewayRouteProbeResult, GatewaySettingsData, GatewayStrategyStat, GatewayUsage, GatewayUsageRoute, SiteGroup, SiteSummary } from '../types'
+import '../styles/management-surfaces.css'
 
 const props = withDefaults(
   defineProps<{
@@ -618,7 +619,7 @@ function usageRouteLabel(route: GatewayUsageRoute) {
     route.site_name || (route.site_id ? `站点 #${route.site_id}` : ''),
     route.key_name,
   ].filter(Boolean)
-  return parts.length ? parts.join(' · ') : '未知路由'
+  return parts.length ? parts.join(' / ') : '未知路由'
 }
 
 function usageRouteMeta(route: GatewayUsageRoute) {
@@ -629,7 +630,7 @@ function usageRouteMeta(route: GatewayUsageRoute) {
     route.route_type ? `类型 ${routeTypeLabel(route.route_type)}` : '',
     route.group_name ? `分组 ${formatGroupNames(route.group_name)}` : '',
     route.key_fingerprint ? `Key ${shortFingerprint(route.key_fingerprint)}` : '',
-  ].filter(Boolean).join(' · ')
+  ].filter(Boolean).join(' / ')
 }
 
 const usageSummaryCards = computed<Array<{ title: string; value: string; tone: MetricTone }>>(() => {
@@ -696,7 +697,7 @@ function formatTime(value: string | null) {
 
 function loadRouteLabel(route: GatewayRoute) {
   const siteName = String(route.site_name || route.site_name_snapshot || route.site_base_url_snapshot || `站点 #${route.site_id}`).trim()
-  return `${siteName}${route.key_name ? ` · ${route.key_name}` : ''}`
+  return `${siteName}${route.key_name ? ` / ${route.key_name}` : ''}`
 }
 
 function routePriorityLabel(route: GatewayRoute | null) {
@@ -879,7 +880,7 @@ function logRouteLabel(log: GatewayLog) {
     log.site_name || (log.site_id ? `站点 #${log.site_id}` : ''),
     log.key_name,
   ].filter(Boolean)
-  return parts.length ? parts.join(' · ') : '未知路由'
+  return parts.length ? parts.join(' / ') : '未知路由'
 }
 
 function logRouteMeta(log: GatewayLog) {
@@ -888,7 +889,7 @@ function logRouteMeta(log: GatewayLog) {
     log.site_id ? `站点 #${log.site_id}` : '',
     log.key_fingerprint ? `Key ${shortFingerprint(log.key_fingerprint)}` : '',
   ].filter(Boolean)
-  return values.join(' · ')
+  return values.join(' / ')
 }
 
 function logAttemptRouteLabel(attempt: GatewayLog['transfer_to'] | GatewayActiveRequest['transfer_to']) {
@@ -1188,7 +1189,7 @@ function activeRequestRouteLabel(item: GatewayActiveRequest) {
     item.site_name || (item.site_id ? `站点 #${item.site_id}` : ''),
     item.key_name,
   ].filter(Boolean)
-  return parts.length ? parts.join(' · ') : '未知路由'
+  return parts.length ? parts.join(' / ') : '未知路由'
 }
 
 function activeRequestMeta(item: GatewayActiveRequest) {
@@ -1545,15 +1546,15 @@ function applyProbeResult(result: GatewayRouteProbeResult) {
       ? normalizeGatewayRoute({
           ...route,
           last_status_code: result.last_status_code,
-	          last_error: result.last_error,
-	          last_latency_ms: result.last_latency_ms,
-	          last_success_at: result.last_success_at,
-	          last_failure_at: result.last_failure_at,
-	          supported_models: result.supported_models ?? result.models ?? route.supported_models,
-	          model_probe_status: result.model_probe_status ?? route.model_probe_status,
-	          model_probe_message: result.model_probe_message ?? result.message ?? route.model_probe_message,
-	          model_probe_updated_at: result.model_probe_updated_at ?? result.checked_at ?? route.model_probe_updated_at,
-	        })
+          last_error: result.last_error,
+          last_latency_ms: result.last_latency_ms,
+          last_success_at: result.last_success_at,
+          last_failure_at: result.last_failure_at,
+          supported_models: result.supported_models ?? result.models ?? route.supported_models,
+          model_probe_status: result.model_probe_status ?? route.model_probe_status,
+          model_probe_message: result.model_probe_message ?? result.message ?? route.model_probe_message,
+          model_probe_updated_at: result.model_probe_updated_at ?? result.checked_at ?? route.model_probe_updated_at,
+        })
       : route,
   )
 }
@@ -2192,7 +2193,7 @@ async function handleProbeAll() {
     }
     const sample = failedResults
       .slice(0, 2)
-      .map((item) => `${item.site_name}${item.key_name ? ` · ${item.key_name}` : ''}`)
+      .map((item) => `${item.site_name}${item.key_name ? ` / ${item.key_name}` : ''}`)
       .join('，')
     toast.error(`路由探测完成，成功 ${successCount} 条，失败 ${failedResults.length} 条：${sample}`)
   } catch (err) {
@@ -2508,7 +2509,7 @@ onBeforeUnmount(() => {
             <div v-if="probeAllProgress" class="route-probe-progress">
               <div class="route-probe-progress__meta">
                 <span>{{ probeAllProgress.done }}/{{ probeAllProgress.total }}</span>
-                <span>{{ probeAllProgress.success }} 成功 · {{ probeAllProgress.failed }} 失败</span>
+                <span>{{ probeAllProgress.success }} 成功 / {{ probeAllProgress.failed }} 失败</span>
               </div>
               <div class="route-probe-progress__bar" aria-hidden="true">
                 <span :style="{ width: `${probeAllProgressPercent}%` }"></span>
@@ -2520,7 +2521,7 @@ onBeforeUnmount(() => {
             <div v-if="balanceProbeAllProgress" class="route-probe-progress route-probe-progress--balance">
               <div class="route-probe-progress__meta">
                 <span>{{ balanceProbeAllProgress.done }}/{{ balanceProbeAllProgress.total }}</span>
-                <span>{{ balanceProbeAllProgress.success }} 成功 · {{ balanceProbeAllProgress.failed }} 失败</span>
+                <span>{{ balanceProbeAllProgress.success }} 成功 / {{ balanceProbeAllProgress.failed }} 失败</span>
               </div>
               <div class="route-probe-progress__bar" aria-hidden="true">
                 <span :style="{ width: `${balanceProbeAllProgressPercent}%` }"></span>
@@ -2769,7 +2770,7 @@ onBeforeUnmount(() => {
                 >
                   <div class="route-pool-preview__main">
                     <strong>{{ loadRouteLabel(route) }}</strong>
-                    <span>{{ formatGroupNames(route.group_name) || '未分组' }} · {{ routeTypeLabel(route.route_type) }}</span>
+                    <span>{{ formatGroupNames(route.group_name) || '未分组' }} / {{ routeTypeLabel(route.route_type) }}</span>
                   </div>
                   <div class="route-pool-preview__meta">
                     <span :class="latencyClass(primaryLatency(route))">
@@ -3625,7 +3626,7 @@ onBeforeUnmount(() => {
 
       <a-drawer
         v-model:open="routeLogsDrawerOpen"
-        :title="`路由请求历史 · ${routeLogsRoute ? loadRouteLabel(routeLogsRoute) : ''}`"
+        :title="`路由请求历史 - ${routeLogsRoute ? loadRouteLabel(routeLogsRoute) : ''}`"
         width="min(1280px, 100vw)"
         placement="right"
       >
@@ -3783,7 +3784,7 @@ onBeforeUnmount(() => {
 
       <a-drawer
         v-model:open="routeDiagnosisOpen"
-        :title="`路由诊断 · ${routeDiagnosis?.route_label || ''}`"
+        :title="`路由诊断 - ${routeDiagnosis?.route_label || ''}`"
         width="520px"
         placement="right"
       >
