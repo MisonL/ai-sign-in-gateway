@@ -12,11 +12,11 @@
 - [x] 任务 4: 统一 `GatewayView.vue` 和 `SitesView.vue` 的表格、筛选区、弹窗、抽屉视觉。验证: `npm run build`、`npm audit --audit-level=high`、`git diff --check`、装饰符号/tab 扫描、路由管理/网关监控/站点中心 1440px/1024px/390px 浏览器几何检查已通过。
 - [x] 任务 5: 统一 `ChatTestView.vue`、`SettingsView.vue`、`DesktopServiceView.vue` 与登录页的面板语言。验证: `npm run build`、`npm audit --audit-level=high`、`git diff --check`、装饰符号/tab 扫描、对话页/设置页/桌面服务页/登录页 1440px/1024px/390px 浏览器几何检查和登录跳转检查已通过。
 - [x] 任务 6: 做响应式和可访问性检查。验证: `npm run build`、`npm audit --audit-level=high`、`git diff --check`、装饰符号/tab 扫描、8 个主要路由在 1440px/1024px/390px 下浏览器响应式和基础可访问性检查已通过。
-- [ ] 任务 7: 执行构建和运行态验证。验证: `npm run build` 通过，必要时 `docker compose up -d --build` 后访问 `http://127.0.0.1:8972` 验证主要页面。
+- [x] 任务 7: 执行构建和运行态验证。验证: `npm run build`、`docker compose up -d --build`、`curl /api/health`、登录接口和 8972 运行态浏览器主要页面检查已通过。
 
 ## 完成标准
 
-- [ ] 所有核心页面共享同一套设计 token。
-- [ ] 参考站的白底、蓝色导航、紧凑卡片、浅灰背景和运营后台密度已经落地。
-- [ ] 未引入 React、shadcn/ui 或 Tailwind 迁移风险。
-- [ ] 构建、浏览器检查和必要 Docker 验证有明确记录。
+- [x] 所有核心页面共享同一套设计 token。
+- [x] 参考站的白底、蓝色导航、紧凑卡片、浅灰背景和运营后台密度已经落地。
+- [x] 未引入 React、shadcn/ui 或 Tailwind 迁移风险。
+- [x] 构建、浏览器检查和必要 Docker 验证有明确记录。

@@ -183,3 +183,17 @@
 - `npm audit --audit-level=high`: 通过，0 个漏洞。
 - `git diff --check`: 通过。
 - 纯文本约束扫描: 装饰符号扫描和 tab 扫描均已覆盖任务 6 代码文件，结果无命中。
+
+## 任务 7 验证记录
+
+日期: 2026-05-21
+
+- 范围: `compose.yaml` 运行态、Dockerfile 镜像构建、`http://127.0.0.1:8972` 管理端主要页面、`ui-design-language-refactor.md`。
+- `npm run build`: 已在任务 6 后再次执行通过；Docker 镜像内 `RUN npm run build` 也通过。两者仍有既有大 chunk warning。
+- `docker compose up -d --build`: 通过。镜像 `ai-sign-in-gateway-app:latest` 构建完成，容器 `ai-sign-in-gateway` 重新创建并启动。
+- `docker compose ps`: `ai-sign-in-gateway` 状态为 `Up`，端口映射为 `0.0.0.0:8972->8972/tcp`。
+- `docker compose logs --tail=80 app`: 服务模式启动成功，监听 `http://127.0.0.1:8972`，网关地址为 `http://127.0.0.1:8972/api/gateway`，数据库路径为 `/app/data/ai-sign-in-gateway.db`。
+- `curl http://127.0.0.1:8972/api/health`: HTTP 200，响应 `status` 为 `ok`。
+- `curl http://127.0.0.1:8972/`: HTTP 200，返回 2048 字节 HTML。
+- `POST /api/auth/login`: 当前管理员密码 `1111` 返回 HTTP 200；旧默认密码 `admin123` 返回 HTTP 401。
+- 运行态浏览器验证: `agent-browser` 直接访问 `http://127.0.0.1:8972`，检查 `/login`、`/overview`、`/gateway/routes`、`/gateway/monitor`、`/sites`、`/chat-test`、`/settings`、`/desktop`，覆盖 1440px、1024px、390px，共 24 个页面状态。文档级横向溢出、关键表面越界、按钮或输入文本溢出、不可点击控件、缺少可访问名称控件、图片 alt 缺失、重复 id、console error/warn 均为 0。
