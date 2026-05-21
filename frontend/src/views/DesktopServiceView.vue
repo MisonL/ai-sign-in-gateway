@@ -22,6 +22,7 @@ import {
 import { useToast } from '../toast'
 import type { GatewayOverview, OverviewData, SettingsData } from '../types'
 import SettingsView from './SettingsView.vue'
+import '../styles/workspace-surfaces.css'
 
 const toast = useToast()
 const router = useRouter()

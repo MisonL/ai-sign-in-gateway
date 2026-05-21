@@ -24,7 +24,6 @@ import {
   updateChatSession,
 } from '../api'
 import ShellLayout from '../components/ShellLayout.vue'
-import sessionPicArtwork from '../assets/design/session-pic.png'
 import { useToast } from '../toast'
 import {
   chatSessionMessageToView,
@@ -33,6 +32,7 @@ import {
   viewMessageToChatSessionPayload,
 } from '../chatSessionState'
 import type { ChatImageReference, ChatRequestMessage, ChatResult, ChatSession, ModelListItem, Site } from '../types'
+import '../styles/workspace-surfaces.css'
 
 type MessageRole = 'system' | 'user' | 'assistant'
 type MessageStatus = 'idle' | 'sending' | 'done' | 'error'
@@ -97,7 +97,7 @@ const selectedSite = computed(() =>
 
 const siteOptions = computed(() =>
   sites.value.map((site) => ({
-    label: `${site.name} · ${site.plugin_key}`,
+    label: `${site.name} / ${site.plugin_key}`,
     value: String(site.id),
   })),
 )
@@ -121,7 +121,7 @@ const selectedModelMeta = computed(() => {
   }
   return [routeTypeLabel(model.route_type), model.key_name || shortFingerprint(model.key_fingerprint), model.base_url]
     .filter(Boolean)
-    .join(' · ')
+    .join(' / ')
 })
 const modelLoadAlertType = computed(() => (modelLoadError.value ? 'error' : 'info'))
 
@@ -147,7 +147,7 @@ function modelOptionValue(model: ModelListItem) {
 function modelOptionLabel(model: ModelListItem) {
   const mode = model.mode === 'image' ? '图片' : '对话'
   const key = model.key_name || shortFingerprint(model.key_fingerprint)
-  return [model.id, mode, routeTypeLabel(model.route_type), key].filter(Boolean).join(' · ')
+  return [model.id, mode, routeTypeLabel(model.route_type), key].filter(Boolean).join(' / ')
 }
 
 function routeTypeLabel(routeType: string) {
@@ -735,7 +735,7 @@ onBeforeUnmount(() => {
               :class="[`session-message--${message.role}`, `session-message--${message.status}`]"
             >
               <div v-if="message.role === 'assistant' && message.activity" class="session-message__thought">
-                Thought for {{ readableLatency(message.latencyMs) || '...' }} ›
+                处理耗时 {{ readableLatency(message.latencyMs) || '...' }}
               </div>
 
               <div class="session-message__bubble">
@@ -759,7 +759,6 @@ onBeforeUnmount(() => {
           </div>
 
           <div v-else class="session-empty">
-            <img :src="sessionPicArtwork" alt="" class="session-empty__art" />
             <div class="session-empty__copy">
               <h1>选择站点与模型后开始使用</h1>
               <p>文本对话与图片生成能力将根据所选模型自动启用。</p>
@@ -834,7 +833,9 @@ onBeforeUnmount(() => {
             <div v-for="(image, index) in referenceImages" :key="image.url" class="session-attachment">
               <img :src="imageSource(image)" :alt="image.name" />
               <span>{{ image.name }}</span>
-              <button type="button" @click="removeReferenceImage(index)">×</button>
+              <button type="button" title="移除参考图" @click="removeReferenceImage(index)">
+                <DeleteOutlined />
+              </button>
             </div>
           </div>
 

@@ -153,3 +153,20 @@
 - 浏览器验证: Vite dev server `http://127.0.0.1:5174/` 代理当前 Docker 后端 `8972`，`/api/health` 返回 200。
 - 浏览器验证: Playwright 登录后检查 `/gateway/routes`、`/gateway/monitor`、`/sites`，覆盖 1440px、1024px、390px；同时打开网关策略弹窗、最近请求抽屉、站点编辑弹窗。18 个页面状态均无文档级横向溢出、无关键表面越界、无按钮文本溢出、无触控尺寸 warning。
 - DevTools console: error/warn 为空。
+
+## 任务 5 验证记录
+
+日期: 2026-05-21
+
+- 范围: `frontend/src/views/ChatTestView.vue`、`frontend/src/views/SettingsView.vue`、`frontend/src/views/DesktopServiceView.vue`、`frontend/src/views/LoginView.vue`、`frontend/src/styles/workspace-surfaces.css`、`ui-design-language-refactor.md`。
+- 改动: 新增工作台共享样式，统一对话页、设置页、桌面服务页和登录页的白底面板、细边框、8px 圆角、输入控件和按钮语言；降低登录页营销插画感；移除对话页空态大图和装饰性分隔符；保留原有 API 调用、鉴权、会话、设置表单和登录流程。
+- `npm run build`: 通过。包含 `vue-tsc -b` 和 Vite production build。仍有既有大 chunk 警告。
+- `npm audit --audit-level=high`: 通过，0 个漏洞。
+- `node --test tests/*.test.ts`: 通过，14 个前端状态辅助测试全部通过。
+- `go test ./...`: 通过，后端现有测试全部通过。
+- `git diff --check`: 通过。
+- 纯文本约束扫描: 装饰符号扫描和 tab 扫描均已覆盖任务 5 代码文件，结果无命中。
+- 浏览器验证: Vite dev server `http://127.0.0.1:5174/` 代理当前 Docker 后端 `8972`，`/api/health` 返回 200。
+- 浏览器验证: Playwright 登录后检查 `/chat-test`、`/settings`、`/desktop`，并以未登录上下文检查 `/login`，覆盖 1440px、1024px、390px；桌面视口额外执行登录提交并跳转 `/overview`。13 个页面状态均无文档级横向溢出、无关键表面越界、无按钮或输入文本溢出、无触控尺寸 warning。
+- 补充复验: 修正对话页输入区主列宽度后，使用 `agent-browser` 复查 `/login`、`/chat-test`、`/settings`、`/desktop` 的 1440px、1024px、390px 视口和登录提交跳转，12 个页面状态和登录提交均通过。
+- DevTools console: error/warn 为空。

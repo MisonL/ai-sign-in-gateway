@@ -25,6 +25,7 @@ import {
 import ShellLayout from '../components/ShellLayout.vue'
 import { useToast } from '../toast'
 import type { AdminUser, GatewayModelPrice, GatewayPricingScheme, RuntimeDatabaseBackupFile, RuntimeStopPortResult, SettingsData } from '../types'
+import '../styles/workspace-surfaces.css'
 
 const toast = useToast()
 const route = useRoute()
@@ -560,7 +561,7 @@ onMounted(loadData)
 
 <template>
   <component :is="settingsFrameComponent" :class="{ 'settings-embedded-frame': isDesktopEmbedded }">
-    <div class="page-stack page-stack--fit">
+    <div class="page-stack page-stack--fit settings-page">
       <a-row :gutter="[16, 16]" class="page-grid-fill">
         <a-col :xs="24">
           <a-card :bordered="false" class="admin-card admin-card--fill settings-tab-card">

@@ -19,6 +19,7 @@ import { useRouter } from 'vue-router'
 import { getPublicInvites, login } from '../api'
 import { useToast } from '../toast'
 import type { PublicInvite } from '../types'
+import '../styles/workspace-surfaces.css'
 
 const router = useRouter()
 const toast = useToast()
@@ -171,7 +172,7 @@ onMounted(loadInvites)
         </div>
         <div class="security-line">
           <SafetyCertificateOutlined />
-          <span>安全 · 稳定 · 高效 · 可观测</span>
+          <span>安全 / 稳定 / 高效 / 可观测</span>
         </div>
       </header>
 
@@ -310,8 +311,8 @@ onMounted(loadInvites)
       </main>
 
       <footer class="login-footer">
-        <span>爱签网关 · 统一授权 · 策略路由 · 健康巡检 · 数据观测</span>
-        <span>© 2025 爱签网关 版权所有</span>
+        <span>爱签网关 / 统一授权 / 策略路由 / 健康巡检 / 数据观测</span>
+        <span>Copyright 2025 爱签网关 版权所有</span>
         <span>版本 v2.1.0</span>
       </footer>
     </div>
