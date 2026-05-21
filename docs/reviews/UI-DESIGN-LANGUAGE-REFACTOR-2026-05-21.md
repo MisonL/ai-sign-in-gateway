@@ -126,3 +126,16 @@
 - `npm audit --audit-level=high`: 通过，0 个漏洞。
 - `git diff --check`: 通过。
 - 浏览器验证: Vite dev server `http://127.0.0.1:5174/overview` 登录后验证。1440px 桌面、桌面折叠侧栏、390px 移动模拟均无文档级横向溢出，顶部操作区未出视口；DevTools console 无 error/warn。
+
+## 任务 3 验证记录
+
+日期: 2026-05-21
+
+- 范围: `frontend/src/views/OverviewView.vue`、`frontend/src/styles/overview.css`、`frontend/src/styles/overview-feed.css`、`ui-design-language-refactor.md`。
+- 改动: 总览页改为参考站式运营后台结构，新增页面头、4 张紧凑指标卡、最近任务主面板、运行计划面板和待处理站点面板；将概览页样式拆到专用 CSS 文件，避免继续扩大单文件组件。
+- `npm run build`: 通过。包含 `vue-tsc -b` 和 Vite production build。仍有既有大 chunk 与 plugin timing 警告。
+- `npm audit --audit-level=high`: 通过，0 个漏洞。
+- `git diff --check`: 通过。
+- 浏览器验证: Vite dev server `http://127.0.0.1:5174/overview` 登录后验证。真实空数据在 1440px、1024px、390px 下均无文档级横向溢出，4 个指标卡和 3 个面板均可见。
+- 浏览器验证: 临时只拦截 `/api/overview` 的 visual fixture 有数据场景。1440px 下 5 条 feed 行可见且无横向溢出；390px 移动模拟下 5 条 feed 行可见，最大行右边界 359px，小于 390px 视口，文档无横向溢出。
+- DevTools console: error/warn 为空。
