@@ -104,3 +104,13 @@
   控制: 实现阶段必须执行 `npm run build`，如需运行态验证再重建 Docker。
 - 风险: 参考站是 shadcn/Tailwind，本项目是 Ant Design Vue。
   控制: 以视觉验收为准，不以技术栈一致为准。
+
+## 任务 1 验证记录
+
+日期: 2026-05-21
+
+- 范围: `frontend/src/App.vue`、`frontend/src/style.css`、`ui-design-language-refactor.md`。
+- 改动: 将 Ant Design Vue theme 和全局 CSS token 收敛到白底浅灰、蓝色主色、8px 组件圆角、细边框和轻阴影基线；清理旧青绿色硬编码和主要壳层大圆角。
+- `npm run build`: 通过。包含 `vue-tsc -b` 和 Vite production build。仍有既有大 chunk 与 plugin timing 警告。
+- `npm audit --audit-level=high`: 通过，0 个漏洞。
+- `git diff --check`: 通过。
