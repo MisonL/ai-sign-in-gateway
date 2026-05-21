@@ -111,6 +111,10 @@
   background: var(--bg-panel) !important;
   box-shadow: none !important;
 }
+.gateway-route-page.gateway-route-page .route-pool-filter .ant-input,
+.sites-page.sites-page .sites-list-toolbar__search .ant-input {
+  min-height: 32px !important;
+}
 
 .sites-page.sites-page .sites-toolbar__seg-btn.ant-btn,
 .sites-page.sites-page .sites-toolbar__ghost-btn.ant-btn,

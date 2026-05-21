@@ -170,3 +170,16 @@
 - 浏览器验证: Playwright 登录后检查 `/chat-test`、`/settings`、`/desktop`，并以未登录上下文检查 `/login`，覆盖 1440px、1024px、390px；桌面视口额外执行登录提交并跳转 `/overview`。13 个页面状态均无文档级横向溢出、无关键表面越界、无按钮或输入文本溢出、无触控尺寸 warning。
 - 补充复验: 修正对话页输入区主列宽度后，使用 `agent-browser` 复查 `/login`、`/chat-test`、`/settings`、`/desktop` 的 1440px、1024px、390px 视口和登录提交跳转，12 个页面状态和登录提交均通过。
 - DevTools console: error/warn 为空。
+
+## 任务 6 验证记录
+
+日期: 2026-05-21
+
+- 范围: `frontend/src/style.css`、`frontend/src/styles/management-surfaces.css`、`frontend/src/views/GatewayView.vue`、`frontend/src/views/ChatTestView.vue`、`ui-design-language-refactor.md`。
+- 改动: 网关监控指标卡由横向滚动改为自适应换行网格；管理页搜索输入实际点击高度稳定到 32px；时间段消耗输入框补充可访问名称；对话页添加参考图按钮补充 `title` 和 `aria-label`。
+- 首轮浏览器审计: `agent-browser` 检查 `/login`、`/overview`、`/gateway/routes`、`/gateway/monitor`、`/sites`、`/chat-test`、`/settings`、`/desktop`，覆盖 1440px、1024px、390px，发现网关监控指标卡中窄屏横向滚动、两个时间输入框缺少可访问名称、对话页添加参考图按钮缺少可访问名称。
+- 修复后浏览器复验: 同一路由和视口共 24 个页面状态，文档级横向溢出、关键表面越界、按钮或输入文本溢出、不可点击控件、缺少可访问名称控件、图片 alt 缺失、重复 id、console error/warn 均为 0。
+- `npm run build`: 通过。包含 `vue-tsc -b` 和 Vite production build。仍有既有大 chunk 和 plugin timing 警告。
+- `npm audit --audit-level=high`: 通过，0 个漏洞。
+- `git diff --check`: 通过。
+- 纯文本约束扫描: 装饰符号扫描和 tab 扫描均已覆盖任务 6 代码文件，结果无命中。

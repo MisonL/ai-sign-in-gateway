@@ -842,7 +842,7 @@ onBeforeUnmount(() => {
           <input id="chat-reference-images" ref="fileInput" class="chat-file-input" type="file" name="chat_reference_images" accept="image/*" multiple hidden tabindex="-1" @change="addReferenceImages" />
 
           <div class="session-composer__frame">
-            <button type="button" class="session-tool-button" :disabled="loading" @click="triggerImagePicker">
+            <button type="button" class="session-tool-button" :disabled="loading" title="添加参考图" aria-label="添加参考图" @click="triggerImagePicker">
               <PaperClipOutlined />
             </button>
 

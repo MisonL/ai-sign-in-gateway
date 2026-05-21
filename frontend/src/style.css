@@ -645,34 +645,10 @@ select {
 
 .gateway-metrics {
   display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(138px, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
   gap: 10px;
-  overflow-x: auto;
   padding-bottom: 4px;
-  scrollbar-gutter: stable;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(148, 163, 184, 0.42) transparent;
-}
-
-.gateway-metrics::-webkit-scrollbar {
-  height: 8px;
-}
-
-.gateway-metrics::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.gateway-metrics::-webkit-scrollbar-thumb {
-  border: 2px solid transparent;
-  border-radius: 999px;
-  background: rgba(148, 163, 184, 0.36);
-  background-clip: padding-box;
-}
-
-.gateway-metrics::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.5);
-  background-clip: padding-box;
+  overflow: visible;
 }
 
 .gateway-metric-card.ant-card {

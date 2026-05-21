@@ -2571,9 +2571,9 @@ onBeforeUnmount(() => {
                   <div class="gateway-panel__title">时间段消耗</div>
                 </div>
                 <a-space wrap>
-                  <input v-model="usageRange.start" class="gateway-usage-input" type="datetime-local" />
+                  <input v-model="usageRange.start" class="gateway-usage-input" type="datetime-local" aria-label="用量开始时间" />
                   <span class="gateway-usage-card__sep">至</span>
-                  <input v-model="usageRange.end" class="gateway-usage-input" type="datetime-local" />
+                  <input v-model="usageRange.end" class="gateway-usage-input" type="datetime-local" aria-label="用量结束时间" />
                   <a-button @click="handleUsageToday">今日</a-button>
                   <a-button type="primary" :loading="usageLoading" @click="handleUsageQuery">查询</a-button>
                 </a-space>
