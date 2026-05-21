@@ -1,16 +1,20 @@
 <script setup lang="ts">
 import {
+  ApiOutlined,
   ClusterOutlined,
   DashboardOutlined,
   DeploymentUnitOutlined,
   FundProjectionScreenOutlined,
+  LogoutOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
   MessageOutlined,
   SettingOutlined,
+  ThunderboltOutlined,
+  UserOutlined,
 } from '@ant-design/icons-vue'
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import sidebarGatewayArtwork from '../assets/design/sidebar-gateway.png'
-import sidebarSkylineArtwork from '../assets/design/sidebar-skyline.png'
 import { getGatewayOverview, getMe, isAbortError, logout } from '../api'
 import { onGatewayOverviewChanged } from '../gatewayOverviewEvents'
 import GroupManagerButton from './GroupManagerButton.vue'
@@ -51,6 +55,9 @@ const selectedNavigationKeys = computed(() => {
   const matched = visibleNavigation.value.find((item) => route.path === item.to || route.path.startsWith(`${item.to}/`))
   return [matched?.to ?? route.path]
 })
+const activeNavigation = computed(() =>
+  visibleNavigation.value.find((item) => route.path === item.to || route.path.startsWith(`${item.to}/`)) ?? visibleNavigation.value[0] ?? navigation[0],
+)
 
 const headerKpis = computed(() => {
   const ov = gatewayOverview.value
@@ -135,7 +142,7 @@ async function loadGatewayKpi() {
     }
   } catch (err) {
     if (!isAbortError(err)) {
-      // 静默失败，避免在登录前/无权限时刷新报错
+      console.warn('网关概览刷新失败', err)
     }
   } finally {
     if (kpiController === controller) {
@@ -156,6 +163,10 @@ function signOut() {
 
 function adminRoleLabel(role?: string) {
   return role === 'super_admin' ? '超级管理员' : '管理员'
+}
+
+function toggleCollapsed() {
+  collapsed.value = !collapsed.value
 }
 
 onMounted(async () => {
@@ -199,7 +210,7 @@ onBeforeUnmount(() => {
     >
       <div class="brand-panel">
         <div class="brand-mark" aria-hidden="true">
-          <img :src="sidebarGatewayArtwork" alt="" />
+          <ThunderboltOutlined />
         </div>
         <div v-if="!collapsed">
           <strong>爱签网关</strong>
@@ -238,40 +249,69 @@ onBeforeUnmount(() => {
             <span>权限</span>
             <strong>{{ adminRoleLabel(admin?.role) }}</strong>
           </div>
-          <div class="sider-footer__meta">
-            <span>控制台</span>
-            <strong>爱签网关</strong>
-          </div>
-          <a-button class="sider-footer__button" block @click="navigate('/gateway/monitor')">查看运行日志</a-button>
+          <a-button class="sider-footer__button" block @click="navigate('/gateway/monitor')">
+            <template #icon>
+              <ApiOutlined />
+            </template>
+            网关监控
+          </a-button>
         </div>
-        <p>© 2025 爱签网关</p>
+        <a-button class="sider-collapse-button" block @click="toggleCollapsed">
+          <template #icon>
+            <MenuFoldOutlined />
+          </template>
+          收起导航
+        </a-button>
       </div>
 
-      <div v-else class="sider-footer sider-footer--collapsed" aria-hidden="true">
-        <span class="sider-footer__dot"></span>
+      <div v-else class="sider-footer sider-footer--collapsed">
+        <a-button class="sider-collapse-button" shape="circle" @click="toggleCollapsed" aria-label="展开导航">
+          <template #icon>
+            <MenuUnfoldOutlined />
+          </template>
+        </a-button>
       </div>
-
-      <div class="sider-visual" :style="{ '--sider-skyline': `url(${sidebarSkylineArtwork})` }" aria-hidden="true"></div>
     </a-layout-sider>
 
     <a-layout class="app-main">
       <a-layout-header class="app-header">
-        <div class="app-header__kpis" v-if="headerKpis.length">
+        <div class="app-header__page">
+          <span class="app-header__page-icon" aria-hidden="true">
+            <component :is="activeNavigation.icon" />
+          </span>
+          <div>
+            <strong>{{ activeNavigation.label }}</strong>
+            <p>{{ activeNavigation.description }}</p>
+          </div>
+        </div>
+
+        <div class="app-header__summary" v-if="headerKpis.length">
           <div
             v-for="kpi in headerKpis"
             :key="kpi.key"
-            class="header-kpi"
-            :class="`header-kpi--${kpi.tone}`"
+            class="header-status"
+            :class="`header-status--${kpi.tone}`"
           >
-            <span class="header-kpi__label">{{ kpi.label }}</span>
-            <span class="header-kpi__value">{{ kpi.value }}</span>
+            <span class="header-status__label">{{ kpi.label }}</span>
+            <span class="header-status__value">{{ kpi.value }}</span>
           </div>
         </div>
-        <a-space>
+
+        <a-space class="app-header__actions">
           <GroupManagerButton />
-          <a-tag color="processing">{{ admin?.username ?? 'admin' }}</a-tag>
-          <a-tag :color="admin?.role === 'super_admin' ? 'gold' : 'default'">{{ adminRoleLabel(admin?.role) }}</a-tag>
-          <a-button @click="signOut">退出登录</a-button>
+          <a-tag color="processing" class="app-header__user">
+            <UserOutlined />
+            {{ admin?.username ?? 'admin' }}
+          </a-tag>
+          <a-tag :color="admin?.role === 'super_admin' ? 'gold' : 'default'" class="app-header__user">
+            {{ adminRoleLabel(admin?.role) }}
+          </a-tag>
+          <a-button @click="signOut">
+            <template #icon>
+              <LogoutOutlined />
+            </template>
+            退出
+          </a-button>
         </a-space>
       </a-layout-header>
 
@@ -285,15 +325,52 @@ onBeforeUnmount(() => {
 <style scoped>
 .app-header {
   display: grid !important;
-  grid-template-columns: minmax(0, 1fr) auto !important;
+  grid-template-columns: minmax(180px, 1fr) minmax(0, auto) auto !important;
   align-items: center;
-  gap: 12px 20px;
+  gap: 10px 16px;
 }
 
-.app-header__kpis {
+.app-header__page {
   display: flex;
-  align-items: stretch;
+  align-items: center;
   gap: 10px;
+  min-width: 0;
+}
+
+.app-header__page-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-container);
+  background: var(--accent-soft);
+  color: var(--accent);
+  flex: 0 0 auto;
+}
+
+.app-header__page strong {
+  display: block;
+  color: var(--text-main);
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.app-header__page p {
+  margin: 2px 0 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-header__summary {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
   flex-wrap: nowrap;
   min-width: 0;
   max-width: 100%;
@@ -301,105 +378,108 @@ onBeforeUnmount(() => {
   scrollbar-width: none;
 }
 
-.app-header__kpis::-webkit-scrollbar {
+.app-header__summary::-webkit-scrollbar {
   display: none;
 }
 
-.header-kpi {
-  display: grid;
-  gap: 2px;
-  padding: 6px 14px 6px 14px;
+.header-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px 10px;
   border-radius: var(--radius-control);
-  border: 1px solid transparent;
-  min-width: 96px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-panel);
+  color: var(--text-muted);
   flex: 0 0 auto;
-  position: relative;
-  overflow: hidden;
-  transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
+  line-height: 1;
 }
 
-.header-kpi:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 16px rgba(15, 32, 68, 0.08);
-  filter: saturate(1.1);
-}
-
-.header-kpi__label {
+.header-status__label {
   font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  opacity: 0.85;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
-.header-kpi__value {
-  font-size: 14px;
+.header-status__value {
+  color: var(--text-main);
+  font-size: 13px;
   font-weight: 700;
   font-feature-settings: 'tnum';
-  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 220px;
-  letter-spacing: 0.01em;
+  white-space: nowrap;
+  max-width: 140px;
 }
 
-.header-kpi--primary {
-  background: linear-gradient(135deg, #e9efff 0%, #d6e1ff 100%);
-  border-color: rgba(79, 124, 255, 0.32);
-  color: #2c4cb8;
+.header-status--primary,
+.header-status--info {
+  border-color: rgba(37, 99, 235, 0.22);
+  background: var(--accent-soft);
 }
 
-.header-kpi--info {
-  background: linear-gradient(135deg, #dff0ff 0%, #cfe2ff 100%);
-  border-color: rgba(56, 142, 220, 0.32);
-  color: #1f5da8;
+.header-status--primary .header-status__value,
+.header-status--info .header-status__value {
+  color: var(--accent-strong);
 }
 
-.header-kpi--success {
-  background: linear-gradient(135deg, #e1f5e7 0%, #c9ecd4 100%);
-  border-color: rgba(40, 154, 70, 0.32);
-  color: #1f7a37;
+.header-status--success {
+  border-color: rgba(22, 163, 74, 0.24);
+  background: var(--success-soft);
 }
 
-.header-kpi--warning {
-  background: linear-gradient(135deg, #fff4d8 0%, #ffe3a6 100%);
-  border-color: rgba(217, 142, 0, 0.32);
-  color: #9a5b00;
+.header-status--success .header-status__value {
+  color: var(--success);
 }
 
-.header-kpi--neutral {
-  background: linear-gradient(135deg, #f1f1f5 0%, #e0e3eb 100%);
-  border-color: rgba(100, 116, 139, 0.32);
-  color: #475467;
+.header-status--warning {
+  border-color: rgba(245, 158, 11, 0.28);
+  background: var(--warning-soft);
 }
 
-.header-kpi__label {
-  color: inherit;
+.header-status--warning .header-status__value {
+  color: #a16207;
 }
 
-.header-kpi__value {
-  color: inherit;
+.app-header__actions {
+  justify-self: end;
+}
+
+.app-header__user {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
 }
 
 @media (max-width: 1180px) {
-  .header-kpi {
-    min-width: 80px;
-    padding: 5px 11px;
+  .app-header {
+    grid-template-columns: minmax(180px, 1fr) auto !important;
   }
-  .header-kpi__value {
-    font-size: 13px;
+
+  .app-header__summary {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+    order: 3;
   }
 }
 
 @media (max-width: 860px) {
-  .app-header__kpis {
-    overflow-x: auto;
-    flex-wrap: nowrap;
-    scrollbar-width: none;
+  .app-header {
+    grid-template-columns: minmax(0, 1fr) !important;
   }
 
-  .app-header__kpis::-webkit-scrollbar {
-    display: none;
+  .app-header__actions {
+    justify-self: start;
+  }
+
+  .app-header__page p {
+    white-space: normal;
+  }
+
+  .header-status__value {
+    max-width: 110px;
   }
 }
 </style>

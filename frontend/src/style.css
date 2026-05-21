@@ -55,9 +55,9 @@
   --space-5: 20px;
   --space-6: 24px;
   --space-8: 32px;
-  --page-gutter-x: 12px;
-  --page-gutter-y: 10px;
-  --content-gutter: 8px;
+  --page-gutter-x: 24px;
+  --page-gutter-y: 24px;
+  --content-gutter: 16px;
   --grid-gutter-half: 8px;
   --table-gutter: 0px;
   --table-filter-gutter: 8px;
@@ -197,10 +197,7 @@ select {
 .app-sider {
   height: 100vh;
   border-inline-end: 1px solid var(--border-soft);
-  background:
-    linear-gradient(180deg, rgba(248, 252, 255, 0.98), rgba(233, 242, 255, 0.94)),
-    radial-gradient(circle at 18% 8%, rgba(100, 153, 255, 0.16), transparent 28%),
-    linear-gradient(180deg, #f7fbff, #edf4ff) !important;
+  background: var(--bg-panel) !important;
   position: relative;
   overflow: hidden;
 }
@@ -217,9 +214,9 @@ select {
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 68px;
-  padding: 14px 14px 12px;
-  border-bottom: 1px solid rgba(179, 202, 238, 0.44);
+  min-height: 64px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-soft);
   position: relative;
   z-index: 2;
 }
@@ -230,13 +227,11 @@ select {
   width: 42px;
   height: 42px;
   border-radius: var(--radius-container);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(226, 237, 255, 0.9)),
-    rgba(255, 255, 255, 0.88);
-  border: 1px solid rgba(138, 174, 240, 0.34);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.92),
-    0 10px 24px rgba(105, 141, 208, 0.12);
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: var(--accent-foreground);
+  font-size: 20px;
+  box-shadow: none;
   overflow: hidden;
   flex: 0 0 auto;
 }
@@ -251,7 +246,7 @@ select {
 
 .brand-panel strong {
   display: block;
-  color: #1c2f57;
+  color: var(--text-main);
   font-size: 1rem;
   line-height: 1.2;
 }
@@ -278,7 +273,7 @@ select {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 10px 10px 12px;
+  padding: 12px 10px;
   background: transparent;
   border-inline-end: 0;
   position: relative;
@@ -291,8 +286,8 @@ select {
   padding-inline: 14px !important;
   border-radius: var(--radius-container);
   line-height: 42px;
-  color: #36548d;
-  font-weight: 600;
+  color: #334155;
+  font-weight: 500;
   transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
 }
 
@@ -301,29 +296,25 @@ select {
 }
 
 .app-menu.ant-menu-light .ant-menu-item-selected {
-  background:
-    linear-gradient(135deg, rgba(94, 151, 255, 0.18), rgba(66, 123, 255, 0.1)),
-    rgba(255, 255, 255, 0.92);
-  color: #1d4ed8;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.88),
-    0 10px 22px rgba(79, 124, 255, 0.14);
+  background: var(--accent);
+  color: var(--accent-foreground);
+  box-shadow: none;
 }
 
 .app-menu.ant-menu-light .ant-menu-item-selected::after {
-  inset-inline-start: 6px;
+  inset-inline-start: 0;
   inset-inline-end: auto;
   width: 3px;
-  height: 22px;
-  margin-top: -11px;
+  height: 24px;
+  margin-top: -12px;
   border-right: 0;
   border-radius: 999px;
-  background: linear-gradient(180deg, #5f94ff, #2f6fff);
+  background: var(--accent-foreground);
 }
 
 .app-menu.ant-menu-light .ant-menu-item:hover {
-  background: rgba(255, 255, 255, 0.72);
-  color: #244caa;
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .app-menu.ant-menu-light .ant-menu-item-selected .anticon,
@@ -333,6 +324,8 @@ select {
 
 .sider-footer {
   flex-shrink: 0;
+  display: grid;
+  gap: 10px;
   padding: 0 12px 12px;
   position: relative;
   z-index: 3;
@@ -347,16 +340,12 @@ select {
 .sider-footer__panel {
   display: grid;
   gap: 10px;
-  padding: 14px 14px 12px;
-  border: 1px solid rgba(180, 205, 240, 0.42);
+  padding: 12px;
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius-container);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(243, 248, 255, 0.9)),
-    rgba(255, 255, 255, 0.7);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.9),
-    0 16px 32px rgba(75, 115, 186, 0.1);
-  backdrop-filter: blur(16px);
+  background: var(--bg-subtle);
+  box-shadow: none;
+  backdrop-filter: none;
 }
 
 .sider-footer__head {
@@ -364,7 +353,7 @@ select {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  color: #355184;
+  color: var(--text-muted);
   font-size: 12px;
   font-weight: 700;
 }
@@ -375,8 +364,8 @@ select {
   height: 22px;
   padding: 0 8px;
   border-radius: 999px;
-  background: #e8f6ec;
-  color: #1f7a37;
+  background: var(--success-soft);
+  color: var(--success);
   font-size: 11px;
 }
 
@@ -387,7 +376,7 @@ select {
   justify-content: space-between;
   gap: 10px;
   min-width: 0;
-  color: #28406d;
+  color: var(--text-muted);
   font-size: 12px;
 }
 
@@ -397,7 +386,7 @@ select {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #18315e;
+  color: var(--text-main);
   font-size: 12px;
 }
 
@@ -405,17 +394,17 @@ select {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #34a853;
-  box-shadow: 0 0 0 5px rgba(52, 168, 83, 0.12);
+  background: var(--success);
+  box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.14);
   flex: 0 0 auto;
 }
 
 .sider-footer__button.ant-btn {
   height: 36px;
   border-radius: var(--radius-container);
-  border-color: rgba(111, 152, 235, 0.28);
-  background: rgba(255, 255, 255, 0.88);
-  color: #2f5db8;
+  border-color: var(--border-soft);
+  background: var(--bg-panel);
+  color: var(--accent);
 }
 
 .sider-footer--collapsed {
@@ -424,25 +413,19 @@ select {
   padding: 0 0 12px;
 }
 
-.sider-footer--collapsed .sider-footer__dot {
-  width: 10px;
-  height: 10px;
+.sider-collapse-button.ant-btn {
+  height: 34px;
+  border-color: var(--border-soft);
+  background: var(--bg-panel);
+  color: var(--text-muted);
+  box-shadow: none;
 }
 
-.sider-visual {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 280px;
-  pointer-events: none;
-  z-index: 0;
-  overflow: hidden;
-  background:
-    linear-gradient(180deg, rgba(239, 247, 255, 0), rgba(220, 237, 255, 0.76) 58%, rgba(210, 231, 255, 0.92)),
-    var(--sider-skyline) bottom center / 118% auto no-repeat;
-  opacity: 0.9;
-  mask-image: linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.26) 24%, #000 100%);
+.sider-collapse-button.ant-btn:hover,
+.sider-footer__button.ant-btn:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .app-main {
@@ -455,12 +438,12 @@ select {
 
 .ant-layout-header.app-header {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 12px 16px;
   height: auto !important;
-  min-height: 58px;
-  padding: 12px 20px;
+  min-height: 64px;
+  padding: 12px 24px;
   background: var(--bg-panel);
   line-height: 1.35 !important;
   box-sizing: border-box;

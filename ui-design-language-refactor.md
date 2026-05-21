@@ -7,7 +7,7 @@
 ## 任务
 
 - [x] 任务 1: 收敛全局 token 和 Ant Design Vue theme，统一颜色、圆角、边框、阴影、字体密度。验证: `npm run build`、`npm audit --audit-level=high`、`git diff --check` 已通过。
-- [ ] 任务 2: 重构 `ShellLayout.vue` 的侧边导航和顶部栏。验证: 导航选中态、折叠态、用户区和顶部操作在桌面与移动端都不溢出。
+- [x] 任务 2: 重构 `ShellLayout.vue` 的侧边导航和顶部栏。验证: `npm run build`、`npm audit --audit-level=high`、`git diff --check`、1440px/390px 浏览器几何检查已通过。
 - [ ] 任务 3: 重构 `OverviewView.vue` 为参考站式总览页。验证: 指标卡、最近任务、待处理站点在空数据和有数据时均可读。
 - [ ] 任务 4: 统一 `GatewayView.vue` 和 `SitesView.vue` 的表格、筛选区、弹窗、抽屉视觉。验证: 路由管理、网关监控、站点中心主要操作不丢失。
 - [ ] 任务 5: 统一 `ChatTestView.vue`、`SettingsView.vue`、`DesktopServiceView.vue` 与登录页的面板语言。验证: 输入区、设置表单、登录流程保持原行为。

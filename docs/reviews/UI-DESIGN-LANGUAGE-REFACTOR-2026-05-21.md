@@ -114,3 +114,15 @@
 - `npm run build`: 通过。包含 `vue-tsc -b` 和 Vite production build。仍有既有大 chunk 与 plugin timing 警告。
 - `npm audit --audit-level=high`: 通过，0 个漏洞。
 - `git diff --check`: 通过。
+
+## 任务 2 验证记录
+
+日期: 2026-05-21
+
+- 范围: `frontend/src/components/ShellLayout.vue`、`frontend/src/style.css`、`ui-design-language-refactor.md`。
+- 改动: 侧边栏改为白底细边框、蓝色选中态和底部折叠按钮；顶部栏新增当前页面上下文、紧凑运行状态组、用户标签和图标化退出按钮；移除侧栏插画依赖和玻璃渐变装饰。
+- Debug-First: 将网关概览刷新失败从静默吞错改为 `console.warn`，避免隐藏真实失败。
+- `npm run build`: 通过。包含 `vue-tsc -b` 和 Vite production build。仍有既有大 chunk 与 plugin timing 警告。
+- `npm audit --audit-level=high`: 通过，0 个漏洞。
+- `git diff --check`: 通过。
+- 浏览器验证: Vite dev server `http://127.0.0.1:5174/overview` 登录后验证。1440px 桌面、桌面折叠侧栏、390px 移动模拟均无文档级横向溢出，顶部操作区未出视口；DevTools console 无 error/warn。
