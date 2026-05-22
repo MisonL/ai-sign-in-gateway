@@ -1,0 +1,149 @@
+.gateway-summary-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 16px;
+  align-items: stretch;
+  flex: 0 0 auto;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.gateway-fill {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  height: 100%;
+}
+
+.gateway-fill > .page-grid-fill {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  margin-top: 0 !important;
+}
+
+.gateway-fill > .route-pool-card--standalone {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.gateway-monitor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.gateway-overview-shell {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.28) !important;
+  background:
+    radial-gradient(circle at top left, rgba(37, 99, 235, 0.1), transparent 34%),
+    linear-gradient(180deg, #ffffff, #f8fbff) !important;
+  box-shadow:
+    0 18px 42px rgba(30, 41, 59, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9) !important;
+}
+
+.gateway-overview-shell::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(rgba(37, 99, 235, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(37, 99, 235, 0.04) 1px, transparent 1px);
+  background-size: 24px 24px;
+  pointer-events: none;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.46), transparent 100%);
+}
+
+.gateway-overview-shell :deep(.ant-card-body) {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  padding: 18px;
+  gap: 16px;
+}
+
+.gateway-overview-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(320px, 0.95fr);
+  grid-template-areas:
+    'usage route'
+    'usage strategy'
+    'activity activity';
+  gap: 16px;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.gateway-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 22px;
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 16px 34px rgba(30, 41, 59, 0.08);
+}
+
+.gateway-panel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.08), transparent 34%);
+}
+
+.gateway-panel--usage {
+  grid-area: usage;
+}
+
+.gateway-panel--activity {
+  grid-area: activity;
+  min-height: 320px;
+}
+
+.gateway-panel--route-status {
+  grid-area: route;
+}
+
+.gateway-panel--strategy {
+  grid-area: strategy;
+}
+
+.gateway-panel__head {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 18px 18px 0;
+}
+
+.gateway-panel__title {
+  color: #172033;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.gateway-usage-card__sep {
+  color: #64748b;
+  font-size: 12px;
+}

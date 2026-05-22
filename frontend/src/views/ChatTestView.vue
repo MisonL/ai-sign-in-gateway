@@ -986,8 +986,8 @@ onBeforeUnmount(() => {
 }
 
 .session-sidebar__actions button {
-  width: 30px;
-  height: 30px;
+  width: 36px;
+  height: 36px;
   border-radius: 8px;
 }
 
@@ -1598,9 +1598,10 @@ onBeforeUnmount(() => {
   }
 
   .session-sidebar {
-    order: -1;
-    max-height: 360px;
+    order: 2;
+    max-height: 320px;
     border-left: 0;
+    border-top: 1px solid rgba(137, 174, 232, 0.28);
     border-bottom: 1px solid rgba(137, 174, 232, 0.28);
   }
 
@@ -1611,15 +1612,21 @@ onBeforeUnmount(() => {
   }
 
   .session-main {
-    min-height: 680px;
+    order: 1;
+    grid-template-rows: auto auto;
+    min-height: auto;
+    overflow: visible;
   }
 
   .session-history {
-    padding: 18px 16px 28px;
+    min-height: auto;
+    overflow: visible;
+    padding: 16px 14px 12px;
   }
 
   .session-empty {
-    padding-bottom: 40px;
+    margin: 0 auto;
+    padding: 20px;
   }
 
   .session-empty__art {
@@ -1660,6 +1667,29 @@ onBeforeUnmount(() => {
     width: 100%;
     flex-direction: column;
     align-items: stretch;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .session-toolbar__select,
+  .session-toolbar__select--model {
+    flex-basis: auto;
+    min-height: 36px;
+  }
+
+  .chat-workbench :deep(.ant-select-selector) {
+    height: 36px !important;
+  }
+
+  .chat-workbench :deep(.ant-select-selection-search-input),
+  .chat-workbench :deep(.ant-select-selection-item),
+  .chat-workbench :deep(.ant-select-selection-placeholder) {
+    height: 34px !important;
+    line-height: 34px !important;
+  }
+
+  .session-clear-button {
+    height: 36px;
   }
 
   .session-composer__image-size {

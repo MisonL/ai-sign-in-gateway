@@ -1,0 +1,113 @@
+@media (max-width: 1200px) {
+  .form-block__head,
+  .page-toolbar,
+  .app-header {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: flex-start;
+  }
+
+  .site-list-item__meta,
+  .stack-list-item__meta,
+  .checkin-site-row {
+    min-width: 0;
+  }
+}
+
+@media (max-width: 900px) {
+  .app-sider.ant-layout-sider-collapsed {
+    flex: 0 0 72px !important;
+    max-width: 72px !important;
+    min-width: 72px !important;
+    width: 72px !important;
+  }
+
+  .app-sider.ant-layout-sider-collapsed .brand-panel {
+    justify-content: center;
+    padding: 12px 8px;
+  }
+
+  .app-sider.ant-layout-sider-collapsed .brand-mark {
+    width: 42px;
+    height: 42px;
+  }
+
+  .app-sider.ant-layout-sider-collapsed .app-menu {
+    padding: 12px 8px;
+  }
+
+  .app-sider.ant-layout-sider-collapsed .app-menu.ant-menu .ant-menu-item {
+    width: 48px;
+    height: 48px;
+    margin: 4px auto;
+    padding-inline: 0 !important;
+    line-height: 48px;
+  }
+
+  .app-sider.ant-layout-sider-collapsed .app-menu.ant-menu .ant-menu-item .anticon {
+    font-size: 17px;
+  }
+
+  .app-sider.ant-layout-sider-collapsed .sider-collapse-button.ant-btn {
+    width: 40px;
+    height: 40px;
+  }
+
+  .app-content {
+    padding: 8px 8px calc(10px + env(safe-area-inset-bottom, 0px));
+    overflow-y: auto;
+  }
+
+  .app-header {
+    padding: 10px 12px;
+  }
+
+  .login-hero {
+    grid-template-columns: 1fr;
+  }
+
+  .page-stack--fit,
+  .page-stack--dashboard,
+  .page-stack--checkins,
+  .page-grid-fill.ant-row,
+  .page-grid-fill.ant-row > .ant-col,
+  .page-column,
+  .admin-card--fill,
+  .admin-card--fill .ant-card-body,
+  .card-shell,
+  .card-form,
+  .card-scroll,
+  .table-fill {
+    min-height: auto;
+    height: auto;
+  }
+
+  .card-scroll,
+  .table-fill .ant-table-wrapper .ant-table-body {
+    overflow: visible !important;
+  }
+
+  .card-actions,
+  .page-toolbar--actions {
+    position: static;
+    background: transparent;
+  }
+
+  .queue-timeline {
+    grid-template-columns: 1fr;
+  }
+
+  .site-summary__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .site-summary__hero {
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 640px) {
+  .invite-dialog__control,
+  .invite-dialog__control--code {
+    grid-template-columns: 1fr;
+  }
+}

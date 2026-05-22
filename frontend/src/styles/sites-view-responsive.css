@@ -1,0 +1,38 @@
+@media (max-width: 1400px) {
+  .sites-toolbar {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 960px) {
+  .sites-list-toolbar {
+    align-items: stretch;
+  }
+
+  .sites-list-toolbar__search {
+    width: min(100%, 360px);
+  }
+
+  .api-key-dialog-item__head,
+  .api-key-dialog-item__paths,
+  .manual-api-key-editor {
+    grid-template-columns: 1fr;
+  }
+
+  .manual-api-key-editor__key,
+  .manual-api-key-editor__urls,
+  .manual-api-key-editor__generation,
+  .manual-api-key-editor__edit,
+  .manual-api-key-editor__action {
+    grid-column: 1 / -1;
+  }
+
+  .manual-api-key-editor__action .api-key-dialog-field__label--spacer {
+    display: none;
+  }
+
+  .api-key-dialog-item__head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

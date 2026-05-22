@@ -1,0 +1,194 @@
+.field-help {
+  color: #7b8aa9;
+}
+
+.field-label-help {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.field-help-icon {
+  color: #7b8aa9;
+  cursor: help;
+  font-size: 13px;
+}
+
+.api-key-dialog-list {
+  display: grid;
+  gap: 10px;
+}
+
+.api-key-dialog-item {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(130, 156, 232, 0.24);
+  border-radius: 8px;
+  background: rgba(248, 251, 255, 0.72);
+}
+
+.api-key-dialog-item__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.api-key-dialog-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.api-key-dialog-field__label {
+  color: #18315e;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.api-key-dialog-field__label--spacer {
+  visibility: hidden;
+}
+
+.api-key-dialog-item__urls {
+  font-size: 12px;
+}
+
+.api-key-dialog-item__paths {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.manual-api-key-editor {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) 150px 200px;
+  gap: 8px;
+  align-items: start;
+}
+
+.manual-api-key-editor__key,
+.manual-api-key-editor__urls {
+  grid-column: 1 / -1;
+}
+
+.manual-api-key-editor__generation {
+  grid-column: 1 / 2;
+}
+
+.manual-api-key-editor__edit {
+  grid-column: 2 / 3;
+}
+
+.manual-api-key-editor__action {
+  grid-column: 3 / 4;
+  justify-self: start;
+}
+
+.email-pattern-tooltip {
+  display: grid;
+  gap: 4px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.site-editor-shell :deep(.ant-form-item) {
+  margin-bottom: 14px;
+}
+
+.site-editor-shell :deep(.ant-form-item-label > label) {
+  color: #18315e;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.site-editor-shell :deep(.ant-input),
+.site-editor-shell :deep(.ant-input-affix-wrapper),
+.site-editor-shell :deep(.ant-input-number),
+.site-editor-shell :deep(.ant-select-selector),
+.site-editor-shell :deep(.ant-input-number-affix-wrapper),
+.site-editor-shell :deep(textarea.ant-input) {
+  border-radius: 12px;
+  border-color: rgba(188, 211, 245, 0.88);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.74);
+}
+
+.site-editor-shell :deep(.ant-input),
+.site-editor-shell :deep(.ant-input-affix-wrapper),
+.site-editor-shell :deep(.ant-input-number),
+.site-editor-shell :deep(.ant-input-number-affix-wrapper),
+.site-editor-shell :deep(.ant-select-selector) {
+  min-height: 42px;
+}
+
+.site-editor-shell :deep(textarea.ant-input) {
+  min-height: 94px;
+}
+
+.site-editor-shell :deep(.ant-input:focus),
+.site-editor-shell :deep(.ant-input-affix-wrapper-focused),
+.site-editor-shell :deep(.ant-input-number-focused),
+.site-editor-shell :deep(.ant-select-focused .ant-select-selector) {
+  border-color: #7aaaff;
+  box-shadow: 0 0 0 3px rgba(73, 133, 255, 0.12);
+}
+
+.site-editor-shell :deep(.ant-btn) {
+  border-radius: 12px;
+  height: 40px;
+  padding-inline: 18px;
+  font-weight: 600;
+}
+
+.site-editor-shell :deep(.ant-btn-primary) {
+  border-color: #4b82ff;
+  background: linear-gradient(180deg, #62a0ff, #4b7dff);
+  box-shadow: 0 10px 24px rgba(86, 132, 255, 0.24);
+}
+
+.site-editor-shell :deep(.ant-switch) {
+  background: rgba(65, 119, 217, 0.32);
+}
+
+.site-editor-shell :deep(.ant-switch.ant-switch-checked) {
+  background: linear-gradient(90deg, #2f7bff, #65a9ff);
+}
+
+.site-editor-shell :deep(.ant-select-multiple .ant-select-selection-item) {
+  border-radius: 10px;
+  background: rgba(89, 138, 255, 0.14);
+}
+
+@media (max-width: 1280px) {
+  .site-editor-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .site-editor-storage-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .site-editor-card__art {
+    opacity: 0.14;
+    padding: 10px 12px;
+  }
+
+  .site-editor-modal__body {
+    max-height: calc(100vh - 188px);
+    padding-inline: 14px;
+  }
+
+  .site-editor-modal__header {
+    padding-inline: 18px;
+  }
+
+  .site-editor-modal__footer {
+    padding-inline: 14px;
+  }
+}

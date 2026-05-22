@@ -20,7 +20,7 @@ const theme = {
     colorText: '#0f172a',
     colorTextSecondary: '#64748b',
     colorTextTertiary: '#94a3b8',
-    fontFamily: "'IBM Plex Sans', sans-serif",
+    fontFamily: "'IBM Plex Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
     controlHeight: 34,
     controlHeightLG: 40,
     controlHeightSM: 28,

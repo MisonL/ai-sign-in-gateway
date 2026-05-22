@@ -162,7 +162,7 @@
 - 改动: 新增工作台共享样式，统一对话页、设置页、桌面服务页和登录页的白底面板、细边框、8px 圆角、输入控件和按钮语言；降低登录页营销插画感；移除对话页空态大图和装饰性分隔符；保留原有 API 调用、鉴权、会话、设置表单和登录流程。
 - `npm run build`: 通过。包含 `vue-tsc -b` 和 Vite production build。仍有既有大 chunk 警告。
 - `npm audit --audit-level=high`: 通过，0 个漏洞。
-- `node --test tests/*.test.ts`: 通过，14 个前端状态辅助测试全部通过。
+- `node --test frontend/tests/*.test.ts`: 通过，14 个前端状态辅助测试全部通过。
 - `go test ./...`: 通过，后端现有测试全部通过。
 - `git diff --check`: 通过。
 - 纯文本约束扫描: 装饰符号扫描和 tab 扫描均已覆盖任务 5 代码文件，结果无命中。
@@ -197,3 +197,48 @@
 - `curl http://127.0.0.1:8972/`: HTTP 200，返回 2048 字节 HTML。
 - `POST /api/auth/login`: 当前管理员密码 `1111` 返回 HTTP 200；旧默认密码 `admin123` 返回 HTTP 401。
 - 运行态浏览器验证: `agent-browser` 直接访问 `http://127.0.0.1:8972`，检查 `/login`、`/overview`、`/gateway/routes`、`/gateway/monitor`、`/sites`、`/chat-test`、`/settings`、`/desktop`，覆盖 1440px、1024px、390px，共 24 个页面状态。文档级横向溢出、关键表面越界、按钮或输入文本溢出、不可点击控件、缺少可访问名称控件、图片 alt 缺失、重复 id、console error/warn 均为 0。
+
+## 外部复核后补充清理
+
+日期: 2026-05-22
+
+- 范围: 清理已无引用的旧 UI 插画资源。
+- 删除文件: `frontend/src/assets/design/session-pic.png`、`frontend/src/assets/design/sidebar-gateway.png`、`frontend/src/assets/design/sidebar-skyline.png`、`frontend/src/assets/site-editor-account.png`、`frontend/src/assets/site-editor-cloud.png`、`frontend/src/assets/site-editor-gateway.png`、`frontend/src/assets/hero.png`、`frontend/src/assets/vite.svg`、`frontend/src/assets/vue.svg`。
+- 引用检查: `rg -n 'site-editor-(account|cloud|gateway)\.png|session-pic\.png|sidebar-(gateway|skyline)\.png|hero\.png|vite\.svg|vue\.svg' frontend/src` 无命中。
+- `npm run build`: 通过。包含 `vue-tsc -b` 和 Vite production build。仍有既有大 chunk 和 plugin timing 警告。
+- `node --test frontend/tests/*.test.ts`: 通过，14 个前端状态辅助测试全部通过。
+- `go test ./...`: 通过，后端现有测试全部通过。
+- `docker compose up -d --build`: 通过。镜像 `ai-sign-in-gateway-app:latest` 重新构建，容器 `ai-sign-in-gateway` 重新创建并启动。
+- `docker compose ps`: `ai-sign-in-gateway` 状态为 `Up`，端口映射为 `0.0.0.0:8972->8972/tcp`。
+- `curl http://127.0.0.1:8972/api/health`: HTTP 200，响应 `status` 为 `ok`。
+- `POST /api/auth/login`: 当前管理员密码 `1111` 返回 HTTP 200，响应包含 `access_token` 和 `token_type`。
+
+## 移动端复核后补充优化
+
+日期: 2026-05-22
+
+- 范围: `frontend/src/views/GatewayView.vue`、`frontend/src/views/ChatTestView.vue`、`frontend/src/views/SettingsView.vue`、`frontend/src/style.css`。
+- 改动: 路由管理移动端工具栏改为两列操作网格，筛选控件改为全宽；对话页移动端主工作区优先、会话历史下置，并统一历史区图标按钮为 36px；设置页移动端 tabs 改为横向滚动并隐藏 Ant overflow 操作按钮，数字输入步进控件补足触控命中区；移动端折叠侧栏收窄为 72px。
+- `git diff --check`: 通过。
+- `node --test frontend/tests/*.test.ts`: 通过，14 个前端状态辅助测试全部通过。
+- `npm run build`: 通过。包含 `vue-tsc -b` 和 Vite production build。仍有既有大 chunk 和 plugin timing 警告。
+- `go test ./...`: 通过，后端现有测试全部通过。
+- `npm audit --audit-level=high`: 通过，0 个漏洞。
+- `docker compose up -d --build`: 通过。镜像内重新执行前端 production build，容器 `ai-sign-in-gateway` 重新创建并启动。
+- `curl http://127.0.0.1:8972/api/health`: HTTP 200，响应 `status` 为 `ok`。
+- 运行态浏览器验证: 直接访问 `http://127.0.0.1:8972`，复查 `/gateway/routes`、`/chat-test`、`/settings`。390px 下文档级横向溢出为 0，对话页输入区在会话历史之前，设置页 tabs 为横向滚动；1440px 下对话页和路由管理无关键表面越界、无按钮文本溢出、无小于 32px 的可见可点击控件。
+- DevTools console: error/warn 为空。
+
+## 代码结构复核后补充拆分
+
+日期: 2026-05-22
+
+- 范围: `frontend/src/style.css`、`frontend/src/views/GatewayView.vue`、`frontend/src/views/SitesView.vue` 及其拆分出的配置、工具与 CSS 模块。
+- 改动: 将全局样式、网关页样式、站点页样式拆为按职责聚合的 CSS 模块；将网关页与站点页的常量配置移出大型 Vue 文件；抽取共享视图工具函数；改用 Ant Design Vue 子模块导入以减少无关入口耦合。
+- 文件长度检查: `wc -l frontend/src/styles/*.css frontend/src/*Config.ts frontend/src/viewUtils.ts | sort -nr | head -12`，最长文件为 `frontend/src/styles/workspace-surfaces.css` 299 行，新增拆分文件均不超过 300 行。
+- `git diff --check`: 通过。
+- `node --test frontend/tests/*.test.ts`: 通过，14 个前端状态辅助测试全部通过。
+- `npm run build`: 通过。包含 `vue-tsc -b` 和 Vite production build。仍有既有大 chunk 警告。
+- `npm audit --audit-level=high`: 通过，0 个漏洞。
+- `go test ./...`: 通过，后端现有测试全部通过。
+- 运行态浏览器验证: `npm run preview -- --host 127.0.0.1 --port 4173` 后访问 `http://127.0.0.1:4173/login`，页面正常加载，DevTools console error/warn 为空。

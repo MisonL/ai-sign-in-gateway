@@ -565,7 +565,12 @@ onMounted(loadData)
       <a-row :gutter="[16, 16]" class="page-grid-fill">
         <a-col :xs="24">
           <a-card :bordered="false" class="admin-card admin-card--fill settings-tab-card">
-            <a-tabs v-model:active-key="activeTab" class="settings-tabs" :animated="false">
+            <a-tabs
+              v-model:active-key="activeTab"
+              aria-label="设置分类"
+              class="settings-tabs"
+              :animated="false"
+            >
               <a-tab-pane key="schedule" tab="调度与执行">
                 <div class="card-form">
                   <div class="card-scroll card-scroll--padded">
@@ -1368,6 +1373,62 @@ onMounted(loadData)
 .settings-tabs :deep(.ant-tabs-ink-bar),
 .settings-tabs :deep(.ant-tabs-content) {
   transition: none !important;
+}
+
+@media (max-width: 720px) {
+  .settings-tabs :deep(.ant-tabs-nav) {
+    margin-bottom: 10px;
+  }
+
+  .settings-tabs :deep(.ant-tabs-nav-wrap) {
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .settings-tabs :deep(.ant-tabs-nav-wrap::-webkit-scrollbar) {
+    display: none;
+  }
+
+  .settings-tabs :deep(.ant-tabs-nav-list) {
+    min-width: max-content;
+    transform: none !important;
+  }
+
+  .settings-tabs :deep(.ant-tabs-nav-operations) {
+    display: none !important;
+  }
+
+  .settings-tabs :deep(.ant-tabs-tab) {
+    flex: 0 0 auto;
+    min-width: 44px;
+    min-height: 36px;
+    padding: 8px 8px;
+  }
+
+  .settings-tabs :deep(.ant-tabs-tab-btn) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 32px;
+    min-height: 32px;
+    line-height: 20px;
+  }
+
+  .settings-tab-card :deep(.ant-input-number-handler) {
+    min-width: 32px;
+    height: 20px;
+  }
+
+  .settings-tab-card :deep(.ant-input-number-handler-wrap) {
+    width: 32px;
+  }
+
+  .settings-tab-card :deep(.ant-input-number-handler-up-inner),
+  .settings-tab-card :deep(.ant-input-number-handler-down-inner) {
+    min-width: 32px;
+  }
 }
 
 .settings-tab-card :deep(.card-scroll) {

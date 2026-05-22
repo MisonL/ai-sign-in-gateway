@@ -1,0 +1,127 @@
+.gateway-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 10px;
+  padding-bottom: 4px;
+  overflow: visible;
+}
+
+.gateway-metric-card.ant-card {
+  position: relative;
+  min-width: 0;
+  border: 1px solid rgba(177, 189, 207, 0.32);
+  border-radius: var(--radius-container) !important;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(249, 251, 255, 0.98));
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.82) inset,
+    var(--shadow-card);
+  overflow: hidden;
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.gateway-metric-card.ant-card:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-card-hover);
+}
+
+.gateway-metric-card.ant-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: linear-gradient(180deg, rgba(79, 124, 255, 0.42), rgba(79, 124, 255, 0.1));
+}
+
+.gateway-metric-card.ant-card::after {
+  content: '';
+  position: absolute;
+  inset: -40% -30% auto auto;
+  width: 180px;
+  height: 180px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(79, 124, 255, 0.12) 0%, rgba(79, 124, 255, 0) 70%);
+  pointer-events: none;
+  filter: blur(2px);
+}
+
+.gateway-metric-card--primary.ant-card::before {
+  background: linear-gradient(180deg, rgba(79, 124, 255, 0.5), rgba(79, 124, 255, 0.12));
+}
+.gateway-metric-card--primary.ant-card::after {
+  background: radial-gradient(circle, rgba(79, 124, 255, 0.16) 0%, rgba(79, 124, 255, 0) 70%);
+}
+.gateway-metric-card--primary.ant-card {
+  background:
+    linear-gradient(180deg, rgba(233, 239, 255, 0.7), rgba(255, 255, 255, 0.95));
+}
+
+.gateway-metric-card--success.ant-card::before {
+  background: linear-gradient(180deg, rgba(52, 168, 83, 0.5), rgba(52, 168, 83, 0.12));
+}
+.gateway-metric-card--success.ant-card::after {
+  background: radial-gradient(circle, rgba(52, 168, 83, 0.16) 0%, rgba(52, 168, 83, 0) 70%);
+}
+.gateway-metric-card--success.ant-card {
+  background:
+    linear-gradient(180deg, rgba(231, 245, 236, 0.75), rgba(255, 255, 255, 0.95));
+}
+
+.gateway-metric-card--warning.ant-card::before {
+  background: linear-gradient(180deg, rgba(245, 158, 11, 0.5), rgba(245, 158, 11, 0.1));
+}
+.gateway-metric-card--warning.ant-card::after {
+  background: radial-gradient(circle, rgba(245, 158, 11, 0.18) 0%, rgba(245, 158, 11, 0) 70%);
+}
+.gateway-metric-card--warning.ant-card {
+  background:
+    linear-gradient(180deg, rgba(255, 245, 224, 0.7), rgba(255, 255, 255, 0.95));
+}
+
+.gateway-metric-card--info.ant-card::before {
+  background: linear-gradient(180deg, rgba(94, 163, 255, 0.5), rgba(94, 163, 255, 0.12));
+}
+.gateway-metric-card--info.ant-card::after {
+  background: radial-gradient(circle, rgba(94, 163, 255, 0.16) 0%, rgba(94, 163, 255, 0) 70%);
+}
+.gateway-metric-card--info.ant-card {
+  background:
+    linear-gradient(180deg, rgba(230, 241, 255, 0.7), rgba(255, 255, 255, 0.95));
+}
+
+.gateway-metric-card--neutral.ant-card::before {
+  background: linear-gradient(180deg, rgba(107, 114, 128, 0.32), rgba(107, 114, 128, 0.08));
+}
+.gateway-metric-card--neutral.ant-card::after {
+  background: radial-gradient(circle, rgba(107, 114, 128, 0.12) 0%, rgba(107, 114, 128, 0) 70%);
+}
+.gateway-metric-card--neutral.ant-card {
+  background:
+    linear-gradient(180deg, rgba(243, 246, 252, 0.85), rgba(255, 255, 255, 0.96));
+}
+
+.gateway-metric-card .ant-card-body {
+  display: grid;
+  gap: 6px;
+  min-height: 76px;
+  padding: 14px 16px 14px 19px;
+  position: relative;
+  z-index: 1;
+}
+
+.gateway-metric-card__label {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+}
+
+.gateway-metric-card__value {
+  color: var(--text-main);
+  font-size: clamp(1.15rem, 1.3vw, 1.55rem);
+  font-weight: 700;
+  line-height: 1.05;
+  overflow-wrap: anywhere;
+  font-feature-settings: 'tnum';
+}
