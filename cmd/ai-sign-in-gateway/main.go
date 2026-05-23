@@ -416,7 +416,7 @@ func printStartupSummary(output io.Writer, summary startupSummary) {
 		fmt.Fprintln(output, "密码状态: 已修改，明文不可读取")
 	} else {
 		fmt.Fprintf(output, "默认用户名: %s\n", username)
-		fmt.Fprintf(output, "默认密码: %s\n", passwordLine)
+		fmt.Fprintln(output, "默认密码: 已设置，明文不在启动日志显示")
 	}
 
 	stopCommand := stopCommandForSummary(summary)
@@ -872,6 +872,9 @@ func serveFrontend(dist string, w http.ResponseWriter, r *http.Request) {
 			if contentType := frontendContentType(requested); contentType != "" {
 				w.Header().Set("Content-Type", contentType)
 			}
+			if cleanPath == "index.html" {
+				setFrontendIndexCacheHeaders(w)
+			}
 			http.ServeFile(w, r, requested)
 			return
 		}
@@ -880,6 +883,7 @@ func serveFrontend(dist string, w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	setFrontendIndexCacheHeaders(w)
 	http.ServeFile(w, r, filepath.Join(dist, "index.html"))
 }
 
@@ -897,6 +901,9 @@ func serveEmbeddedFrontend(frontend fs.FS, w http.ResponseWriter, r *http.Reques
 		if contentType := frontendContentType(cleanPath); contentType != "" {
 			w.Header().Set("Content-Type", contentType)
 		}
+		if cleanPath == "index.html" {
+			setFrontendIndexCacheHeaders(w)
+		}
 		http.ServeContent(w, r, cleanPath, info.ModTime(), mustOpenEmbedded(frontend, cleanPath))
 		return
 	}
@@ -912,7 +919,12 @@ func serveEmbeddedFrontend(frontend fs.FS, w http.ResponseWriter, r *http.Reques
 	if contentType := mime.TypeByExtension(".html"); contentType != "" {
 		w.Header().Set("Content-Type", contentType)
 	}
+	setFrontendIndexCacheHeaders(w)
 	http.ServeContent(w, r, "index.html", time.Time{}, bytes.NewReader(index))
+}
+
+func setFrontendIndexCacheHeaders(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-cache")
 }
 
 func mustOpenEmbedded(frontend fs.FS, name string) *bytes.Reader {
