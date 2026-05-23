@@ -1,18 +1,16 @@
 .gateway-metric-card {
   position: relative;
   overflow: hidden;
-  border: 1px solid rgba(148, 163, 184, 0.28) !important;
-  background: linear-gradient(180deg, #ffffff, #f8fbff) !important;
-  box-shadow:
-    0 16px 34px rgba(30, 41, 59, 0.08),
-    inset 0 1px 0 rgba(255, 255, 255, 0.9) !important;
+  border: 1px solid var(--border-soft) !important;
+  background: var(--bg-panel) !important;
+  box-shadow: var(--shadow-card) !important;
 }
 
 .gateway-metric-card::before {
   content: '';
   position: absolute;
   inset: 0;
-  background: radial-gradient(circle at right top, rgba(37, 99, 235, 0.08), transparent 42%);
+  background: transparent;
   pointer-events: none;
 }
 
@@ -39,29 +37,29 @@
 }
 
 .gateway-metric-card--primary {
-  background: linear-gradient(180deg, #ffffff, #f8fbff) !important;
+  background: var(--bg-panel) !important;
 }
 
 .gateway-metric-card--info {
-  background: linear-gradient(180deg, #ffffff, #f8fbff) !important;
+  background: var(--bg-panel) !important;
 }
 
 .gateway-metric-card--success {
-  background: linear-gradient(180deg, #ffffff, #f8fbff) !important;
+  background: var(--bg-panel) !important;
 }
 
 .gateway-metric-card--warning {
-  background: linear-gradient(180deg, #ffffff, #f8fbff) !important;
+  background: var(--bg-panel) !important;
 }
 
 .gateway-metric-card--neutral {
-  background: linear-gradient(180deg, #ffffff, #f8fbff) !important;
+  background: var(--bg-panel) !important;
 }
 
 .gateway-policy-settings-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 300px;
-  gap: 18px;
+  gap: var(--rhythm-3);
   align-items: start;
 }
 
@@ -140,7 +138,7 @@
   overflow: hidden;
   padding: 7px 12px;
   border: 1px solid rgba(148, 163, 184, 0.3);
-  border-radius: 12px;
+  border-radius: var(--radius-control);
   background: #ffffff;
   color: #24334d;
   font-family: 'IBM Plex Mono', monospace;

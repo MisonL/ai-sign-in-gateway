@@ -92,11 +92,11 @@
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px 12px;
-  min-height: 32px;
+  min-height: var(--control-height);
 }
 
 .page-toolbar--actions {
-  min-height: 32px;
+  min-height: var(--control-height);
   position: sticky;
   top: 0;
   z-index: 3;

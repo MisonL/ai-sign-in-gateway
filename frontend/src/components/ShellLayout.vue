@@ -450,7 +450,7 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 32px;
+  height: 34px;
 }
 
 @media (max-width: 1180px) {
@@ -468,6 +468,18 @@ onBeforeUnmount(() => {
 @media (max-width: 860px) {
   .app-header {
     grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .app-header__summary {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    overflow-x: visible;
+  }
+
+  .header-status {
+    justify-content: space-between;
+    width: 100%;
   }
 
   .app-header__actions {

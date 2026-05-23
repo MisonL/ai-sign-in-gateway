@@ -34,7 +34,7 @@
   }
 
   .gateway-toolbar-actions.ant-space .ant-btn {
-    height: 38px;
+    height: var(--control-height);
     padding-inline: 8px;
   }
 
@@ -89,7 +89,7 @@
   }
 
   .route-pool-clear.ant-btn {
-    height: 36px;
+    height: var(--control-height);
   }
 
   .gateway-policy-help__grid,

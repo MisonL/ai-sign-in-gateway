@@ -36,7 +36,7 @@
 .route-management-toolbar {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--rhythm-2);
   flex-wrap: wrap;
   min-width: 0;
 }
@@ -118,34 +118,34 @@
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, #2f6ff6, #19a66a);
+  background: var(--accent);
   transition: width 180ms ease;
 }
 
 .route-probe-progress--balance .route-probe-progress__bar span {
-  background: linear-gradient(90deg, #0f9f7a, #2f6ff6);
+  background: var(--success);
 }
 
 .route-pool-status {
   position: relative;
   z-index: 1;
   display: grid;
-  gap: 10px;
-  padding: 14px 18px 0;
+  gap: var(--rhythm-2);
+  padding: var(--rhythm-2) var(--rhythm-3) 0;
 }
 
 .route-pool-status__card {
-  border: 1px solid rgba(148, 163, 184, 0.24);
-  border-radius: 16px;
-  padding: 12px 14px;
-  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-container);
+  padding: var(--rhythm-2);
+  background: var(--bg-panel);
 }
 
 .route-pool-status__head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--rhythm-2);
   margin-bottom: 10px;
 }
 
@@ -172,38 +172,38 @@
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, rgba(110, 168, 255, 0.86), rgba(79, 214, 200, 0.9));
+  background: var(--accent);
 }
 
 .route-pool-status__card--success .route-pool-status__bar span {
-  background: linear-gradient(90deg, #3ddc97, #82f4a8);
+  background: var(--success);
 }
 
 .route-pool-status__card--warning .route-pool-status__bar span {
-  background: linear-gradient(90deg, #ffb34d, #ffd27f);
+  background: var(--warning);
 }
 
 .route-pool-status__card--danger .route-pool-status__bar span {
-  background: linear-gradient(90deg, #ff7d61, #ffaf72);
+  background: var(--danger);
 }
 
 .route-pool-preview {
   position: relative;
   z-index: 1;
   display: grid;
-  gap: 10px;
-  padding: 14px 18px 18px;
+  gap: var(--rhythm-2);
+  padding: var(--rhythm-2) var(--rhythm-3) var(--rhythm-3);
 }
 
 .route-pool-preview__row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 12px;
+  gap: var(--rhythm-2);
   align-items: center;
-  padding: 12px 14px;
-  border: 1px solid rgba(148, 163, 184, 0.24);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.82);
+  padding: var(--rhythm-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-container);
+  background: var(--bg-panel);
 }
 
 .route-pool-preview__main {
@@ -239,23 +239,23 @@
   z-index: 1;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  padding: 14px 18px 18px;
+  gap: var(--rhythm-2);
+  padding: var(--rhythm-2) var(--rhythm-3) var(--rhythm-3);
 }
 
 .gateway-strategy-board__item {
   display: grid;
-  gap: 10px;
-  padding: 14px 14px 12px;
-  border: 1px solid rgba(148, 163, 184, 0.24);
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.82);
+  gap: var(--rhythm-2);
+  padding: var(--rhythm-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-container);
+  background: var(--bg-panel);
 }
 
 .gateway-strategy-board__summary {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--rhythm-2);
   align-items: baseline;
 }
 
@@ -281,7 +281,7 @@
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, #6ea8ff, #7af8d0);
+  background: var(--accent);
 }
 
 .route-pool-card :deep(.ant-card-body) {

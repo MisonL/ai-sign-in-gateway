@@ -1,5 +1,5 @@
 .gateway-metric-card {
-  background: linear-gradient(180deg, var(--bg-panel) 0%, var(--bg-subtle) 100%) !important;
+  background: var(--bg-panel) !important;
   box-shadow: var(--shadow-card) !important;
 }
 
@@ -18,19 +18,19 @@
 
 .gateway-strategy-card {
   border-radius: var(--radius-container) !important;
-  background: linear-gradient(180deg, var(--bg-panel) 0%, var(--bg-subtle) 100%) !important;
+  background: var(--bg-panel) !important;
 }
 
 .gateway-trend-card {
-  background: linear-gradient(180deg, var(--bg-panel) 0%, var(--bg-subtle) 100%) !important;
+  background: var(--bg-panel) !important;
 }
 
 .gateway-trend-bar__segment--success {
-  background: linear-gradient(180deg, #4dd28e 0%, #34a853 100%) !important;
+  background: var(--success) !important;
 }
 
 .gateway-trend-bar__segment--failed {
-  background: linear-gradient(180deg, #f08585 0%, #e35b5b 100%) !important;
+  background: var(--danger) !important;
 }
 
 /* Drawer table polish */

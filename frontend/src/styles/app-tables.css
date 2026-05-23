@@ -222,7 +222,7 @@
 }
 
 .management-row--active > td {
-  background: linear-gradient(180deg, rgba(37, 99, 235, 0.085), rgba(37, 99, 235, 0.035)) !important;
+  background: var(--accent-soft) !important;
   box-shadow: none !important;
 }
 
@@ -238,11 +238,11 @@
 }
 
 .table-fill--management .ant-table-tbody > tr.ant-table-row-selected > td {
-  background: linear-gradient(180deg, rgba(37, 99, 235, 0.075), rgba(37, 99, 235, 0.028)) !important;
+  background: var(--accent-soft) !important;
 }
 
 .table-fill--management .ant-table-tbody > tr.ant-table-row-selected:hover > td {
-  background: linear-gradient(180deg, rgba(37, 99, 235, 0.09), rgba(37, 99, 235, 0.04)) !important;
+  background: var(--accent-soft) !important;
 }
 
 .table-fill--management .ant-table-tbody > tr.ant-table-row-selected > td::after {

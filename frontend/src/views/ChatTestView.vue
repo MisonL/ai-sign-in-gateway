@@ -931,9 +931,7 @@ onBeforeUnmount(() => {
   min-height: 0;
   overflow: hidden;
   color: #0a3472;
-  background:
-    radial-gradient(circle at 73% 22%, rgba(255, 255, 255, 0.78) 0 74px, transparent 210px),
-    linear-gradient(180deg, #edf5ff 0%, #eaf3ff 42%, #e4efff 100%);
+  background: var(--bg-page);
 }
 
 .session-sidebar {
@@ -986,8 +984,8 @@ onBeforeUnmount(() => {
 }
 
 .session-sidebar__actions button {
-  width: 36px;
-  height: 36px;
+  width: var(--control-height);
+  height: var(--control-height);
   border-radius: 8px;
 }
 
@@ -1106,15 +1104,15 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  height: 32px;
+  height: var(--control-height);
   padding: 0 14px;
   border: 1px solid rgba(134, 172, 230, 0.32);
-  border-radius: 10px;
-  background: rgba(246, 251, 255, 0.66);
+  border-radius: var(--radius-control);
+  background: var(--bg-panel);
   color: #2e528f;
   font-size: 13px;
   font-weight: 600;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.82);
+  box-shadow: none;
   cursor: pointer;
 }
 
@@ -1132,12 +1130,7 @@ onBeforeUnmount(() => {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background:
-    linear-gradient(rgba(255, 255, 255, 0.28) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.28) 1px, transparent 1px),
-    radial-gradient(circle at 52% 40%, rgba(255, 255, 255, 0.6), transparent 28%),
-    linear-gradient(180deg, rgba(243, 249, 255, 0.78), rgba(226, 239, 255, 0.72));
-  background-size: 72px 72px, 72px 72px, auto, auto;
+  background: var(--bg-page);
 }
 
 .session-history {
@@ -1207,14 +1200,14 @@ onBeforeUnmount(() => {
 .session-message__bubble {
   max-width: min(720px, 78%);
   padding: 14px 18px;
-  border-radius: 18px;
+  border-radius: var(--radius-container);
   background: rgba(255, 255, 255, 0.84);
   color: #12244a;
   box-shadow: 0 10px 30px rgba(80, 116, 170, 0.08);
 }
 
 .session-message--user .session-message__bubble {
-  border-radius: 18px;
+  border-radius: var(--radius-container);
   background: rgba(242, 242, 242, 0.96);
   box-shadow: none;
 }
@@ -1247,7 +1240,7 @@ onBeforeUnmount(() => {
   width: 180px;
   height: 132px;
   object-fit: cover;
-  border-radius: 16px;
+  border-radius: var(--radius-control);
 }
 
 .session-generated-grid {
@@ -1262,7 +1255,7 @@ onBeforeUnmount(() => {
   width: 100%;
   aspect-ratio: 1 / 1;
   object-fit: cover;
-  border-radius: 24px;
+  border-radius: var(--radius-control);
 }
 
 .session-composer {
@@ -1287,7 +1280,7 @@ onBeforeUnmount(() => {
 
 .session-composer__frame {
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr) auto;
+  grid-template-columns: var(--control-height) minmax(0, 1fr) auto;
   align-items: stretch;
   gap: 12px;
   width: min(1180px, calc(100vw - 48px));
@@ -1295,12 +1288,10 @@ onBeforeUnmount(() => {
   margin: 0 auto;
   padding: 12px 14px;
   border: 1px solid rgba(159, 185, 226, 0.34);
-  border-radius: 16px;
-  background: rgba(247, 251, 255, 0.9);
-  box-shadow:
-    0 18px 44px rgba(71, 108, 168, 0.14),
-    inset 0 1px 0 rgba(255, 255, 255, 0.92);
-  backdrop-filter: blur(18px);
+  border-radius: var(--radius-container);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: none;
 }
 
 .session-composer__side {
@@ -1320,27 +1311,27 @@ onBeforeUnmount(() => {
 }
 
 .session-tool-button {
-  width: 42px;
-  height: 42px;
+  width: var(--control-height);
+  height: var(--control-height);
   border: 1px solid rgba(177, 199, 233, 0.48);
-  border-radius: 10px;
+  border-radius: var(--radius-control);
   background: rgba(247, 251, 255, 0.9);
   color: #2077ff;
-  font-size: 20px;
-  box-shadow: 0 8px 20px rgba(81, 124, 190, 0.08);
+  font-size: 17px;
+  box-shadow: none;
 }
 
 .session-send-button {
   gap: 8px;
   min-width: 112px;
-  height: 36px;
+  height: var(--control-height);
   padding: 0 14px;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #186bff 0%, #2f83ff 48%, #63d1ff 100%);
+  border-radius: var(--radius-control);
+  background: var(--accent);
   color: #ffffff;
   font-size: 13px;
   font-weight: 600;
-  box-shadow: 0 14px 30px rgba(40, 117, 247, 0.28);
+  box-shadow: none;
 }
 
 .session-footnote {
@@ -1369,15 +1360,15 @@ onBeforeUnmount(() => {
   width: 190px;
   padding: 8px;
   border: 1px solid rgba(159, 185, 226, 0.34);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.86);
+  border-radius: var(--radius-container);
+  background: var(--bg-panel);
 }
 
 .session-attachment img {
   width: 44px;
   height: 44px;
   object-fit: cover;
-  border-radius: 10px;
+  border-radius: var(--radius-control);
 }
 
 .session-attachment span {
@@ -1421,13 +1412,13 @@ onBeforeUnmount(() => {
 
 .image-ratio-preset {
   display: grid;
-  grid-template-rows: 26px auto;
+  grid-template-rows: 24px auto;
   place-items: center;
   gap: 3px;
-  min-width: 42px;
+  min-width: var(--control-height);
   padding: 4px 6px;
   border: 1px solid rgba(137, 174, 232, 0.34);
-  border-radius: 10px;
+  border-radius: var(--radius-control);
   background: rgba(246, 251, 255, 0.78);
   color: #3b527b;
   font-size: 11px;
@@ -1459,12 +1450,12 @@ onBeforeUnmount(() => {
   width: 24px;
   border: 1px solid currentColor;
   border-radius: 4px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(191, 219, 254, 0.38));
+  background: var(--bg-panel);
 }
 
 .image-size-editor__lock {
   width: 34px;
-  height: 32px;
+  height: var(--control-height);
 }
 
 .chat-file-input {
@@ -1478,15 +1469,13 @@ onBeforeUnmount(() => {
 }
 
 .chat-workbench :deep(.ant-select-selector) {
-  height: 32px !important;
+  height: var(--control-height) !important;
   padding: 0 11px !important;
-  border: 1px solid rgba(137, 174, 232, 0.34) !important;
-  border-radius: 10px !important;
-  background: rgba(246, 251, 255, 0.68) !important;
+  border: 1px solid var(--border-soft) !important;
+  border-radius: var(--radius-control) !important;
+  background: var(--bg-panel) !important;
   color: #25477f !important;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.88),
-    0 10px 24px rgba(74, 116, 183, 0.04) !important;
+  box-shadow: none !important;
 }
 
 .chat-workbench :deep(.ant-select-selection-search-input),
@@ -1516,15 +1505,15 @@ onBeforeUnmount(() => {
 
 .chat-workbench :deep(.ant-input-number),
 .chat-workbench :deep(.ant-input-number-group-addon) {
-  border-color: rgba(137, 174, 232, 0.34) !important;
-  background: rgba(246, 251, 255, 0.78) !important;
+  border-color: var(--border-soft) !important;
+  background: var(--bg-panel) !important;
   color: #284b84 !important;
 }
 
 .chat-workbench :deep(.ant-input-number),
 .chat-workbench :deep(.ant-input-number-input),
 .chat-workbench :deep(.ant-input-number-group-addon) {
-  height: 32px !important;
+  height: var(--control-height) !important;
   font-size: 13px;
 }
 
@@ -1638,7 +1627,7 @@ onBeforeUnmount(() => {
   }
 
   .session-composer__frame {
-    grid-template-columns: 48px minmax(0, 1fr);
+    grid-template-columns: var(--control-height) minmax(0, 1fr);
     width: 100%;
     min-height: 118px;
     padding: 14px;
@@ -1651,8 +1640,8 @@ onBeforeUnmount(() => {
   }
 
   .session-tool-button {
-    width: 42px;
-    height: 42px;
+    width: var(--control-height);
+    height: var(--control-height);
   }
 
   .session-send-button {
@@ -1674,11 +1663,11 @@ onBeforeUnmount(() => {
   .session-toolbar__select,
   .session-toolbar__select--model {
     flex-basis: auto;
-    min-height: 36px;
+    min-height: var(--control-height);
   }
 
   .chat-workbench :deep(.ant-select-selector) {
-    height: 36px !important;
+    height: var(--control-height) !important;
   }
 
   .chat-workbench :deep(.ant-select-selection-search-input),
@@ -1689,7 +1678,7 @@ onBeforeUnmount(() => {
   }
 
   .session-clear-button {
-    height: 36px;
+    height: var(--control-height);
   }
 
   .session-composer__image-size {

@@ -11,11 +11,8 @@
   min-width: 0;
   border: 1px solid rgba(177, 189, 207, 0.32);
   border-radius: var(--radius-container) !important;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(249, 251, 255, 0.98));
-  box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.82) inset,
-    var(--shadow-card);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-card);
   overflow: hidden;
   transition: transform 0.18s ease, box-shadow 0.18s ease;
 }
@@ -30,7 +27,7 @@
   position: absolute;
   inset: 0 auto 0 0;
   width: 4px;
-  background: linear-gradient(180deg, rgba(79, 124, 255, 0.42), rgba(79, 124, 255, 0.1));
+  background: var(--accent);
 }
 
 .gateway-metric-card.ant-card::after {
@@ -40,64 +37,59 @@
   width: 180px;
   height: 180px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(79, 124, 255, 0.12) 0%, rgba(79, 124, 255, 0) 70%);
+  background: transparent;
   pointer-events: none;
   filter: blur(2px);
 }
 
 .gateway-metric-card--primary.ant-card::before {
-  background: linear-gradient(180deg, rgba(79, 124, 255, 0.5), rgba(79, 124, 255, 0.12));
+  background: var(--accent);
 }
 .gateway-metric-card--primary.ant-card::after {
-  background: radial-gradient(circle, rgba(79, 124, 255, 0.16) 0%, rgba(79, 124, 255, 0) 70%);
+  background: transparent;
 }
 .gateway-metric-card--primary.ant-card {
-  background:
-    linear-gradient(180deg, rgba(233, 239, 255, 0.7), rgba(255, 255, 255, 0.95));
+  background: var(--bg-panel);
 }
 
 .gateway-metric-card--success.ant-card::before {
-  background: linear-gradient(180deg, rgba(52, 168, 83, 0.5), rgba(52, 168, 83, 0.12));
+  background: var(--success);
 }
 .gateway-metric-card--success.ant-card::after {
-  background: radial-gradient(circle, rgba(52, 168, 83, 0.16) 0%, rgba(52, 168, 83, 0) 70%);
+  background: transparent;
 }
 .gateway-metric-card--success.ant-card {
-  background:
-    linear-gradient(180deg, rgba(231, 245, 236, 0.75), rgba(255, 255, 255, 0.95));
+  background: var(--bg-panel);
 }
 
 .gateway-metric-card--warning.ant-card::before {
-  background: linear-gradient(180deg, rgba(245, 158, 11, 0.5), rgba(245, 158, 11, 0.1));
+  background: var(--warning);
 }
 .gateway-metric-card--warning.ant-card::after {
-  background: radial-gradient(circle, rgba(245, 158, 11, 0.18) 0%, rgba(245, 158, 11, 0) 70%);
+  background: transparent;
 }
 .gateway-metric-card--warning.ant-card {
-  background:
-    linear-gradient(180deg, rgba(255, 245, 224, 0.7), rgba(255, 255, 255, 0.95));
+  background: var(--bg-panel);
 }
 
 .gateway-metric-card--info.ant-card::before {
-  background: linear-gradient(180deg, rgba(94, 163, 255, 0.5), rgba(94, 163, 255, 0.12));
+  background: var(--info);
 }
 .gateway-metric-card--info.ant-card::after {
-  background: radial-gradient(circle, rgba(94, 163, 255, 0.16) 0%, rgba(94, 163, 255, 0) 70%);
+  background: transparent;
 }
 .gateway-metric-card--info.ant-card {
-  background:
-    linear-gradient(180deg, rgba(230, 241, 255, 0.7), rgba(255, 255, 255, 0.95));
+  background: var(--bg-panel);
 }
 
 .gateway-metric-card--neutral.ant-card::before {
-  background: linear-gradient(180deg, rgba(107, 114, 128, 0.32), rgba(107, 114, 128, 0.08));
+  background: var(--border-strong);
 }
 .gateway-metric-card--neutral.ant-card::after {
-  background: radial-gradient(circle, rgba(107, 114, 128, 0.12) 0%, rgba(107, 114, 128, 0) 70%);
+  background: transparent;
 }
 .gateway-metric-card--neutral.ant-card {
-  background:
-    linear-gradient(180deg, rgba(243, 246, 252, 0.85), rgba(255, 255, 255, 0.96));
+  background: var(--bg-panel);
 }
 
 .gateway-metric-card .ant-card-body {

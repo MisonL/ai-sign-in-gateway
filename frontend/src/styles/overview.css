@@ -8,7 +8,7 @@
 }
 
 .overview-screen {
-  gap: 20px;
+  gap: var(--content-gutter);
   min-width: 0;
 }
 
@@ -23,7 +23,7 @@
 .overview-page-head {
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--rhythm-2);
 }
 
 .overview-page-head h2,
@@ -55,7 +55,7 @@
 .overview-metrics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
+  gap: var(--content-gutter);
 }
 
 .overview-metric-card.ant-card,
@@ -87,12 +87,12 @@
 }
 
 .overview-metric-card--primary.ant-card {
-  background: linear-gradient(180deg, var(--accent-soft), var(--bg-panel)) !important;
+  background: var(--bg-panel) !important;
 }
 
 .overview-metric-card .ant-card-body {
-  gap: 10px;
-  padding: 18px 18px 16px 20px;
+  gap: var(--rhythm-2);
+  padding: var(--rhythm-3);
   position: relative;
   z-index: 1;
 }
@@ -100,7 +100,7 @@
 .overview-metric-card__head {
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--rhythm-2);
 }
 
 .overview-metric-card__icon,
@@ -165,13 +165,13 @@
 .overview-main-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.8fr);
-  gap: 16px;
+  gap: var(--content-gutter);
   align-items: stretch;
   min-width: 0;
 }
 
 .overview-side-stack {
-  gap: 16px;
+  gap: var(--content-gutter);
   min-width: 0;
 }
 
@@ -183,8 +183,8 @@
 .overview-panel__head {
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
-  padding: 18px 20px;
+  gap: var(--rhythm-2);
+  padding: var(--rhythm-3);
   border-bottom: 1px solid var(--border-muted);
 }
 

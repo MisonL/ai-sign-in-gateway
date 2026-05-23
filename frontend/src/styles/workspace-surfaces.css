@@ -143,8 +143,8 @@
   box-shadow: none !important;
 }
 .chat-workbench.chat-workbench .session-attachment button {
-  width: 28px !important;
-  height: 28px !important;
+  width: var(--control-height) !important;
+  height: var(--control-height) !important;
   border-radius: var(--radius-control) !important;
 }
 .chat-workbench.chat-workbench .session-generated-grid img,
@@ -170,9 +170,17 @@
   padding: 0 16px !important;
   border-bottom: 1px solid var(--border-muted) !important;
 }
-.settings-page.settings-page .ant-switch { min-width: 54px !important; height: 28px !important; line-height: 28px !important; }
-.settings-page.settings-page .ant-switch .ant-switch-handle { top: 5px !important; }
-.settings-page.settings-page .ant-switch .ant-switch-inner { line-height: 26px !important; }
+.settings-page.settings-page .ant-switch {
+  min-width: 56px !important;
+  height: var(--control-height) !important;
+  line-height: var(--control-height) !important;
+  border-radius: var(--radius-control) !important;
+}
+.settings-page.settings-page .ant-switch .ant-switch-handle { top: 7px !important; }
+.settings-page.settings-page .ant-switch .ant-switch-inner {
+  min-height: calc(var(--control-height) - 2px) !important;
+  line-height: calc(var(--control-height) - 2px) !important;
+}
 .settings-page.settings-page .card-scroll--padded {
   padding: 16px !important;
 }
@@ -249,7 +257,7 @@
   display: grid !important;
   grid-template-columns: minmax(0, 1fr) !important;
   grid-template-rows: auto auto !important;
-  gap: 16px !important;
+  gap: var(--content-gutter) !important;
 }
 .login-screen.login-screen .capability-list {
   max-width: 760px !important;

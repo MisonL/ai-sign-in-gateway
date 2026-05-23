@@ -48,8 +48,8 @@
   }
 
   .app-sider.ant-layout-sider-collapsed .sider-collapse-button.ant-btn {
-    width: 40px;
-    height: 40px;
+    width: var(--control-height);
+    height: var(--control-height);
   }
 
   .app-content {

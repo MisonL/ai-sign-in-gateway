@@ -43,7 +43,7 @@
   padding: 12px;
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-control);
-  background: linear-gradient(180deg, rgba(37, 99, 235, 0.05), #fff);
+  background: var(--bg-panel);
 }
 
 .summary-metric span {
@@ -75,7 +75,7 @@
 
 .drawer-editor-column {
   display: grid;
-  gap: 16px;
+  gap: var(--content-gutter);
 }
 
 .form-block--sticky {
@@ -89,9 +89,7 @@
 }
 
 .form-block--elevated {
-  background:
-    linear-gradient(180deg, rgba(37, 99, 235, 0.04), rgba(37, 99, 235, 0)),
-    var(--bg-muted);
+  background: var(--bg-muted);
 }
 
 .participation-cell {
@@ -175,11 +173,7 @@
   display: grid;
   place-items: center;
   padding: 20px;
-  background:
-    linear-gradient(#e5eaf0 1px, transparent 1px),
-    linear-gradient(90deg, #e5eaf0 1px, transparent 1px),
-    var(--bg-page);
-  background-size: 24px 24px;
+  background: var(--bg-page);
 }
 
 .login-hero {

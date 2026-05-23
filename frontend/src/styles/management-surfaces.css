@@ -113,7 +113,7 @@
 }
 .gateway-route-page.gateway-route-page .route-pool-filter .ant-input,
 .sites-page.sites-page .sites-list-toolbar__search .ant-input {
-  min-height: 32px !important;
+  min-height: var(--control-height) !important;
 }
 
 .sites-page.sites-page .sites-toolbar__seg-btn.ant-btn,
@@ -216,25 +216,24 @@
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
-  width: 36px !important;
-  height: 36px !important;
+  width: var(--control-height) !important;
+  height: var(--control-height) !important;
 }
 
-.gateway-route-page.gateway-route-page .route-pool-filter-switch.ant-switch,
 .site-editor-modal.site-editor-modal .site-editor-shell .ant-switch {
-  min-width: 54px !important;
-  height: 28px !important;
-  line-height: 28px !important;
+  min-width: 56px !important;
+  height: var(--control-height) !important;
+  line-height: var(--control-height) !important;
+  border-radius: var(--radius-control) !important;
 }
 
-.gateway-route-page.gateway-route-page .route-pool-filter-switch.ant-switch .ant-switch-handle,
 .site-editor-modal.site-editor-modal .site-editor-shell .ant-switch .ant-switch-handle {
-  top: 5px !important;
+  top: 7px !important;
 }
 
-.gateway-route-page.gateway-route-page .route-pool-filter-switch.ant-switch .ant-switch-inner,
 .site-editor-modal.site-editor-modal .site-editor-shell .ant-switch .ant-switch-inner {
-  line-height: 26px !important;
+  min-height: calc(var(--control-height) - 2px) !important;
+  line-height: calc(var(--control-height) - 2px) !important;
 }
 
 .ant-drawer-body .table-fill--management {

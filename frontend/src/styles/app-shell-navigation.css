@@ -211,7 +211,7 @@
 }
 
 .sider-footer__button.ant-btn {
-  height: 36px;
+  height: var(--control-height);
   border-radius: var(--radius-container);
   border-color: var(--border-soft);
   background: var(--bg-panel);
