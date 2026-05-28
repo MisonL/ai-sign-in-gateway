@@ -59,6 +59,8 @@ export type RequestOptions = {
   signal?: AbortSignal
 }
 
+export type GatewayLogStatusFilter = 'all' | 'error' | 'success'
+
 export class ApiError extends Error {
   status: number
 
@@ -783,14 +785,23 @@ export function probeGatewayRoutes(routeIds: number[]): Promise<GatewayRouteProb
   })
 }
 
-export function getGatewayLogs(limit = 80, options: RequestOptions = {}): Promise<GatewayLog[]> {
-  return request(`/gateway-admin/logs?limit=${limit}`, { signal: options.signal })
+export function getGatewayLogs(limit = 80, options: RequestOptions & { status?: GatewayLogStatusFilter } = {}): Promise<GatewayLog[]> {
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (options.status && options.status !== 'all') {
+    params.set('status', options.status)
+  }
+  return request(`/gateway-admin/logs?${params.toString()}`, { signal: options.signal })
 }
 
-export function getGatewayActiveRequests(options: RequestOptions = {}): Promise<GatewayActiveRequest[]> {
-  return request('/gateway-admin/active-requests', { signal: options.signal })
+export function getGatewayActiveRequests(options: RequestOptions & { includeRecent?: boolean } = {}): Promise<GatewayActiveRequest[]> {
+  const query = options.includeRecent ? '?include_recent=true' : ''
+  return request(`/gateway-admin/active-requests${query}`, { signal: options.signal })
 }
 
-export function getGatewayRouteLogs(routeId: number, limit = 80): Promise<GatewayLog[]> {
-  return request(`/gateway-admin/routes/${routeId}/logs?limit=${limit}`)
+export function getGatewayRouteLogs(routeId: number, limit = 80, options: RequestOptions & { status?: GatewayLogStatusFilter } = {}): Promise<GatewayLog[]> {
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (options.status && options.status !== 'all') {
+    params.set('status', options.status)
+  }
+  return request(`/gateway-admin/routes/${routeId}/logs?${params.toString()}`, { signal: options.signal })
 }

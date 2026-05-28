@@ -2,10 +2,14 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -691,6 +695,352 @@ func TestGatewayLogResponseIncludesUserAgent(t *testing.T) {
 	}
 }
 
+func TestGatewayLogsFilterByStatus(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:gateway-logs-status-filter?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(models.All()...); err != nil {
+		t.Fatalf("auto migrate: %v", err)
+	}
+	site := models.Site{Name: "status-filter-site", BaseURL: "https://status-filter.example", PluginKey: "api-supplier", IsEnabled: true}
+	if err := db.Create(&site).Error; err != nil {
+		t.Fatalf("create site: %v", err)
+	}
+	route := models.GatewayRouteState{
+		SiteID:         site.ID,
+		KeyFingerprint: "status-filter-key",
+		KeyName:        "status-filter",
+		RouteType:      "codex",
+		IsEnabled:      true,
+		CircuitState:   "closed",
+	}
+	if err := db.Create(&route).Error; err != nil {
+		t.Fatalf("create route: %v", err)
+	}
+	failureReason := "upstream status filter failed"
+	now := time.Now().UTC().Truncate(time.Second)
+	logs := []models.GatewayRequestLog{
+		{
+			RequestID:      "status-filter-success",
+			RouteStateID:   &route.ID,
+			SiteID:         &site.ID,
+			KeyFingerprint: route.KeyFingerprint,
+			Success:        true,
+			CreatedAt:      now,
+		},
+		{
+			RequestID:      "status-filter-error",
+			RouteStateID:   &route.ID,
+			SiteID:         &site.ID,
+			KeyFingerprint: route.KeyFingerprint,
+			Success:        false,
+			FailureReason:  &failureReason,
+			CreatedAt:      now.Add(time.Second),
+		},
+	}
+	if err := db.Create(&logs).Error; err != nil {
+		t.Fatalf("create logs: %v", err)
+	}
+
+	app := &App{DB: db}
+	rec := httptest.NewRecorder()
+	app.GatewayLogs(rec, httptest.NewRequest(http.MethodGet, "/gateway-admin/logs?status=error", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var response []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(response) != 1 || response[0]["request_id"] != "status-filter-error" {
+		t.Fatalf("error filtered logs = %#v", response)
+	}
+
+	successRec := httptest.NewRecorder()
+	app.GatewayLogs(successRec, httptest.NewRequest(http.MethodGet, "/gateway-admin/logs?status=success", nil))
+	if successRec.Code != http.StatusOK {
+		t.Fatalf("success status = %d body = %s", successRec.Code, successRec.Body.String())
+	}
+	response = nil
+	if err := json.Unmarshal(successRec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode success response: %v", err)
+	}
+	if len(response) != 1 || response[0]["request_id"] != "status-filter-success" {
+		t.Fatalf("success filtered logs = %#v", response)
+	}
+
+	routeRec := httptest.NewRecorder()
+	routeReq := gatewayAdminRequestWithRouteParam(httptest.NewRequest(http.MethodGet, "/gateway-admin/routes/1/logs?status=error", nil), "routeID", strconv.FormatUint(uint64(route.ID), 10))
+	app.GatewayRouteLogs(routeRec, routeReq)
+	if routeRec.Code != http.StatusOK {
+		t.Fatalf("route status = %d body = %s", routeRec.Code, routeRec.Body.String())
+	}
+	response = nil
+	if err := json.Unmarshal(routeRec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode route response: %v", err)
+	}
+	if len(response) != 1 || response[0]["request_id"] != "status-filter-error" {
+		t.Fatalf("route error filtered logs = %#v", response)
+	}
+}
+
+func TestGatewayLogResponseIncludesFailureTransferChain(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:gateway-log-transfer-chain?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(models.All()...); err != nil {
+		t.Fatalf("auto migrate: %v", err)
+	}
+	sites := []models.Site{
+		{Name: "failed-route", BaseURL: "https://failed-route.example", PluginKey: "api-supplier", IsEnabled: true},
+		{Name: "fallback-route", BaseURL: "https://fallback-route.example", PluginKey: "api-supplier", IsEnabled: true},
+	}
+	if err := db.Create(&sites).Error; err != nil {
+		t.Fatalf("create sites: %v", err)
+	}
+	routes := []models.GatewayRouteState{
+		{SiteID: sites[0].ID, KeyFingerprint: "failed-fingerprint", KeyName: "failed-key", RouteType: "codex", IsEnabled: true, CircuitState: "closed"},
+		{SiteID: sites[1].ID, KeyFingerprint: "fallback-fingerprint", KeyName: "fallback-key", RouteType: "codex", IsEnabled: true, CircuitState: "closed"},
+	}
+	if err := db.Create(&routes).Error; err != nil {
+		t.Fatalf("create routes: %v", err)
+	}
+	status := http.StatusInternalServerError
+	reason := "upstream failed token=raw-secret"
+	now := time.Now().UTC().Truncate(time.Second)
+	logs := []models.GatewayRequestLog{
+		{
+			RequestID:      "transfer-chain",
+			RouteStateID:   &routes[0].ID,
+			SiteID:         &sites[0].ID,
+			KeyFingerprint: routes[0].KeyFingerprint,
+			KeyName:        routes[0].KeyName,
+			Method:         http.MethodPost,
+			AttemptIndex:   1,
+			StatusCode:     &status,
+			Success:        false,
+			FailureReason:  &reason,
+			CreatedAt:      now,
+		},
+		{
+			RequestID:      "transfer-chain",
+			RouteStateID:   &routes[1].ID,
+			SiteID:         &sites[1].ID,
+			KeyFingerprint: routes[1].KeyFingerprint,
+			KeyName:        routes[1].KeyName,
+			Method:         http.MethodPost,
+			AttemptIndex:   2,
+			Success:        true,
+			CreatedAt:      now.Add(time.Millisecond),
+		},
+	}
+	if err := db.Create(&logs).Error; err != nil {
+		t.Fatalf("create logs: %v", err)
+	}
+
+	app := &App{DB: db}
+	response := app.gatewayLogResponse([]models.GatewayRequestLog{logs[0]})
+	if len(response) != 1 {
+		t.Fatalf("response length = %d", len(response))
+	}
+	if got := response[0]["related_attempt_count"]; got != 2 {
+		t.Fatalf("related_attempt_count = %#v", got)
+	}
+	transfer, ok := response[0]["transfer_to"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing transfer_to: %#v", response[0]["transfer_to"])
+	}
+	if got := fmt.Sprint(transfer["route_label"]); !strings.Contains(got, "fallback-route") || !strings.Contains(got, "fallback-key") {
+		t.Fatalf("transfer route label = %s", got)
+	}
+	if got := transfer["attempt_index"]; got != 2 {
+		t.Fatalf("transfer attempt_index = %#v", got)
+	}
+	if got := gatewayAdminTestString(response[0]["failure_reason"]); strings.Contains(got, "raw-secret") {
+		t.Fatalf("failure_reason redaction = %s", got)
+	}
+	final, ok := response[0]["final_attempt"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing final_attempt: %#v", response[0]["final_attempt"])
+	}
+	if got := final["success"]; got != true {
+		t.Fatalf("final success = %#v", got)
+	}
+}
+
+func TestGatewayActiveRequestsIncludesPreviousFailureChain(t *testing.T) {
+	services.ResetGatewayCountersForTest()
+	t.Cleanup(services.ResetGatewayCountersForTest)
+	failed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "upstream failed token=active-secret", http.StatusInternalServerError)
+	}))
+	defer failed.Close()
+
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		entered <- struct{}{}
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer fallback.Close()
+
+	db, err := gorm.Open(sqlite.Open("file:gateway-active-failure-chain?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(models.All()...); err != nil {
+		t.Fatalf("auto migrate: %v", err)
+	}
+	if err := db.Create(&models.SystemSetting{ID: 1}).Error; err != nil {
+		t.Fatalf("create settings: %v", err)
+	}
+	sites := []models.Site{
+		{Name: "failed-active", BaseURL: failed.URL, PluginKey: "api-supplier", IsEnabled: true, Credentials: models.JSONMap{"api_key": "failed-key"}, PluginConfig: models.JSONMap{"api_format": "openai"}},
+		{Name: "fallback-active", BaseURL: fallback.URL, PluginKey: "api-supplier", IsEnabled: true, Credentials: models.JSONMap{"api_key": "fallback-key"}, PluginConfig: models.JSONMap{"api_format": "openai"}},
+	}
+	if err := db.Create(&sites).Error; err != nil {
+		t.Fatalf("create sites: %v", err)
+	}
+	if _, err := services.SyncGatewayRoutes(db); err != nil {
+		t.Fatalf("sync routes: %v", err)
+	}
+	var states []models.GatewayRouteState
+	if err := db.Order("site_id asc").Find(&states).Error; err != nil {
+		t.Fatalf("load routes: %v", err)
+	}
+	for idx := range states {
+		states[idx].SupportedModels = services.EncodeGatewaySupportedModels([]string{"gpt-4o"})
+		states[idx].RoutePriority = idx + 1
+		if err := db.Save(&states[idx]).Error; err != nil {
+			t.Fatalf("save route %d: %v", idx, err)
+		}
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodPost, "/api/gateway/v1/chat/completions", strings.NewReader(`{"model":"gpt-4o","messages":[]}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Request-ID", "active-chain")
+		result, err := services.ProxyGatewayRequest(req.Context(), db, req, "chat/completions", "", "", services.GatewayPolicy{
+			RouteStrategy:    "priority",
+			RequestTimeout:   5,
+			FailureRetryMode: "all",
+		})
+		if err == nil && !result.Success {
+			err = errors.New("proxy request failed")
+		}
+		done <- err
+	}()
+
+	select {
+	case <-entered:
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Fatal("proxy returned before fallback request was observed")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for fallback request")
+	}
+
+	app := &App{DB: db}
+	rec := httptest.NewRecorder()
+	app.GatewayActiveRequests(rec, httptest.NewRequest(http.MethodGet, "/gateway-admin/active-requests?include_recent=true", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var response []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(response) < 1 {
+		t.Fatalf("active response = %#v", response)
+	}
+	var active map[string]any
+	for _, item := range response {
+		if item["recent"] != true {
+			active = item
+			break
+		}
+	}
+	if active == nil {
+		t.Fatalf("missing active request: %#v", response)
+	}
+	previous, ok := active["previous_error"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing previous_error: %#v", active)
+	}
+	if got := fmt.Sprint(previous["route_label"]); !strings.Contains(got, "failed-active") {
+		t.Fatalf("previous route label = %s", got)
+	}
+	if got := gatewayAdminTestString(previous["failure_reason"]); strings.Contains(got, "active-secret") || !strings.Contains(got, "upstream failed") {
+		t.Fatalf("previous failure reason = %s", got)
+	}
+	if got := active["related_attempt_count"]; got != float64(2) {
+		t.Fatalf("related_attempt_count = %#v", got)
+	}
+	if got := active["final_attempt"]; got != nil {
+		t.Fatalf("running request final_attempt = %#v", got)
+	}
+
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGatewayAdminResponsesRedactHistoricalFailureSecrets(t *testing.T) {
+	secretReason := "failed token=history-secret cookie=session=history-secret"
+	status := http.StatusUnauthorized
+	app := &App{}
+	logResponse := app.gatewayLogResponse([]models.GatewayRequestLog{
+		{
+			ID:            1,
+			RequestURL:    "https://upstream.example/v1/chat/completions?debug=1&api_key=history-secret&token=history-token",
+			StatusCode:    &status,
+			FailureReason: &secretReason,
+			CreatedAt:     time.Now().UTC(),
+		},
+	})
+	if len(logResponse) != 1 {
+		t.Fatalf("log response length = %d", len(logResponse))
+	}
+	if got := gatewayAdminTestString(logResponse[0]["failure_reason"]); strings.Contains(got, "history-secret") {
+		t.Fatalf("failure_reason leaked secret: %s", got)
+	}
+	if got := fmt.Sprint(logResponse[0]["request_url"]); strings.Contains(got, "history-secret") || strings.Contains(got, "history-token") || !strings.Contains(got, "debug=1") {
+		t.Fatalf("request_url redaction = %s", got)
+	}
+
+	lastError := `{"error":{"message":"bad token=route-history-secret","api_key":"raw-history-secret"}}`
+	route := services.GatewayRoute{
+		State: models.GatewayRouteState{
+			ID:                1,
+			LastError:         &lastError,
+			ModelProbeMessage: lastError,
+		},
+	}
+	routeResponse := gatewayRouteResponse(route)
+	if got := gatewayAdminTestString(routeResponse["last_error"]); strings.Contains(got, "route-history-secret") || strings.Contains(got, "raw-history-secret") {
+		t.Fatalf("last_error leaked secret: %s", got)
+	}
+	if got := fmt.Sprint(routeResponse["model_probe_message"]); strings.Contains(got, "route-history-secret") || strings.Contains(got, "raw-history-secret") {
+		t.Fatalf("model_probe_message leaked secret: %s", got)
+	}
+
+	probeResponse := gatewayProbeResponse(services.GatewayProbeResult{Route: route, Message: lastError})
+	if got := gatewayAdminTestString(probeResponse["last_error"]); strings.Contains(got, "route-history-secret") || strings.Contains(got, "raw-history-secret") {
+		t.Fatalf("probe last_error leaked secret: %s", got)
+	}
+	if got := fmt.Sprint(probeResponse["message"]); strings.Contains(got, "route-history-secret") || strings.Contains(got, "raw-history-secret") {
+		t.Fatalf("probe message leaked secret: %s", got)
+	}
+}
+
 func TestGatewayOverviewIncludesConcurrencyPeaks(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:gateway-overview-concurrency-peaks?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
@@ -814,4 +1164,21 @@ func TestGatewayOverviewStatsAggregateFromDatabase(t *testing.T) {
 	if !ok || usageCost["known_requests"] != float64(3) || usageCost["total_tokens"] != float64(1500) {
 		t.Fatalf("usage_cost_24h = %#v", response["usage_cost_24h"])
 	}
+}
+
+func gatewayAdminTestString(value any) string {
+	switch typed := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return typed
+	default:
+		return fmt.Sprint(typed)
+	}
+}
+
+func gatewayAdminRequestWithRouteParam(req *http.Request, key, value string) *http.Request {
+	routeCtx := chi.NewRouteContext()
+	routeCtx.URLParams.Add(key, value)
+	return req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, routeCtx))
 }

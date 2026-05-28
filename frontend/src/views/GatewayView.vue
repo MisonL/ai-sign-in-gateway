@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { PlusOutlined, CopyOutlined, ReloadOutlined, SettingOutlined, SyncOutlined, InfoCircleOutlined, QuestionCircleOutlined, HistoryOutlined, ToolOutlined, MoreOutlined } from '@ant-design/icons-vue'
+import { PlusOutlined, CopyOutlined, ReloadOutlined, SettingOutlined, SyncOutlined, InfoCircleOutlined, QuestionCircleOutlined, HistoryOutlined, ToolOutlined, MoreOutlined, EyeOutlined } from '@ant-design/icons-vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, type ComponentPublicInstance } from 'vue'
 import {
   createSite,
@@ -157,6 +157,12 @@ const routeDiagnosisLoading = ref(false)
 const routeLogsRoute = ref<GatewayRoute | null>(null)
 const routeDiagnosisOpen = ref(false)
 const includeDisabled = ref(false)
+const logStatusFilter = ref<'all' | 'error' | 'success'>('all')
+const routeLogStatusFilter = ref<'all' | 'error' | 'success'>('all')
+const activityStatusFilter = ref<'all' | 'error'>('all')
+const logsLoading = ref(false)
+const gatewayErrorDetailOpen = ref(false)
+const gatewayErrorDetail = ref<GatewayErrorDetail | null>(null)
 let autoRefreshTimer: number | null = null
 let activeRequestRefreshTimer: number | null = null
 let lastAutoRefreshAt = 0
@@ -298,11 +304,33 @@ const logColumns = [
   { title: '状态', key: 'status', width: 92, sorter: (a: GatewayLog, b: GatewayLog) => Number(a.success) - Number(b.success) },
   { title: '请求', key: 'request', width: 360, sorter: (a: GatewayLog, b: GatewayLog) => logRequestLabel(a).localeCompare(logRequestLabel(b), 'zh-CN') },
   { title: '路由', key: 'route', width: 300, sorter: (a: GatewayLog, b: GatewayLog) => logRouteLabel(a).localeCompare(logRouteLabel(b), 'zh-CN') },
+  { title: '错误链路', key: 'transfer', width: 420 },
   { title: '模型', key: 'model', width: 300, sorter: (a: GatewayLog, b: GatewayLog) => logModelMeta(a).localeCompare(logModelMeta(b), 'zh-CN') },
   { title: 'UA', key: 'user_agent', width: 240, sorter: (a: GatewayLog, b: GatewayLog) => logUserAgent(a).localeCompare(logUserAgent(b), 'zh-CN') },
   { title: '延迟', key: 'latency', width: 100, sorter: (a: GatewayLog, b: GatewayLog) => (a.latency_ms ?? Infinity) - (b.latency_ms ?? Infinity) },
   { title: '尝试', key: 'attempt', width: 90, sorter: (a: GatewayLog, b: GatewayLog) => a.attempt_index - b.attempt_index },
 ]
+
+type GatewayErrorDetailLine = {
+  label: string
+  value: string
+  tone?: 'error' | 'success' | 'info'
+}
+
+type GatewayErrorDetailField = {
+  label: string
+  value: string
+}
+
+type GatewayErrorDetail = {
+  title: string
+  sourceLabel: string
+  statusLabel: string
+  success: boolean
+  lines: GatewayErrorDetailLine[]
+  fields: GatewayErrorDetailField[]
+  fullText: string
+}
 
 const usageColumns = [
   { title: '路由', key: 'route', width: 300, sorter: (a: GatewayUsageRoute, b: GatewayUsageRoute) => usageRouteLabel(a).localeCompare(usageRouteLabel(b), 'zh-CN') },
@@ -863,6 +891,227 @@ function logRouteMeta(log: GatewayLog) {
   return values.join(' · ')
 }
 
+function logAttemptRouteLabel(attempt: GatewayLog['transfer_to'] | GatewayActiveRequest['transfer_to']) {
+  if (!attempt) {
+    return ''
+  }
+  const label = String(attempt.route_label ?? '').trim()
+  if (label) {
+    return label
+  }
+  const parts = [
+    attempt.route_id ? `#${attempt.route_id}` : '',
+    attempt.site_name || (attempt.site_id ? `站点 #${attempt.site_id}` : ''),
+    attempt.key_name,
+  ].filter(Boolean)
+  return parts.join(' · ')
+}
+
+function logAttemptStatusLabel(attempt: GatewayLog['final_attempt'] | GatewayActiveRequest['final_attempt']) {
+  if (!attempt) {
+    return '未记录'
+  }
+  const status = attempt.status_code ? `HTTP ${attempt.status_code}` : ''
+  const result = attempt.success ? '成功' : '失败'
+  return [result, status].filter(Boolean).join(' ')
+}
+
+function logTransferLines(log: GatewayLog) {
+  const lines: GatewayErrorDetailLine[] = []
+  const failureReason = String(log.failure_reason ?? '').trim()
+  if (failureReason) {
+    lines.push({ label: '报错', value: failureReason, tone: 'error' })
+  }
+  if (log.transfer_to) {
+    const route = logAttemptRouteLabel(log.transfer_to) || '未知路由'
+    lines.push({ label: '转移到', value: `${route} · 尝试 ${log.transfer_to.attempt_index} · ${logAttemptStatusLabel(log.transfer_to)}`, tone: log.transfer_to.success ? 'success' : 'info' })
+  }
+  if (log.final_attempt && log.final_attempt.id !== log.id && log.final_attempt.id !== log.transfer_to?.id) {
+    const route = logAttemptRouteLabel(log.final_attempt) || '未知路由'
+    lines.push({ label: '最终', value: `${route} · 尝试 ${log.final_attempt.attempt_index} · ${logAttemptStatusLabel(log.final_attempt)}`, tone: log.final_attempt.success ? 'success' : 'error' })
+  }
+  if (log.previous_error?.failure_reason && log.success) {
+    const route = logAttemptRouteLabel(log.previous_error) || '上一条路由'
+    lines.push({ label: '上次失败', value: `${route} · ${log.previous_error.failure_reason}`, tone: 'error' })
+  }
+  return lines
+}
+
+function activeRequestTransferLines(item: GatewayActiveRequest) {
+  const lines: GatewayErrorDetailLine[] = []
+  const failureReason = String(item.failure_reason ?? '').trim()
+  if (failureReason) {
+    lines.push({ label: '报错', value: failureReason, tone: 'error' })
+  }
+  if (item.previous_error?.failure_reason) {
+    const route = logAttemptRouteLabel(item.previous_error) || '上一条路由'
+    lines.push({ label: '上次失败', value: `${route} · ${item.previous_error.failure_reason}`, tone: 'error' })
+  }
+  if (item.transfer_to) {
+    const route = logAttemptRouteLabel(item.transfer_to) || '未知路由'
+    lines.push({ label: '转移到', value: `${route} · 尝试 ${item.transfer_to.attempt_index} · ${logAttemptStatusLabel(item.transfer_to)}`, tone: item.transfer_to.success ? 'success' : 'info' })
+  }
+  if (item.final_attempt && item.final_attempt.id !== item.transfer_to?.id) {
+    const route = logAttemptRouteLabel(item.final_attempt) || '未知路由'
+    lines.push({ label: '最终', value: `${route} · 尝试 ${item.final_attempt.attempt_index} · ${logAttemptStatusLabel(item.final_attempt)}`, tone: item.final_attempt.success ? 'success' : 'error' })
+  }
+  return lines
+}
+
+function gatewayLogHasErrorDetail(log: GatewayLog) {
+  return !log.success ||
+    Boolean(String(log.failure_reason ?? '').trim()) ||
+    Boolean(String(log.previous_error?.failure_reason ?? '').trim()) ||
+    Boolean(String(log.transfer_to?.failure_reason ?? '').trim()) ||
+    Boolean(String(log.final_attempt?.failure_reason ?? '').trim())
+}
+
+function detailField(label: string, value: string | number | boolean | null | undefined): GatewayErrorDetailField | null {
+  const normalized = String(value ?? '').trim()
+  if (!normalized) {
+    return null
+  }
+  return { label, value: normalized }
+}
+
+function compactDetailFields(fields: Array<GatewayErrorDetailField | null>) {
+  return fields.filter((field): field is GatewayErrorDetailField => Boolean(field))
+}
+
+function gatewayDetailStatus(success: boolean | null | undefined, statusCode: number | null | undefined) {
+  const result = success === true ? '成功' : success === false ? '失败' : '进行中'
+  const status = statusCode ? `HTTP ${statusCode}` : ''
+  return [result, status].filter(Boolean).join(' · ')
+}
+
+function appendAttemptFailureLine(
+  lines: GatewayErrorDetailLine[],
+  label: string,
+  attempt: GatewayLog['final_attempt'] | GatewayActiveRequest['final_attempt'],
+) {
+  const reason = String(attempt?.failure_reason ?? '').trim()
+  if (!attempt || !reason) {
+    return
+  }
+  const route = logAttemptRouteLabel(attempt) || '未知路由'
+  lines.push({
+    label,
+    value: `${route} · 尝试 ${attempt.attempt_index} · ${gatewayDetailStatus(attempt.success, attempt.status_code)}\n${reason}`,
+    tone: 'error',
+  })
+}
+
+function gatewayErrorDetailText(fields: GatewayErrorDetailField[], lines: GatewayErrorDetailLine[]) {
+  const meta = fields.map((field) => `${field.label}: ${field.value}`)
+  const details = lines.map((line) => `[${line.label}]\n${line.value}`)
+  return [...meta, details.length ? ['错误信息', ...details].join('\n\n') : '错误信息\n未记录具体错误原因'].join('\n\n')
+}
+
+function buildLogErrorDetail(log: GatewayLog): GatewayErrorDetail {
+  const lines = [...logTransferLines(log)]
+  appendAttemptFailureLine(lines, '转移错误', log.transfer_to)
+  if (log.final_attempt?.id !== log.transfer_to?.id) {
+    appendAttemptFailureLine(lines, '最终错误', log.final_attempt)
+  }
+  if (!lines.length && !log.success) {
+    lines.push({ label: '报错', value: '未记录具体错误原因', tone: 'error' })
+  }
+  const fields = compactDetailFields([
+    detailField('请求 ID', log.request_id),
+    detailField('状态', gatewayDetailStatus(log.success, log.status_code)),
+    detailField('路由', logRouteLabel(log)),
+    detailField('站点', log.site_name || (log.site_id ? `#${log.site_id}` : '')),
+    detailField('Key', log.key_name || shortFingerprint(log.key_fingerprint)),
+    detailField('分组', formatGroupNames(log.group_name)),
+    detailField('请求', logRequestLabel(log)),
+    detailField('模型', logModelMeta(log)),
+    detailField('策略', strategyLabel(log.route_strategy as GatewayStrategyStat['route_strategy'])),
+    detailField('尝试', log.attempt_index),
+    detailField('延迟', log.latency_ms !== null ? `${log.latency_ms} ms` : ''),
+    detailField('User-Agent', logUserAgent(log)),
+    detailField('记录时间', formatTime(log.created_at)),
+  ])
+  return {
+    title: logRouteLabel(log),
+    sourceLabel: '最近请求',
+    statusLabel: gatewayDetailStatus(log.success, log.status_code),
+    success: log.success,
+    lines,
+    fields,
+    fullText: gatewayErrorDetailText(fields, lines),
+  }
+}
+
+function buildActiveErrorDetail(item: GatewayActiveRequest): GatewayErrorDetail {
+  const lines = [...activeRequestTransferLines(item)]
+  appendAttemptFailureLine(lines, '转移错误', item.transfer_to)
+  if (item.final_attempt?.id !== item.transfer_to?.id) {
+    appendAttemptFailureLine(lines, '最终错误', item.final_attempt)
+  }
+  if (!lines.length && item.success === false) {
+    lines.push({ label: '报错', value: '未记录具体错误原因', tone: 'error' })
+  }
+  const fields = compactDetailFields([
+    detailField('请求 ID', item.request_id),
+    detailField('状态', gatewayDetailStatus(item.success ?? null, item.status_code ?? null)),
+    detailField('路由', activeRequestRouteLabel(item)),
+    detailField('站点', item.site_name || (item.site_id ? `#${item.site_id}` : '')),
+    detailField('Key', item.key_name || shortFingerprint(item.key_fingerprint)),
+    detailField('分组', formatGroupNames(item.group_name)),
+    detailField('请求', `${item.method} ${activeRequestURL(item)}`),
+    detailField('模型', `请求 ${String(item.requested_model || '').trim() || '未声明'} / 命中 ${String(item.actual_model || item.requested_model || '').trim() || '待返回'}`),
+    detailField('策略', strategyLabel(item.route_strategy as GatewayStrategyStat['route_strategy'])),
+    detailField('尝试', item.attempt_index),
+    detailField('耗时', formatElapsed(item.elapsed_ms)),
+    detailField('开始时间', formatTime(item.started_at)),
+    detailField('完成时间', item.finished_at ? formatTime(item.finished_at) : ''),
+  ])
+  return {
+    title: activeRequestRouteLabel(item),
+    sourceLabel: item.recent ? '实时调用 · 刚完成' : '实时调用',
+    statusLabel: gatewayDetailStatus(item.success ?? null, item.status_code ?? null),
+    success: item.success === true,
+    lines,
+    fields,
+    fullText: gatewayErrorDetailText(fields, lines),
+  }
+}
+
+function openLogErrorDetail(log: GatewayLog) {
+  gatewayErrorDetail.value = buildLogErrorDetail(log)
+  gatewayErrorDetailOpen.value = true
+}
+
+function openActiveErrorDetail(item: GatewayActiveRequest) {
+  gatewayErrorDetail.value = buildActiveErrorDetail(item)
+  gatewayErrorDetailOpen.value = true
+}
+
+function openGatewayActivityErrorDetail(item: {
+  sourceLog?: GatewayLog
+  sourceActive?: GatewayActiveRequest
+}) {
+  if (item.sourceLog) {
+    openLogErrorDetail(item.sourceLog)
+    return
+  }
+  if (item.sourceActive) {
+    openActiveErrorDetail(item.sourceActive)
+  }
+}
+
+async function copyGatewayErrorDetail() {
+  if (!gatewayErrorDetail.value?.fullText) {
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(gatewayErrorDetail.value.fullText)
+    toast.success('错误详情已复制。')
+  } catch {
+    toast.error('复制失败，请手动复制。')
+  }
+}
+
 function logRequestedModel(log: GatewayLog) {
   return String(log.requested_model || log.model || '').trim() || '未声明'
 }
@@ -969,7 +1218,8 @@ function formatElapsed(ms: number | null | undefined) {
 const activeRouteFeed = computed(() =>
   activeRequests.value.map((item) => ({
     ...item,
-    kind: 'active',
+    sourceActive: item,
+    kind: item.recent ? 'recent' : 'active',
     label: activeRequestRouteLabel(item),
     meta: activeRequestMeta(item),
     elapsedLabel: formatElapsed(item.elapsed_ms),
@@ -981,19 +1231,26 @@ const activeRouteFeed = computed(() =>
     requestURL: activeRequestURL(item),
     targetLabel: `${item.method} ${activeRequestURL(item)}`,
     strategyLabel: strategyLabel(item.route_strategy as GatewayStrategyStat['route_strategy']),
-    primaryBadge: `并发 ${item.active_concurrency}`,
-    primaryBadgeColor: 'processing',
+    primaryBadge: item.recent ? '刚完成' : `并发 ${item.active_concurrency}`,
+    primaryBadgeColor: item.recent ? 'default' : 'processing',
     secondaryBadge: formatElapsed(item.elapsed_ms),
     attemptLabel: `尝试 ${item.attempt_index}`,
-    timeLabel: `开始 ${formatTime(item.started_at)}`,
+    timeLabel: item.recent && item.finished_at ? `完成 ${formatTime(item.finished_at)}` : `开始 ${formatTime(item.started_at)}`,
+    transferLines: activeRequestTransferLines(item),
   })),
 )
 
 const recentRouteFeed = computed(() =>
   logs.value.slice(0, 8).map((item) => ({
     id: `log-${item.id}`,
+    sourceLog: item,
     kind: 'completed',
     label: logRouteLabel(item),
+    success: item.success,
+    failure_reason: item.failure_reason,
+    previous_error: item.previous_error,
+    transfer_to: item.transfer_to,
+    final_attempt: item.final_attempt,
     meta: [
       item.route_id ? `Route #${item.route_id}` : 'Route 未知',
       item.site_id ? `站点 #${item.site_id}` : '',
@@ -1013,11 +1270,42 @@ const recentRouteFeed = computed(() =>
     secondaryBadge: item.latency_ms !== null ? `${item.latency_ms} ms` : '暂无延迟',
     attemptLabel: `尝试 ${item.attempt_index}`,
     timeLabel: `完成 ${formatTime(item.created_at)}`,
+    transferLines: logTransferLines(item),
     is_stream: item.is_stream,
   })),
 )
 
-const routeActivityFeed = computed(() => [...activeRouteFeed.value, ...recentRouteFeed.value].slice(0, 12))
+function gatewayActivityHasErrorDetail(item: {
+  success?: boolean | null
+  failure_reason?: string | null
+  previous_error?: { failure_reason?: string | null } | null
+  transfer_to?: { failure_reason?: string | null } | null
+  final_attempt?: { failure_reason?: string | null } | null
+  transferLines?: GatewayErrorDetailLine[]
+}) {
+  if (item.success === false) {
+    return true
+  }
+  if (String(item.failure_reason ?? '').trim()) {
+    return true
+  }
+  if (String(item.previous_error?.failure_reason ?? '').trim()) {
+    return true
+  }
+  if (String(item.transfer_to?.failure_reason ?? '').trim()) {
+    return true
+  }
+  if (String(item.final_attempt?.failure_reason ?? '').trim()) {
+    return true
+  }
+  return Boolean(item.transferLines?.some((line) => line.tone === 'error'))
+}
+
+const routeActivityFeed = computed(() =>
+  [...activeRouteFeed.value, ...recentRouteFeed.value]
+    .filter((item) => activityStatusFilter.value === 'all' || gatewayActivityHasErrorDetail(item))
+    .slice(0, 12),
+)
 
 function balanceClass(balance: number | null | undefined) {
   const tone = balanceTone(balance)
@@ -1154,6 +1442,7 @@ const filteredRoutes = computed(() => {
 const filteredLogs = computed(() => {
   const keyword = logSearch.value.trim().toLowerCase()
   return logs.value.filter((log) =>
+    logMatchesStatus(log, logStatusFilter.value) &&
     includesSearch(
       [
         log.site_name,
@@ -1170,6 +1459,9 @@ const filteredLogs = computed(() => {
         log.user_agent,
         log.method,
         log.failure_reason,
+        log.previous_error?.failure_reason,
+        log.transfer_to?.failure_reason,
+        log.final_attempt?.failure_reason,
         log.route_strategy,
       ],
       keyword,
@@ -1180,6 +1472,7 @@ const filteredLogs = computed(() => {
 const filteredRouteLogs = computed(() => {
   const keyword = routeLogSearch.value.trim().toLowerCase()
   return routeLogs.value.filter((log) =>
+    logMatchesStatus(log, routeLogStatusFilter.value) &&
     includesSearch(
       [
         log.site_name,
@@ -1196,12 +1489,25 @@ const filteredRouteLogs = computed(() => {
         log.user_agent,
         log.method,
         log.failure_reason,
+        log.previous_error?.failure_reason,
+        log.transfer_to?.failure_reason,
+        log.final_attempt?.failure_reason,
         log.route_strategy,
       ],
       keyword,
     ),
   )
 })
+
+function logMatchesStatus(log: GatewayLog, status: 'all' | 'error' | 'success') {
+  if (status === 'error') {
+    return !log.success
+  }
+  if (status === 'success') {
+    return log.success
+  }
+  return true
+}
 
 const activeRouteFilterCount = computed(() =>
   selectedGroups.value.length +
@@ -1484,7 +1790,7 @@ async function loadActiveRequests(silent = false) {
   const controller = new AbortController()
   activeRequestsController = controller
   try {
-    const snapshot = await getGatewayActiveRequests({ signal: controller.signal })
+    const snapshot = await getGatewayActiveRequests({ includeRecent: true, signal: controller.signal })
     if (!mounted || controller.signal.aborted) {
       return
     }
@@ -1504,6 +1810,32 @@ async function loadActiveRequests(silent = false) {
   }
 }
 
+async function reloadGatewayLogs() {
+  logsLoading.value = true
+  try {
+    logs.value = await getGatewayLogs(120, { status: logStatusFilter.value })
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '最近请求加载失败')
+  } finally {
+    logsLoading.value = false
+  }
+}
+
+async function reloadRouteLogs() {
+  if (!routeLogsRoute.value) {
+    return
+  }
+  routeLogsLoading.value = true
+  try {
+    routeLogs.value = await getGatewayRouteLogs(routeLogsRoute.value.id, 120, { status: routeLogStatusFilter.value })
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '路由请求历史加载失败')
+    routeLogs.value = []
+  } finally {
+    routeLogsLoading.value = false
+  }
+}
+
 async function loadData() {
   loadDataController?.abort()
   const controller = new AbortController()
@@ -1515,14 +1847,14 @@ async function loadData() {
       getGatewayOverview({ signal: controller.signal }),
       getGatewaySettings({ signal: controller.signal }),
       getGatewayRoutes({ includeDisabled: includeDisabled.value, signal: controller.signal }),
-      loadLogs ? getGatewayLogs(80, { signal: controller.signal }) : Promise.resolve([] as GatewayLog[]),
+      loadLogs ? getGatewayLogs(80, { signal: controller.signal, status: logStatusFilter.value }) : Promise.resolve([] as GatewayLog[]),
       getSiteGroups({ signal: controller.signal }),
       isGatewayMonitor.value && !gatewayUsage.value ? getGatewayUsage({
         start: datetimeLocalToISOString(usageRange.start),
         end: datetimeLocalToISOString(usageRange.end),
         signal: controller.signal,
       }) : Promise.resolve(gatewayUsage.value),
-      isGatewayMonitor.value ? getGatewayActiveRequests({ signal: controller.signal }) : Promise.resolve([] as GatewayActiveRequest[]),
+      isGatewayMonitor.value ? getGatewayActiveRequests({ includeRecent: true, signal: controller.signal }) : Promise.resolve([] as GatewayActiveRequest[]),
     ])
     if (!mounted || controller.signal.aborted) {
       return
@@ -1572,7 +1904,7 @@ async function refreshRealtimeData() {
     const [overviewData, routeData, logData] = await Promise.all([
       getGatewayOverview({ signal: controller.signal }),
       getGatewayRoutes({ includeDisabled: includeDisabled.value, signal: controller.signal }),
-      loadLogs ? getGatewayLogs(80, { signal: controller.signal }) : Promise.resolve(logs.value),
+      loadLogs ? getGatewayLogs(80, { signal: controller.signal, status: logStatusFilter.value }) : Promise.resolve(logs.value),
     ])
     if (!mounted || controller.signal.aborted) {
       return
@@ -2020,7 +2352,7 @@ async function openRouteLogs(route: GatewayRoute) {
   routeLogSearch.value = ''
   routeLogsLoading.value = true
   try {
-    routeLogs.value = await getGatewayRouteLogs(route.id, 120)
+    routeLogs.value = await getGatewayRouteLogs(route.id, 120, { status: routeLogStatusFilter.value })
   } catch (err) {
     toast.error(err instanceof Error ? err.message : '路由请求历史加载失败')
     routeLogs.value = []
@@ -2318,16 +2650,22 @@ onBeforeUnmount(() => {
                 <div>
                   <div class="gateway-panel__title">实时调用</div>
                 </div>
-                <span class="gateway-active-feed-panel__pulse" :class="{ 'gateway-active-feed-panel__pulse--active': activeRouteFeed.length > 0 }">
-                  {{ activeRouteFeed.length > 0 ? '运行中' : '空闲' }}
-                </span>
+                <a-space size="small" wrap>
+                  <a-radio-group v-model:value="activityStatusFilter" button-style="solid" size="small">
+                    <a-radio-button value="all">全部</a-radio-button>
+                    <a-radio-button value="error">有错误</a-radio-button>
+                  </a-radio-group>
+                  <span class="gateway-active-feed-panel__pulse" :class="{ 'gateway-active-feed-panel__pulse--active': activeRouteFeed.length > 0 }">
+                    {{ activeRouteFeed.length > 0 ? '运行中' : '空闲' }}
+                  </span>
+                </a-space>
               </div>
               <div v-if="routeActivityFeed.length" class="gateway-active-feed gateway-active-feed--embedded">
                 <div
                   v-for="item in routeActivityFeed"
                   :key="item.id"
                   class="gateway-active-feed__item"
-                  :class="{ 'gateway-active-feed__item--completed': item.kind === 'completed' }"
+                  :class="{ 'gateway-active-feed__item--completed': item.kind === 'completed' || item.kind === 'recent' }"
                 >
                   <div class="gateway-active-feed__rail">
                     <span class="gateway-active-feed__dot" />
@@ -2362,6 +2700,34 @@ onBeforeUnmount(() => {
                       <span>{{ item.strategyLabel }}</span>
                       <span>{{ item.attemptLabel }}</span>
                     </div>
+                    <div v-if="item.transferLines.length || gatewayActivityHasErrorDetail(item)" class="gateway-active-feed__errors">
+                      <div
+                        v-for="line in item.transferLines"
+                        :key="`${item.id}:${line.label}:${line.value}`"
+                        class="gateway-active-feed__error-line"
+                      >
+                        <a-tag
+                          class="gateway-active-feed__error-tag"
+                          :color="line.tone === 'error' ? 'error' : line.tone === 'success' ? 'success' : 'processing'"
+                        >
+                          {{ line.label }}
+                        </a-tag>
+                        <a-tooltip :title="line.value" placement="topLeft">
+                          <span class="table-ellipsis gateway-active-feed__error-text">{{ line.value }}</span>
+                        </a-tooltip>
+                      </div>
+                      <a-button
+                        v-if="gatewayActivityHasErrorDetail(item)"
+                        class="gateway-active-feed__detail"
+                        type="text"
+                        size="small"
+                        title="查看完整错误信息"
+                        @click="openGatewayActivityErrorDetail(item)"
+                      >
+                        <template #icon><EyeOutlined /></template>
+                        详情
+                      </a-button>
+                    </div>
                     <div class="gateway-active-feed__meta">
                       <span v-for="meta in item.meta" :key="meta">{{ meta }}</span>
                       <span>{{ item.timeLabel }}</span>
@@ -2369,7 +2735,7 @@ onBeforeUnmount(() => {
                   </div>
                 </div>
               </div>
-              <a-empty v-else description="等待网关请求进入路由池。" />
+              <a-empty v-else :description="activityStatusFilter === 'error' ? '暂无带错误信息的网关请求。' : '等待网关请求进入路由池。'" />
             </section>
 
             <section class="gateway-panel gateway-panel--route-status">
@@ -3152,20 +3518,27 @@ onBeforeUnmount(() => {
         width="min(1280px, 100vw)"
         placement="right"
       >
-        <a-input
-          v-model:value="logSearch"
-          allow-clear
-          placeholder="搜索路由 / 路径 / 失败原因"
-          style="margin-bottom: 12px"
-        />
+        <div class="gateway-log-filter-row">
+          <a-radio-group v-model:value="logStatusFilter" button-style="solid" size="small" @change="reloadGatewayLogs">
+            <a-radio-button value="all">全部</a-radio-button>
+            <a-radio-button value="error">失败</a-radio-button>
+            <a-radio-button value="success">成功</a-radio-button>
+          </a-radio-group>
+          <a-input
+            v-model:value="logSearch"
+            allow-clear
+            placeholder="搜索路由 / 路径 / 失败原因"
+          />
+        </div>
         <div class="table-fill table-fill--management table-fill--drawer">
           <a-table
             :columns="logColumns"
             :data-source="filteredLogs"
+            :loading="logsLoading"
             :pagination="{ pageSize: gatewayTablePageSize }"
             :row-key="logRowKey"
             size="small"
-            :scroll="{ x: 1600, y: drawerTableY }"
+            :scroll="{ x: 2020, y: drawerTableY }"
           >
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'created_at'">
@@ -3193,6 +3566,39 @@ onBeforeUnmount(() => {
                       <InfoCircleOutlined class="table-info-icon" />
                     </a-tooltip>
                   </div>
+                </div>
+              </template>
+              <template v-else-if="column.key === 'transfer'">
+                <div class="gateway-log-transfer-cell">
+                  <div v-if="logTransferLines(asLog(record)).length" class="gateway-log-transfer">
+                    <div
+                      v-for="line in logTransferLines(asLog(record))"
+                      :key="`${line.label}:${line.value}`"
+                      class="gateway-log-transfer__line"
+                    >
+                      <a-tag
+                        class="gateway-log-transfer__tag"
+                        :color="line.tone === 'error' ? 'error' : line.tone === 'success' ? 'success' : 'processing'"
+                      >
+                        {{ line.label }}
+                      </a-tag>
+                      <a-tooltip :title="line.value" placement="topLeft">
+                        <span class="table-ellipsis gateway-log-transfer__text">{{ line.value }}</span>
+                      </a-tooltip>
+                    </div>
+                  </div>
+                  <span v-else class="muted-inline">无转移</span>
+                  <a-button
+                    v-if="gatewayLogHasErrorDetail(asLog(record))"
+                    class="gateway-log-transfer__detail"
+                    type="link"
+                    size="small"
+                    title="查看完整错误信息"
+                    @click="openLogErrorDetail(asLog(record))"
+                  >
+                    <template #icon><EyeOutlined /></template>
+                    详情
+                  </a-button>
                 </div>
               </template>
               <template v-else-if="column.key === 'model'">
@@ -3223,12 +3629,18 @@ onBeforeUnmount(() => {
         width="min(1280px, 100vw)"
         placement="right"
       >
-        <a-input
-          v-model:value="routeLogSearch"
-          allow-clear
-          placeholder="搜索路径 / 失败原因 / 路由"
-          style="margin-bottom: 12px"
-        />
+        <div class="gateway-log-filter-row">
+          <a-radio-group v-model:value="routeLogStatusFilter" button-style="solid" size="small" @change="reloadRouteLogs">
+            <a-radio-button value="all">全部</a-radio-button>
+            <a-radio-button value="error">失败</a-radio-button>
+            <a-radio-button value="success">成功</a-radio-button>
+          </a-radio-group>
+          <a-input
+            v-model:value="routeLogSearch"
+            allow-clear
+            placeholder="搜索路径 / 失败原因 / 路由"
+          />
+        </div>
         <div class="table-fill table-fill--management table-fill--drawer">
           <a-table
             :columns="logColumns"
@@ -3237,7 +3649,7 @@ onBeforeUnmount(() => {
             :pagination="{ pageSize: gatewayTablePageSize }"
             :row-key="logRowKey"
             size="small"
-            :scroll="{ x: 1600, y: drawerTableY }"
+            :scroll="{ x: 2020, y: drawerTableY }"
           >
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'created_at'">
@@ -3267,6 +3679,39 @@ onBeforeUnmount(() => {
                   </div>
                 </div>
               </template>
+              <template v-else-if="column.key === 'transfer'">
+                <div class="gateway-log-transfer-cell">
+                  <div v-if="logTransferLines(asLog(record)).length" class="gateway-log-transfer">
+                    <div
+                      v-for="line in logTransferLines(asLog(record))"
+                      :key="`${line.label}:${line.value}`"
+                      class="gateway-log-transfer__line"
+                    >
+                      <a-tag
+                        class="gateway-log-transfer__tag"
+                        :color="line.tone === 'error' ? 'error' : line.tone === 'success' ? 'success' : 'processing'"
+                      >
+                        {{ line.label }}
+                      </a-tag>
+                      <a-tooltip :title="line.value" placement="topLeft">
+                        <span class="table-ellipsis gateway-log-transfer__text">{{ line.value }}</span>
+                      </a-tooltip>
+                    </div>
+                  </div>
+                  <span v-else class="muted-inline">无转移</span>
+                  <a-button
+                    v-if="gatewayLogHasErrorDetail(asLog(record))"
+                    class="gateway-log-transfer__detail"
+                    type="link"
+                    size="small"
+                    title="查看完整错误信息"
+                    @click="openLogErrorDetail(asLog(record))"
+                  >
+                    <template #icon><EyeOutlined /></template>
+                    详情
+                  </a-button>
+                </div>
+              </template>
               <template v-else-if="column.key === 'model'">
                 <a-tooltip :title="logModelMeta(asLog(record))" placement="topLeft">
                   <span class="gateway-log-model-line">{{ logModelMeta(asLog(record)) }}</span>
@@ -3286,6 +3731,53 @@ onBeforeUnmount(() => {
               </template>
             </template>
           </a-table>
+        </div>
+      </a-drawer>
+
+      <a-drawer
+        v-model:open="gatewayErrorDetailOpen"
+        title="错误详情"
+        width="min(960px, 100vw)"
+        placement="right"
+      >
+        <div v-if="gatewayErrorDetail" class="gateway-error-detail">
+          <div class="gateway-error-detail__head">
+            <div class="gateway-error-detail__title">
+              <strong>{{ gatewayErrorDetail.title }}</strong>
+              <span>{{ gatewayErrorDetail.sourceLabel }}</span>
+            </div>
+            <a-space size="small" wrap>
+              <a-tag :color="gatewayErrorDetail.success ? 'success' : 'error'">{{ gatewayErrorDetail.statusLabel }}</a-tag>
+              <a-button size="small" @click="copyGatewayErrorDetail">
+                <template #icon><CopyOutlined /></template>
+                复制
+              </a-button>
+            </a-space>
+          </div>
+          <div class="gateway-error-detail__meta">
+            <div
+              v-for="field in gatewayErrorDetail.fields"
+              :key="`${field.label}:${field.value}`"
+              class="gateway-error-detail__meta-item"
+            >
+              <span>{{ field.label }}</span>
+              <strong>{{ field.value }}</strong>
+            </div>
+          </div>
+          <div class="gateway-error-detail__lines">
+            <div
+              v-for="line in gatewayErrorDetail.lines"
+              :key="`${line.label}:${line.value}`"
+              class="gateway-error-detail__line"
+            >
+              <a-tag :color="line.tone === 'error' ? 'error' : line.tone === 'success' ? 'success' : 'processing'">{{ line.label }}</a-tag>
+              <pre>{{ line.value }}</pre>
+            </div>
+          </div>
+          <div class="gateway-error-detail__raw">
+            <span>完整错误文本</span>
+            <pre>{{ gatewayErrorDetail.fullText }}</pre>
+          </div>
         </div>
       </a-drawer>
 
@@ -3389,6 +3881,153 @@ onBeforeUnmount(() => {
 .gateway-log-method {
   flex: 0 0 auto;
   margin-inline-end: 0;
+}
+
+.gateway-log-transfer {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.gateway-log-transfer-cell {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.gateway-log-transfer__line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.gateway-log-transfer__tag {
+  flex: 0 0 auto;
+  min-width: 56px;
+  margin-inline-end: 0;
+  text-align: center;
+}
+
+.gateway-log-transfer__text {
+  color: #24334d;
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.gateway-log-transfer__detail {
+  justify-self: start;
+  padding-inline: 0;
+}
+
+.gateway-log-filter-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.gateway-error-detail {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.gateway-error-detail__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.gateway-error-detail__title {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.gateway-error-detail__title strong {
+  color: #172033;
+  font-size: 16px;
+  line-height: 1.3;
+}
+
+.gateway-error-detail__title span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.gateway-error-detail__meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+}
+
+.gateway-error-detail__meta-item {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 12px;
+  background: rgba(248, 251, 255, 0.9);
+}
+
+.gateway-error-detail__meta-item span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.gateway-error-detail__meta-item strong {
+  min-width: 0;
+  color: #172033;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.gateway-error-detail__lines {
+  display: grid;
+  gap: 10px;
+}
+
+.gateway-error-detail__line {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid rgba(248, 113, 113, 0.18);
+  border-radius: 12px;
+  background: rgba(255, 248, 248, 0.92);
+}
+
+.gateway-error-detail__line pre,
+.gateway-error-detail__raw pre {
+  margin: 0;
+  color: #24334d;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.gateway-error-detail__raw {
+  display: grid;
+  gap: 8px;
+}
+
+.gateway-error-detail__raw span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.muted-inline {
+  color: #94a3b8;
 }
 
 .gateway-log-model-line {
@@ -3926,6 +4565,38 @@ onBeforeUnmount(() => {
   font-family: 'IBM Plex Mono', monospace;
   font-size: 12px;
   font-weight: 600;
+}
+
+.gateway-active-feed__errors {
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.gateway-active-feed__error-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.gateway-active-feed__error-tag {
+  flex: 0 0 auto;
+  min-width: 56px;
+  margin-inline-end: 0;
+  text-align: center;
+}
+
+.gateway-active-feed__error-text {
+  color: #b42318;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.gateway-active-feed__detail {
+  flex: 0 0 auto;
+  height: 24px;
+  padding-inline: 4px;
 }
 
 .gateway-log-request-url {
@@ -4949,13 +5620,23 @@ onBeforeUnmount(() => {
     flex-direction: column;
   }
 
+  .gateway-log-filter-row {
+    grid-template-columns: 1fr;
+  }
+
+  .gateway-error-detail__head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   .gateway-active-feed__main {
     grid-template-columns: 1fr;
     align-items: start;
   }
 
   .gateway-active-feed__request,
-  .gateway-active-feed__meta {
+  .gateway-active-feed__meta,
+  .gateway-active-feed__errors {
     flex-wrap: wrap;
   }
 

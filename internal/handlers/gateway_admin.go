@@ -1160,7 +1160,14 @@ func (a *App) GatewayRoutes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) GatewayActiveRequests(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, services.ListGatewayActiveRequests())
+	includeRecent := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("include_recent")), "true")
+	items := services.ListGatewayActiveRequestsWithRecent(includeRecent)
+	out, err := a.gatewayActiveRequestResponse(items)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (a *App) ReorderGatewayRoutePriorities(w http.ResponseWriter, r *http.Request) {
@@ -1202,7 +1209,8 @@ func (a *App) GatewayLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var logs []models.GatewayRequestLog
-	if err := a.DB.Preload("Site").Order("created_at desc").Limit(limit).Find(&logs).Error; err != nil {
+	query := applyGatewayLogStatusFilter(a.DB.Preload("Site"), gatewayLogStatusFilter(r.URL.Query().Get("status")))
+	if err := query.Order("created_at desc").Limit(limit).Find(&logs).Error; err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -1222,74 +1230,507 @@ func (a *App) GatewayRouteLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var logs []models.GatewayRequestLog
-	if err := a.DB.Preload("Site").Where("route_state_id = ?", uint(routeID)).Order("created_at desc").Limit(limit).Find(&logs).Error; err != nil {
+	query := applyGatewayLogStatusFilter(a.DB.Preload("Site").Where("route_state_id = ?", uint(routeID)), gatewayLogStatusFilter(r.URL.Query().Get("status")))
+	if err := query.Order("created_at desc").Limit(limit).Find(&logs).Error; err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, a.gatewayLogResponse(logs))
 }
 
-func (a *App) gatewayLogResponse(logs []models.GatewayRequestLog) []map[string]any {
+func gatewayLogStatusFilter(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "error", "failed", "failure", "fail":
+		return "error"
+	case "success", "ok", "successful":
+		return "success"
+	default:
+		return ""
+	}
+}
+
+func applyGatewayLogStatusFilter(query *gorm.DB, status string) *gorm.DB {
+	switch status {
+	case "error":
+		return query.Where("success = ?", false)
+	case "success":
+		return query.Where("success = ?", true)
+	default:
+		return query
+	}
+}
+
+func (a *App) gatewayActiveRequestResponse(items []services.GatewayActiveRequest) ([]map[string]any, error) {
+	logs, err := a.gatewayActiveRelatedLogs(items)
+	if err != nil {
+		return nil, err
+	}
 	routeByID, routeBySiteKey := a.gatewayLogRouteLookup(logs)
-	out := make([]map[string]any, 0, len(logs))
-	for _, item := range logs {
-		var siteName *string
-		if item.Site != nil {
-			siteName = &item.Site.Name
+	sequences := gatewayLogAttemptSequences(logs)
+	out := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		chain := gatewayActiveAttemptChain(item, sequences[item.RequestID], routeByID, routeBySiteKey)
+		out = append(out, map[string]any{
+			"id":                    item.ID,
+			"request_id":            item.RequestID,
+			"route_id":              item.RouteID,
+			"site_id":               item.SiteID,
+			"route_label":           item.RouteLabel,
+			"site_name":             item.SiteName,
+			"key_name":              item.KeyName,
+			"key_fingerprint":       item.KeyFingerprint,
+			"group_name":            item.GroupName,
+			"target_path":           item.TargetPath,
+			"request_url":           item.RequestURL,
+			"method":                item.Method,
+			"route_strategy":        item.RouteStrategy,
+			"attempt_index":         item.AttemptIndex,
+			"is_stream":             item.IsStream,
+			"route_type":            item.RouteType,
+			"requested_model":       item.RequestedModel,
+			"actual_model":          item.ActualModel,
+			"request_base_url":      item.RequestBaseURL,
+			"active_concurrency":    item.ActiveConcurrency,
+			"started_at":            item.StartedAt,
+			"elapsed_ms":            item.ElapsedMS,
+			"finished_at":           item.FinishedAt,
+			"recent":                item.Recent,
+			"success":               item.Success,
+			"status_code":           item.StatusCode,
+			"failure_kind":          item.FailureKind,
+			"failure_reason":        item.FailureReason,
+			"related_attempt_count": chain.RelatedAttemptCount,
+			"transfer_to":           chain.TransferTo,
+			"final_attempt":         chain.FinalAttempt,
+			"previous_error":        chain.PreviousError,
+		})
+	}
+	return out, nil
+}
+
+func (a *App) gatewayActiveRelatedLogs(items []services.GatewayActiveRequest) ([]models.GatewayRequestLog, error) {
+	requestIDSet := map[string]bool{}
+	for _, item := range items {
+		if requestID := strings.TrimSpace(item.RequestID); requestID != "" {
+			requestIDSet[requestID] = true
 		}
-		routeState, routeMatched := models.GatewayRouteState{}, false
-		if item.RouteStateID != nil {
-			routeState, routeMatched = routeByID[*item.RouteStateID]
+	}
+	if len(requestIDSet) == 0 || a.DB == nil {
+		return nil, nil
+	}
+	requestIDs := make([]string, 0, len(requestIDSet))
+	for requestID := range requestIDSet {
+		requestIDs = append(requestIDs, requestID)
+	}
+	sort.Strings(requestIDs)
+	var logs []models.GatewayRequestLog
+	if err := a.DB.Preload("Site").
+		Where("request_id IN ?", requestIDs).
+		Order("request_id asc, attempt_index asc, created_at asc, id asc").
+		Find(&logs).Error; err != nil {
+		return nil, err
+	}
+	return logs, nil
+}
+
+func gatewayActiveAttemptChain(
+	item services.GatewayActiveRequest,
+	sequences [][]models.GatewayRequestLog,
+	routeByID map[uint]models.GatewayRouteState,
+	routeBySiteKey map[string]models.GatewayRouteState,
+) gatewayLogAttemptChain {
+	if strings.TrimSpace(item.RequestID) == "" {
+		return gatewayLogAttemptChain{}
+	}
+	itemAttempt := normalizedAttemptIndex(item.AttemptIndex)
+	for _, sequence := range sequences {
+		if !gatewayActiveSequenceContains(sequence, item, itemAttempt) {
+			continue
 		}
-		if !routeMatched && item.SiteID != nil {
-			routeState, routeMatched = routeBySiteKey[gatewayLogRouteKey(*item.SiteID, item.KeyFingerprint)]
+		virtualSequence := gatewayActiveSequenceWithItem(sequence, item)
+		chains := map[uint]gatewayLogAttemptChain{}
+		addGatewayLogAttemptSequence(chains, virtualSequence, routeByID, routeBySiteKey)
+		chain := chains[0]
+		if item.FinishedAt == nil {
+			chain.FinalAttempt = nil
 		}
-		routeID := item.RouteStateID
-		if routeMatched {
-			id := routeState.ID
-			routeID = &id
-			if siteName == nil {
-				label := services.GatewayRouteSiteLabel(services.GatewayRoute{State: routeState, Site: routeState.Site})
-				siteName = &label
+		return chain
+	}
+	if item.FinishedAt == nil && itemAttempt > 1 {
+		return gatewayLogAttemptChain{
+			RelatedAttemptCount: itemAttempt,
+			PreviousError:       gatewayActivePreviousErrorFromSequences(item, sequences, routeByID, routeBySiteKey),
+		}
+	}
+	return gatewayLogAttemptChain{}
+}
+
+func gatewayActiveSequenceContains(sequence []models.GatewayRequestLog, item services.GatewayActiveRequest, itemAttempt int) bool {
+	if len(sequence) == 0 {
+		return false
+	}
+	if item.FinishedAt == nil {
+		last := sequence[len(sequence)-1]
+		delta := item.StartedAt.Sub(last.CreatedAt)
+		return normalizedAttemptIndex(last.AttemptIndex) < itemAttempt && delta >= -time.Second && delta < 5*time.Minute
+	}
+	for _, log := range sequence {
+		if gatewayLogMatchesActiveRequest(log, item, itemAttempt) {
+			return true
+		}
+	}
+	return false
+}
+
+func gatewayActiveSequenceWithItem(sequence []models.GatewayRequestLog, item services.GatewayActiveRequest) []models.GatewayRequestLog {
+	out := append([]models.GatewayRequestLog{}, sequence...)
+	if item.FinishedAt == nil {
+		out = append(out, gatewayLogFromActiveRequest(item))
+		return out
+	}
+	for idx, log := range out {
+		if gatewayLogMatchesActiveRequest(log, item, normalizedAttemptIndex(item.AttemptIndex)) {
+			merged := mergeGatewayLogWithActiveRequest(log, item)
+			merged.ID = 0
+			out[idx] = merged
+			return out
+		}
+	}
+	out = append(out, gatewayLogFromActiveRequest(item))
+	return out
+}
+
+func gatewayActivePreviousErrorFromSequences(
+	item services.GatewayActiveRequest,
+	sequences [][]models.GatewayRequestLog,
+	routeByID map[uint]models.GatewayRouteState,
+	routeBySiteKey map[string]models.GatewayRouteState,
+) map[string]any {
+	itemAttempt := normalizedAttemptIndex(item.AttemptIndex)
+	var previous *models.GatewayRequestLog
+	for _, sequence := range sequences {
+		for idx := range sequence {
+			log := sequence[idx]
+			delta := item.StartedAt.Sub(log.CreatedAt)
+			if normalizedAttemptIndex(log.AttemptIndex) >= itemAttempt || delta < -time.Second || delta >= 5*time.Minute {
+				continue
+			}
+			if !log.Success {
+				candidate := log
+				previous = &candidate
 			}
 		}
+	}
+	if previous == nil {
+		return nil
+	}
+	return gatewayLogAttemptSummary(*previous, routeByID, routeBySiteKey)
+}
+
+func gatewayLogMatchesActiveRequest(log models.GatewayRequestLog, item services.GatewayActiveRequest, itemAttempt int) bool {
+	if normalizedAttemptIndex(log.AttemptIndex) != itemAttempt {
+		return false
+	}
+	if log.RouteStateID != nil && *log.RouteStateID != item.RouteID {
+		return false
+	}
+	if log.RouteStateID == nil && item.RouteID != 0 {
+		return false
+	}
+	if item.FinishedAt != nil {
+		delta := log.CreatedAt.Sub(*item.FinishedAt)
+		return delta > -2*time.Second && delta < 2*time.Second
+	}
+	delta := log.CreatedAt.Sub(item.StartedAt)
+	return delta > -2*time.Second && delta < 2*time.Second
+}
+
+func gatewayLogFromActiveRequest(item services.GatewayActiveRequest) models.GatewayRequestLog {
+	siteID := item.SiteID
+	routeID := item.RouteID
+	log := models.GatewayRequestLog{
+		RequestID:      item.RequestID,
+		RouteStateID:   &routeID,
+		SiteID:         &siteID,
+		KeyFingerprint: item.KeyFingerprint,
+		KeyName:        item.KeyName,
+		GroupName:      item.GroupName,
+		Model:          item.RequestedModel,
+		RequestedModel: item.RequestedModel,
+		ActualModel:    firstNonEmpty(item.ActualModel, item.RequestedModel),
+		RouteType:      item.RouteType,
+		TargetPath:     item.TargetPath,
+		RequestURL:     item.RequestURL,
+		Method:         item.Method,
+		RouteStrategy:  item.RouteStrategy,
+		AttemptIndex:   normalizedAttemptIndex(item.AttemptIndex),
+		StatusCode:     item.StatusCode,
+		Success:        item.Success != nil && *item.Success,
+		FailureReason:  item.FailureReason,
+		IsStream:       item.IsStream,
+		CreatedAt:      item.StartedAt,
+		Site:           &models.Site{ID: item.SiteID, Name: item.SiteName},
+	}
+	if item.FinishedAt != nil {
+		log.CreatedAt = *item.FinishedAt
+	}
+	return log
+}
+
+func mergeGatewayLogWithActiveRequest(log models.GatewayRequestLog, item services.GatewayActiveRequest) models.GatewayRequestLog {
+	if item.Success != nil {
+		log.Success = *item.Success
+	}
+	if item.StatusCode != nil {
+		log.StatusCode = item.StatusCode
+	}
+	if item.FailureReason != nil && strings.TrimSpace(*item.FailureReason) != "" {
+		log.FailureReason = item.FailureReason
+	}
+	if strings.TrimSpace(item.ActualModel) != "" {
+		log.ActualModel = item.ActualModel
+	}
+	return log
+}
+
+func (a *App) gatewayLogResponse(logs []models.GatewayRequestLog) []map[string]any {
+	attemptLogs, err := a.gatewayRelatedRequestLogs(logs)
+	if err != nil {
+		attemptLogs = logs
+	}
+	routeByID, routeBySiteKey := a.gatewayLogRouteLookup(attemptLogs)
+	attempts := gatewayLogAttemptIndex(attemptLogs, routeByID, routeBySiteKey)
+	out := make([]map[string]any, 0, len(logs))
+	for _, item := range logs {
+		routeState, routeMatched, routeID, siteName := gatewayLogRouteInfo(item, routeByID, routeBySiteKey)
+		chain := attempts[item.ID]
 		out = append(out, map[string]any{
-			"id":                   item.ID,
-			"request_id":           item.RequestID,
-			"route_id":             routeID,
-			"route_label":          gatewayLogRouteLabel(item, routeState, routeMatched, siteName),
-			"site_id":              item.SiteID,
-			"site_name":            siteName,
-			"key_name":             item.KeyName,
-			"key_fingerprint":      item.KeyFingerprint,
-			"group_name":           item.GroupName,
-			"route_type":           gatewayLogRouteType(item, routeState, routeMatched),
-			"target_path":          item.TargetPath,
-			"request_url":          item.RequestURL,
-			"user_agent":           item.UserAgent,
-			"method":               item.Method,
-			"route_strategy":       item.RouteStrategy,
-			"attempt_index":        item.AttemptIndex,
-			"status_code":          item.StatusCode,
-			"success":              item.Success,
-			"latency_ms":           item.LatencyMS,
-			"prompt_tokens":        item.PromptTokens,
-			"cached_input_tokens":  item.CachedInputTokens,
-			"cache_read_tokens":    item.CacheReadTokens,
-			"cache_write_tokens":   item.CacheWriteTokens,
-			"completion_tokens":    item.CompletionTokens,
-			"total_tokens":         item.TotalTokens,
-			"usage_cost":           item.UsageCost,
-			"model":                item.Model,
-			"requested_model":      firstNonEmpty(item.RequestedModel, item.Model),
-			"actual_model":         firstNonEmpty(item.ActualModel, item.RequestedModel, item.Model),
-			"circuit_state_before": item.CircuitStateBefore,
-			"failure_reason":       item.FailureReason,
-			"is_stream":            item.IsStream,
-			"created_at":           item.CreatedAt,
+			"id":                    item.ID,
+			"request_id":            item.RequestID,
+			"route_id":              routeID,
+			"route_label":           gatewayLogRouteLabel(item, routeState, routeMatched, siteName),
+			"site_id":               item.SiteID,
+			"site_name":             siteName,
+			"key_name":              item.KeyName,
+			"key_fingerprint":       item.KeyFingerprint,
+			"group_name":            item.GroupName,
+			"route_type":            gatewayLogRouteType(item, routeState, routeMatched),
+			"target_path":           item.TargetPath,
+			"request_url":           services.RedactGatewayURL(item.RequestURL),
+			"user_agent":            item.UserAgent,
+			"method":                item.Method,
+			"route_strategy":        item.RouteStrategy,
+			"attempt_index":         item.AttemptIndex,
+			"status_code":           item.StatusCode,
+			"success":               item.Success,
+			"latency_ms":            item.LatencyMS,
+			"prompt_tokens":         item.PromptTokens,
+			"cached_input_tokens":   item.CachedInputTokens,
+			"cache_read_tokens":     item.CacheReadTokens,
+			"cache_write_tokens":    item.CacheWriteTokens,
+			"completion_tokens":     item.CompletionTokens,
+			"total_tokens":          item.TotalTokens,
+			"usage_cost":            item.UsageCost,
+			"model":                 item.Model,
+			"requested_model":       firstNonEmpty(item.RequestedModel, item.Model),
+			"actual_model":          firstNonEmpty(item.ActualModel, item.RequestedModel, item.Model),
+			"circuit_state_before":  item.CircuitStateBefore,
+			"failure_reason":        redactedStringPtr(item.FailureReason),
+			"is_stream":             item.IsStream,
+			"created_at":            item.CreatedAt,
+			"related_attempt_count": chain.RelatedAttemptCount,
+			"transfer_to":           chain.TransferTo,
+			"final_attempt":         chain.FinalAttempt,
+			"previous_error":        chain.PreviousError,
 		})
 	}
 	return out
+}
+
+func (a *App) gatewayRelatedRequestLogs(logs []models.GatewayRequestLog) ([]models.GatewayRequestLog, error) {
+	requestIDSet := map[string]bool{}
+	for _, item := range logs {
+		if requestID := strings.TrimSpace(item.RequestID); requestID != "" {
+			requestIDSet[requestID] = true
+		}
+	}
+	if len(requestIDSet) == 0 || a.DB == nil {
+		return logs, nil
+	}
+	requestIDs := make([]string, 0, len(requestIDSet))
+	for requestID := range requestIDSet {
+		requestIDs = append(requestIDs, requestID)
+	}
+	sort.Strings(requestIDs)
+	var related []models.GatewayRequestLog
+	if err := a.DB.Preload("Site").
+		Where("request_id IN ?", requestIDs).
+		Order("request_id asc, attempt_index asc, created_at asc, id asc").
+		Find(&related).Error; err != nil {
+		return nil, err
+	}
+	return related, nil
+}
+
+type gatewayLogAttemptChain struct {
+	RelatedAttemptCount int
+	TransferTo          map[string]any
+	FinalAttempt        map[string]any
+	PreviousError       map[string]any
+}
+
+func gatewayLogAttemptIndex(
+	logs []models.GatewayRequestLog,
+	routeByID map[uint]models.GatewayRouteState,
+	routeBySiteKey map[string]models.GatewayRouteState,
+) map[uint]gatewayLogAttemptChain {
+	out := map[uint]gatewayLogAttemptChain{}
+	for _, sequences := range gatewayLogAttemptSequences(logs) {
+		for _, sequence := range sequences {
+			addGatewayLogAttemptSequence(out, sequence, routeByID, routeBySiteKey)
+		}
+	}
+	return out
+}
+
+func gatewayLogAttemptSequences(logs []models.GatewayRequestLog) map[string][][]models.GatewayRequestLog {
+	grouped := map[string][]models.GatewayRequestLog{}
+	for _, item := range logs {
+		requestID := strings.TrimSpace(item.RequestID)
+		if requestID == "" {
+			continue
+		}
+		grouped[requestID] = append(grouped[requestID], item)
+	}
+	out := map[string][][]models.GatewayRequestLog{}
+	for requestID, items := range grouped {
+		sort.SliceStable(items, func(i, j int) bool {
+			leftAttempt := normalizedAttemptIndex(items[i].AttemptIndex)
+			rightAttempt := normalizedAttemptIndex(items[j].AttemptIndex)
+			if leftAttempt != rightAttempt {
+				return leftAttempt < rightAttempt
+			}
+			if !items[i].CreatedAt.Equal(items[j].CreatedAt) {
+				return items[i].CreatedAt.Before(items[j].CreatedAt)
+			}
+			return items[i].ID < items[j].ID
+		})
+		out[requestID] = splitGatewayLogAttemptSequences(items)
+	}
+	return out
+}
+
+func splitGatewayLogAttemptSequences(items []models.GatewayRequestLog) [][]models.GatewayRequestLog {
+	sequences := make([][]models.GatewayRequestLog, 0, 1)
+	current := make([]models.GatewayRequestLog, 0, len(items))
+	lastAttempt := 0
+	for _, item := range items {
+		attempt := normalizedAttemptIndex(item.AttemptIndex)
+		if len(current) > 0 && attempt <= lastAttempt {
+			sequences = append(sequences, current)
+			current = make([]models.GatewayRequestLog, 0, len(items))
+		}
+		current = append(current, item)
+		lastAttempt = attempt
+	}
+	if len(current) > 0 {
+		sequences = append(sequences, current)
+	}
+	return sequences
+}
+
+func addGatewayLogAttemptSequence(
+	out map[uint]gatewayLogAttemptChain,
+	items []models.GatewayRequestLog,
+	routeByID map[uint]models.GatewayRouteState,
+	routeBySiteKey map[string]models.GatewayRouteState,
+) {
+	var previousError map[string]any
+	for idx, item := range items {
+		chain := gatewayLogAttemptChain{RelatedAttemptCount: len(items)}
+		if !item.Success && idx+1 < len(items) {
+			chain.TransferTo = gatewayLogAttemptSummary(items[idx+1], routeByID, routeBySiteKey)
+		}
+		if len(items) > 1 {
+			chain.FinalAttempt = gatewayLogAttemptSummary(items[len(items)-1], routeByID, routeBySiteKey)
+		}
+		chain.PreviousError = previousError
+		out[item.ID] = chain
+		if !item.Success {
+			previousError = gatewayLogAttemptSummary(item, routeByID, routeBySiteKey)
+		}
+	}
+}
+
+func gatewayLogAttemptSummary(
+	item models.GatewayRequestLog,
+	routeByID map[uint]models.GatewayRouteState,
+	routeBySiteKey map[string]models.GatewayRouteState,
+) map[string]any {
+	routeState, routeMatched, routeID, siteName := gatewayLogRouteInfo(item, routeByID, routeBySiteKey)
+	return map[string]any{
+		"id":              item.ID,
+		"request_id":      item.RequestID,
+		"route_id":        routeID,
+		"route_label":     gatewayLogRouteLabel(item, routeState, routeMatched, siteName),
+		"site_id":         item.SiteID,
+		"site_name":       siteName,
+		"key_name":        item.KeyName,
+		"key_fingerprint": item.KeyFingerprint,
+		"route_type":      gatewayLogRouteType(item, routeState, routeMatched),
+		"target_path":     item.TargetPath,
+		"request_url":     services.RedactGatewayURL(item.RequestURL),
+		"method":          item.Method,
+		"attempt_index":   normalizedAttemptIndex(item.AttemptIndex),
+		"status_code":     item.StatusCode,
+		"success":         item.Success,
+		"failure_reason":  redactedStringPtr(item.FailureReason),
+		"created_at":      item.CreatedAt,
+	}
+}
+
+func redactedStringPtr(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	redacted := services.RedactGatewayText(*value)
+	return &redacted
+}
+
+func gatewayLogRouteInfo(
+	item models.GatewayRequestLog,
+	routeByID map[uint]models.GatewayRouteState,
+	routeBySiteKey map[string]models.GatewayRouteState,
+) (models.GatewayRouteState, bool, *uint, *string) {
+	var siteName *string
+	if item.Site != nil {
+		name := item.Site.Name
+		siteName = &name
+	}
+	routeState, routeMatched := models.GatewayRouteState{}, false
+	if item.RouteStateID != nil {
+		routeState, routeMatched = routeByID[*item.RouteStateID]
+	}
+	if !routeMatched && item.SiteID != nil {
+		routeState, routeMatched = routeBySiteKey[gatewayLogRouteKey(*item.SiteID, item.KeyFingerprint)]
+	}
+	routeID := item.RouteStateID
+	if routeMatched {
+		id := routeState.ID
+		routeID = &id
+		if siteName == nil {
+			label := services.GatewayRouteSiteLabel(services.GatewayRoute{State: routeState, Site: routeState.Site})
+			siteName = &label
+		}
+	}
+	return routeState, routeMatched, routeID, siteName
+}
+
+func normalizedAttemptIndex(value int) int {
+	if value <= 0 {
+		return 1
+	}
+	return value
 }
 
 func (a *App) gatewayLogRouteLookup(logs []models.GatewayRequestLog) (map[uint]models.GatewayRouteState, map[string]models.GatewayRouteState) {
@@ -1877,7 +2318,7 @@ func gatewayRouteResponse(route services.GatewayRoute) map[string]any {
 		"route_path_manual":        state.RoutePathManual,
 		"supported_models":         services.GatewayRouteSupportedModels(state),
 		"model_probe_status":       state.ModelProbeStatus,
-		"model_probe_message":      state.ModelProbeMessage,
+		"model_probe_message":      services.RedactGatewayText(state.ModelProbeMessage),
 		"model_probe_updated_at":   state.ModelProbeUpdatedAt,
 		"route_priority":           state.RoutePriority,
 		"route_priority_manual":    state.RoutePriorityManual,
@@ -1895,7 +2336,7 @@ func gatewayRouteResponse(route services.GatewayRoute) map[string]any {
 		"last_latency_ms":          state.LastLatencyMS,
 		"success_rate":             successRate,
 		"last_status_code":         state.LastStatusCode,
-		"last_error":               state.LastError,
+		"last_error":               redactedStringPtr(state.LastError),
 		"last_used_at":             state.LastUsedAt,
 		"last_success_at":          state.LastSuccessAt,
 		"last_failure_at":          state.LastFailureAt,
@@ -1909,7 +2350,7 @@ func gatewayRouteResponse(route services.GatewayRoute) map[string]any {
 
 func gatewayProbeResponse(result services.GatewayProbeResult) map[string]any {
 	state := result.Route.State
-	return map[string]any{"id": state.ID, "site_id": state.SiteID, "site_name": services.GatewayRouteSiteLabel(result.Route), "request_base_url": result.Route.RequestBaseURL, "key_name": state.KeyName, "key_fingerprint": state.KeyFingerprint, "ok": result.OK, "status_code": result.StatusCode, "latency_ms": result.LatencyMS, "message": result.Message, "models": result.Models, "supported_models": services.GatewayRouteSupportedModels(state), "model_probe_status": state.ModelProbeStatus, "model_probe_message": state.ModelProbeMessage, "model_probe_updated_at": state.ModelProbeUpdatedAt, "last_status_code": state.LastStatusCode, "last_error": state.LastError, "last_latency_ms": state.LastLatencyMS, "last_success_at": state.LastSuccessAt, "last_failure_at": state.LastFailureAt, "checked_at": result.CheckedAt}
+	return map[string]any{"id": state.ID, "site_id": state.SiteID, "site_name": services.GatewayRouteSiteLabel(result.Route), "request_base_url": result.Route.RequestBaseURL, "key_name": state.KeyName, "key_fingerprint": state.KeyFingerprint, "ok": result.OK, "status_code": result.StatusCode, "latency_ms": result.LatencyMS, "message": services.RedactGatewayText(result.Message), "models": result.Models, "supported_models": services.GatewayRouteSupportedModels(state), "model_probe_status": state.ModelProbeStatus, "model_probe_message": services.RedactGatewayText(state.ModelProbeMessage), "model_probe_updated_at": state.ModelProbeUpdatedAt, "last_status_code": state.LastStatusCode, "last_error": redactedStringPtr(state.LastError), "last_latency_ms": state.LastLatencyMS, "last_success_at": state.LastSuccessAt, "last_failure_at": state.LastFailureAt, "checked_at": result.CheckedAt}
 }
 
 func normalizeGatewayRouteType(value string) string {
