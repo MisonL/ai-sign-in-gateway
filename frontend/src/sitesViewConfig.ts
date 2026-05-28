@@ -1,22 +1,10 @@
 import type { ColumnsType } from 'ant-design-vue/es/table'
+import type { CCSwitchPreviewRow } from './sitesViewModel'
 import type { CheckinRun, DuplicateSiteGroup, SettingsData, Site } from './types'
 
 type SelectOption<T extends string> = {
   label: string
   value: T
-}
-
-export type CCSwitchPreviewRow = {
-  key: string
-  sectionKey: string
-  app: string
-  order: number
-  isCurrent: boolean
-  name: string
-  website: string
-  apiKeyStatus: string
-  hasAuth: boolean
-  note: string
 }
 
 export const emailPatternExamples = [

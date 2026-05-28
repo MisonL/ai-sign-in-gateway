@@ -126,6 +126,7 @@ async function handleDelete(name: string) {
             v-model:value="newName"
             placeholder="输入新的分组名称"
             autocomplete="off"
+            aria-label="新增分组名称"
             @press-enter="handleCreate"
           />
           <a-button type="primary" :loading="loading" @click="handleCreate">新增</a-button>
@@ -147,6 +148,7 @@ async function handleDelete(name: string) {
                 v-model:value="editingDraft"
                 size="small"
                 autocomplete="off"
+                aria-label="编辑分组名称"
                 @press-enter="handleRename"
               />
               <a-button size="small" type="primary" :loading="loading" @click="handleRename">保存</a-button>

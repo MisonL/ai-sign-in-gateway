@@ -159,7 +159,7 @@
   font-weight: 700;
 }
 
-.site-editor-switch-item :deep(.ant-form-item-control-input) {
+.site-editor-switch-item .ant-form-item-control-input {
   min-height: auto;
 }
 
@@ -213,7 +213,7 @@
   backdrop-filter: none;
 }
 
-.site-editor-modal__footer :deep(.ant-space) {
+.site-editor-modal__footer .ant-space {
   width: 100%;
   justify-content: flex-end;
 }

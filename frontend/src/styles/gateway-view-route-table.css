@@ -46,8 +46,8 @@
   max-width: 180px;
 }
 
-.route-pool-filter :deep(.ant-select-selector),
-.route-pool-filter :deep(.ant-input) {
+.route-pool-filter .ant-select-selector,
+.route-pool-filter .ant-input {
   min-width: 0;
 }
 
@@ -57,7 +57,12 @@
   white-space: nowrap;
 }
 
-.route-type-select :deep(.ant-select-selector) {
+.route-pool-clear.ant-btn {
+  min-width: max-content !important;
+  padding-inline: 10px !important;
+}
+
+.route-type-select .ant-select-selector {
   border-color: rgba(148, 163, 184, 0.28) !important;
   color: #24334d !important;
   font-weight: 700;
@@ -69,27 +74,27 @@
   line-height: 18px;
 }
 
-.route-type-select :deep(.ant-select-selection-item),
-.route-type-select :deep(.ant-select-arrow) {
+.route-type-select .ant-select-selection-item,
+.route-type-select .ant-select-arrow {
   color: inherit !important;
 }
 
-.route-type-select--claude :deep(.ant-select-selector) {
+.route-type-select--claude .ant-select-selector {
   background: #fff7ed !important;
   color: #c2410c !important;
 }
 
-.route-type-select--gpt :deep(.ant-select-selector) {
+.route-type-select--gpt .ant-select-selector {
   background: #ecfdf5 !important;
   color: #047857 !important;
 }
 
-.route-type-select--codex :deep(.ant-select-selector) {
+.route-type-select--codex .ant-select-selector {
   background: #eff6ff !important;
   color: #1d4ed8 !important;
 }
 
-.route-type-select--gemini :deep(.ant-select-selector) {
+.route-type-select--gemini .ant-select-selector {
   background: #ecfeff !important;
   color: #0e7490 !important;
 }
@@ -248,7 +253,7 @@
 
 .gateway-latency__value {
   font-weight: 600;
-  letter-spacing: 0.01em;
+  letter-spacing: 0;
 }
 
 .gateway-latency--low {

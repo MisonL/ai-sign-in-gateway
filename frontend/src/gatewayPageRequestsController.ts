@@ -1,0 +1,53 @@
+import {
+  createSite,
+  diagnoseGatewayRoute,
+  disableAllGatewayRoutes,
+  enableOnlyGatewayRoute,
+  getGatewayActiveRequests,
+  getGatewayLogs,
+  getGatewayOverview,
+  getGatewayRouteLogs,
+  getGatewayRoutes,
+  getGatewaySettings,
+  getGatewayUsage,
+  getSiteGroups,
+  isAbortError,
+  probeGatewayRoute,
+  probeGatewayRouteBalance,
+  refreshSiteSummaries,
+  reorderGatewayRoutePriorities,
+  resetGatewayRouteCircuit,
+  syncGatewayRoutes,
+  toggleGatewayRoute,
+  updateGatewayRouteType,
+  updateGatewaySettings,
+} from './api.ts'
+
+export function createGatewayPageRequests() {
+  return {
+    createSite,
+    diagnoseGatewayRoute,
+    disableAllGatewayRoutes,
+    enableOnlyGatewayRoute,
+    getGatewayActiveRequests,
+    getGatewayLogs,
+    getGatewayOverview,
+    getGatewayRouteLogs,
+    getGatewayRoutes,
+    getGatewaySettings,
+    getGatewayUsage,
+    getSiteGroups,
+    isAbortError,
+    probeGatewayRoute,
+    probeGatewayRouteBalance,
+    refreshSiteSummaries,
+    reorderGatewayRoutePriorities,
+    resetGatewayRouteCircuit,
+    syncGatewayRoutes,
+    toggleGatewayRoute,
+    updateGatewayRouteType,
+    updateGatewaySettings,
+  }
+}
+
+export type GatewayPageRequests = ReturnType<typeof createGatewayPageRequests>

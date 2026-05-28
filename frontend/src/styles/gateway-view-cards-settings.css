@@ -14,7 +14,7 @@
   pointer-events: none;
 }
 
-.gateway-metric-card :deep(.ant-card-body) {
+.gateway-metric-card .ant-card-body {
   position: relative;
   z-index: 1;
   display: grid;
@@ -30,9 +30,9 @@
 
 .gateway-metric-card__value {
   color: #172033;
-  font-size: clamp(2rem, 2vw, 2.4rem);
+  font-size: 36px;
   font-weight: 800;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
   line-height: 1;
 }
 
@@ -127,13 +127,14 @@
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  flex: 1 1 320px;
   min-width: 0;
   max-width: min(100%, 980px);
 }
 
 .gateway-access code {
   display: block;
-  flex: 0 1 auto;
+  flex: 1 1 180px;
   min-width: 0;
   overflow: hidden;
   padding: 7px 12px;

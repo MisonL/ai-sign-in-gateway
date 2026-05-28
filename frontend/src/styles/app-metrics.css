@@ -30,23 +30,8 @@
   background: var(--accent);
 }
 
-.gateway-metric-card.ant-card::after {
-  content: '';
-  position: absolute;
-  inset: -40% -30% auto auto;
-  width: 180px;
-  height: 180px;
-  border-radius: 50%;
-  background: transparent;
-  pointer-events: none;
-  filter: blur(2px);
-}
-
 .gateway-metric-card--primary.ant-card::before {
   background: var(--accent);
-}
-.gateway-metric-card--primary.ant-card::after {
-  background: transparent;
 }
 .gateway-metric-card--primary.ant-card {
   background: var(--bg-panel);
@@ -55,18 +40,12 @@
 .gateway-metric-card--success.ant-card::before {
   background: var(--success);
 }
-.gateway-metric-card--success.ant-card::after {
-  background: transparent;
-}
 .gateway-metric-card--success.ant-card {
   background: var(--bg-panel);
 }
 
 .gateway-metric-card--warning.ant-card::before {
   background: var(--warning);
-}
-.gateway-metric-card--warning.ant-card::after {
-  background: transparent;
 }
 .gateway-metric-card--warning.ant-card {
   background: var(--bg-panel);
@@ -75,18 +54,12 @@
 .gateway-metric-card--info.ant-card::before {
   background: var(--info);
 }
-.gateway-metric-card--info.ant-card::after {
-  background: transparent;
-}
 .gateway-metric-card--info.ant-card {
   background: var(--bg-panel);
 }
 
 .gateway-metric-card--neutral.ant-card::before {
   background: var(--border-strong);
-}
-.gateway-metric-card--neutral.ant-card::after {
-  background: transparent;
 }
 .gateway-metric-card--neutral.ant-card {
   background: var(--bg-panel);
@@ -106,12 +79,12 @@
   font-size: 12px;
   font-weight: 600;
   line-height: 1.2;
-  letter-spacing: 0.02em;
+  letter-spacing: 0;
 }
 
 .gateway-metric-card__value {
   color: var(--text-main);
-  font-size: clamp(1.15rem, 1.3vw, 1.55rem);
+  font-size: 22px;
   font-weight: 700;
   line-height: 1.05;
   overflow-wrap: anywhere;

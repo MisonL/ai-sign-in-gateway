@@ -1,16 +1,33 @@
-@media (max-width: 1200px) {
-  .route-pool-filters,
-  .sites-list-toolbar {
+@media (max-width: 1500px) {
+  .route-pool-filters {
     align-items: stretch !important;
+    flex-wrap: wrap !important;
+  }
+
+  .route-pool-type-tabs {
+    width: 100%;
   }
 
   .route-pool-searchbar {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    width: 100%;
+    min-width: 0;
   }
 
   .route-pool-filter-switch,
   .route-pool-clear {
     width: 100%;
+  }
+
+  .route-pool-filter-switch.ant-switch {
+    justify-self: stretch;
+  }
+}
+
+@media (max-width: 1200px) {
+  .sites-list-toolbar {
+    align-items: stretch !important;
   }
 
   .sites-list-toolbar {
@@ -44,6 +61,8 @@
   .route-pool-searchbar,
   .sites-list-toolbar {
     grid-template-columns: 1fr !important;
+    width: 100%;
+    min-width: 0;
   }
 
   .sites-list-toolbar__meta {

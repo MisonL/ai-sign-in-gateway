@@ -1,5 +1,4 @@
-.chat-workbench.chat-workbench,
-.desktop-console.desktop-console,
+.chat-workbench.chat-workbench, .desktop-console.desktop-console,
 .login-screen.login-screen {
   color: var(--text-main) !important;
   background: var(--bg-page) !important;
@@ -30,13 +29,7 @@
   box-shadow: var(--shadow-card) !important;
   backdrop-filter: none !important;
 }
-.login-screen.login-screen::before,
-.login-screen.login-screen::after,
-.login-screen.login-screen .login-card::before,
-.login-screen.login-screen .login-card__glow,
-.login-screen.login-screen .gateway-visual,
-.login-screen.login-screen .metric-panel,
-.desktop-console.desktop-console .summary-tile::after {
+.login-screen.login-screen .metric-panel, .desktop-console.desktop-console .summary-tile::after {
   display: none !important;
   content: none !important;
 }
@@ -70,7 +63,7 @@
 }
 .chat-workbench.chat-workbench .session-empty__copy h1,
 .login-screen.login-screen .login-copy h1 {
-  font-size: clamp(28px, 3vw, 38px) !important;
+  font-size: 32px !important;
   line-height: 1.16 !important;
 }
 .chat-workbench.chat-workbench .session-empty__copy p,
@@ -169,6 +162,8 @@
   margin: 0 !important;
   padding: 0 16px !important;
   border-bottom: 1px solid var(--border-muted) !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
 }
 .settings-page.settings-page .ant-switch {
   min-width: 56px !important;
@@ -180,6 +175,14 @@
 .settings-page.settings-page .ant-switch .ant-switch-inner {
   min-height: calc(var(--control-height) - 2px) !important;
   line-height: calc(var(--control-height) - 2px) !important;
+}
+.settings-page.settings-page .ant-switch-inner,
+.settings-page.settings-page .ant-switch-inner-checked,
+.settings-page.settings-page .ant-switch-inner-unchecked {
+  min-width: 0 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
 }
 .settings-page.settings-page .card-scroll--padded {
   padding: 16px !important;
@@ -216,6 +219,12 @@
   box-shadow: none !important;
   text-shadow: none !important;
 }
+.login-screen.login-screen .brand-badge--large {
+  width: 56px !important;
+  height: 56px !important;
+  font-size: 18px !important;
+  line-height: 1.2 !important;
+}
 .desktop-console.desktop-console .desktop-main {
   width: min(1320px, 100%) !important;
   padding: 24px !important;
@@ -233,75 +242,11 @@
   padding-bottom: 12px !important;
   border-bottom: 1px solid var(--border-muted) !important;
 }
-.login-screen.login-screen {
-  height: auto !important;
-  min-height: 100dvh !important;
-  overflow-x: hidden !important;
-  overflow-y: auto !important;
-}
-.login-screen.login-screen .login-page {
-  width: min(1320px, 100%) !important;
-  height: auto !important;
-  min-height: 100dvh !important;
-  margin: 0 auto !important;
-  padding: 24px !important;
-  overflow: visible !important;
-}
-.login-screen.login-screen .login-main {
-  display: grid !important;
-  grid-template-columns: minmax(0, 1fr) minmax(360px, 420px) !important;
-  align-items: center !important;
-  gap: 24px !important;
-}
-.login-screen.login-screen .login-story {
-  display: grid !important;
-  grid-template-columns: minmax(0, 1fr) !important;
-  grid-template-rows: auto auto !important;
-  gap: var(--content-gutter) !important;
-}
-.login-screen.login-screen .capability-list {
-  max-width: 760px !important;
-  gap: 10px !important;
-}
-.login-screen.login-screen .capability-item {
-  padding: 14px !important;
-}
-.login-screen.login-screen .capability-icon {
-  font-size: 20px !important;
-}
-.login-screen.login-screen .login-side {
-  min-width: 0 !important;
-  flex-basis: auto !important;
-}
-.login-screen.login-screen .login-card {
-  padding: 24px !important;
-}
-.login-screen.login-screen .login-card__head {
-  gap: 14px !important;
-  margin-bottom: 16px !important;
-}
-.login-screen.login-screen .login-card__head h2 {
-  color: var(--text-main) !important;
-  font-size: 24px !important;
-}
-.login-screen.login-screen .login-form .ant-form-item-label > label {
-  color: var(--text-main) !important;
-}
-.invite-modal .ant-modal-content {
-  border: 1px solid var(--border-soft) !important;
-  border-radius: var(--radius-container) !important;
-  background: var(--bg-panel) !important;
-}
 @media (max-width: 900px) {
-  .chat-workbench.chat-workbench,
-  .login-screen.login-screen .login-main {
+  .chat-workbench.chat-workbench {
     grid-template-columns: 1fr !important;
   }
-  .desktop-console.desktop-console .desktop-main,
-  .login-screen.login-screen .login-page {
+  .desktop-console.desktop-console .desktop-main {
     padding: 16px !important;
-  }
-  .login-screen.login-screen .login-story {
-    display: none !important;
   }
 }

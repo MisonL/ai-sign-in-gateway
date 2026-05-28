@@ -6,7 +6,7 @@
 .gateway-metric-card__label {
   color: var(--text-faint);
   font-size: 12px;
-  letter-spacing: 0.02em;
+  letter-spacing: 0;
 }
 
 .gateway-metric-card__value {

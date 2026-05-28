@@ -7,10 +7,11 @@
   color: #172033;
   background: #ffffff;
   font-size: 13px;
-  outline: none;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
 }
 
-.gateway-usage-input:focus {
+.gateway-usage-input:focus-visible {
   border-color: rgba(110, 168, 255, 0.5);
   box-shadow: 0 0 0 2px rgba(77, 144, 254, 0.18);
 }
@@ -30,19 +31,19 @@
   padding: var(--rhythm-2) var(--rhythm-3) var(--rhythm-3);
 }
 
-.gateway-usage-table :deep(.ant-table),
-.gateway-usage-table :deep(.ant-table-container),
-.gateway-usage-table :deep(.ant-table-content) {
+.gateway-usage-table .ant-table,
+.gateway-usage-table .ant-table-container,
+.gateway-usage-table .ant-table-content {
   background: transparent !important;
 }
 
-.gateway-usage-table :deep(.ant-table-thead > tr > th) {
+.gateway-usage-table .ant-table-thead > tr > th {
   background: #f1f5f9 !important;
   color: #334155;
   border-bottom-color: rgba(148, 163, 184, 0.2) !important;
 }
 
-.gateway-usage-table :deep(.ant-table-tbody > tr > td) {
+.gateway-usage-table .ant-table-tbody > tr > td {
   color: #172033;
   background: rgba(255, 255, 255, 0.82);
   border-bottom-color: rgba(148, 163, 184, 0.16) !important;
@@ -62,7 +63,7 @@
   color: #64748b;
   font-size: 11px;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0;
 }
 
 .gateway-usage-summary__item strong {

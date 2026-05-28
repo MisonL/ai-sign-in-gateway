@@ -95,70 +95,70 @@
   line-height: 1.45;
 }
 
-.site-editor-shell :deep(.ant-form-item) {
+.site-editor-shell .ant-form-item {
   margin-bottom: 14px;
 }
 
-.site-editor-shell :deep(.ant-form-item-label > label) {
+.site-editor-shell .ant-form-item-label > label {
   color: #18315e;
   font-size: 14px;
   font-weight: 700;
 }
 
-.site-editor-shell :deep(.ant-input),
-.site-editor-shell :deep(.ant-input-affix-wrapper),
-.site-editor-shell :deep(.ant-input-number),
-.site-editor-shell :deep(.ant-select-selector),
-.site-editor-shell :deep(.ant-input-number-affix-wrapper),
-.site-editor-shell :deep(textarea.ant-input) {
+.site-editor-shell .ant-input,
+.site-editor-shell .ant-input-affix-wrapper,
+.site-editor-shell .ant-input-number,
+.site-editor-shell .ant-select-selector,
+.site-editor-shell .ant-input-number-affix-wrapper,
+.site-editor-shell textarea.ant-input {
   border-radius: var(--radius-control);
   border-color: var(--border-soft);
   background: var(--bg-panel);
   box-shadow: none;
 }
 
-.site-editor-shell :deep(.ant-input),
-.site-editor-shell :deep(.ant-input-affix-wrapper),
-.site-editor-shell :deep(.ant-input-number),
-.site-editor-shell :deep(.ant-input-number-affix-wrapper),
-.site-editor-shell :deep(.ant-select-selector) {
+.site-editor-shell .ant-input,
+.site-editor-shell .ant-input-affix-wrapper,
+.site-editor-shell .ant-input-number,
+.site-editor-shell .ant-input-number-affix-wrapper,
+.site-editor-shell .ant-select-selector {
   min-height: var(--control-height);
 }
 
-.site-editor-shell :deep(textarea.ant-input) {
+.site-editor-shell textarea.ant-input {
   min-height: 94px;
 }
 
-.site-editor-shell :deep(.ant-input:focus),
-.site-editor-shell :deep(.ant-input-affix-wrapper-focused),
-.site-editor-shell :deep(.ant-input-number-focused),
-.site-editor-shell :deep(.ant-select-focused .ant-select-selector) {
+.site-editor-shell .ant-input:focus,
+.site-editor-shell .ant-input-affix-wrapper-focused,
+.site-editor-shell .ant-input-number-focused,
+.site-editor-shell .ant-select-focused .ant-select-selector {
   border-color: #7aaaff;
   box-shadow: 0 0 0 3px rgba(73, 133, 255, 0.12);
 }
 
-.site-editor-shell :deep(.ant-btn) {
+.site-editor-shell .ant-btn {
   border-radius: var(--radius-control);
   height: var(--control-height);
   padding-inline: var(--rhythm-2);
   font-weight: 600;
 }
 
-.site-editor-shell :deep(.ant-btn-primary) {
+.site-editor-shell .ant-btn-primary {
   border-color: var(--accent);
   background: var(--accent);
   box-shadow: none;
 }
 
-.site-editor-shell :deep(.ant-switch) {
+.site-editor-shell .ant-switch {
   background: rgba(65, 119, 217, 0.32);
 }
 
-.site-editor-shell :deep(.ant-switch.ant-switch-checked) {
+.site-editor-shell .ant-switch.ant-switch-checked {
   background: var(--accent);
 }
 
-.site-editor-shell :deep(.ant-select-multiple .ant-select-selection-item) {
+.site-editor-shell .ant-select-multiple .ant-select-selection-item {
   border-radius: var(--radius-control);
   background: rgba(89, 138, 255, 0.14);
 }

@@ -9,6 +9,7 @@
 
   .gateway-route-page .page-toolbar,
   .route-management-toolbar,
+  .gateway-monitor-toolbar,
   .route-pool-filters,
   .route-pool-searchbar {
     align-items: stretch;
@@ -44,6 +45,10 @@
 
   .gateway-access--route {
     flex-basis: auto;
+    width: 100%;
+  }
+
+  .gateway-access {
     width: 100%;
   }
 

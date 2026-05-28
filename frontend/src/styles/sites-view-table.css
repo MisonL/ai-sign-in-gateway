@@ -1,27 +1,33 @@
 .sites-list-card.ant-card {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   border-radius: var(--radius-container) !important;
   overflow: hidden;
   border: 1px solid var(--border-soft) !important;
 }
 
-.sites-list-card :deep(.ant-card-head) {
+.sites-list-card .ant-card-head {
+  min-width: 0;
   min-height: var(--rhythm-5);
   padding: 0 var(--rhythm-3);
   background: var(--bg-panel);
 }
 
-.sites-list-card :deep(.ant-card-head-title) {
+.sites-list-card .ant-card-head-title {
   padding: var(--rhythm-2) 0;
   font-size: 14px;
   font-weight: 700;
   color: #274284;
 }
 
-.sites-list-card :deep(.ant-card-extra) {
+.sites-list-card .ant-card-extra {
   padding: var(--rhythm-2) 0;
 }
 
 .sites-list-shell {
+  min-width: 0;
+  max-width: 100%;
   background: var(--bg-panel);
 }
 
@@ -36,8 +42,8 @@
   width: 260px;
 }
 
-.sites-list-toolbar__search :deep(.ant-input-affix-wrapper),
-.sites-list-toolbar__search :deep(.ant-input) {
+.sites-list-toolbar__search .ant-input-affix-wrapper,
+.sites-list-toolbar__search .ant-input {
   border-radius: var(--radius-control) !important;
   background: var(--bg-panel) !important;
 }
@@ -49,18 +55,20 @@
 }
 
 .table-fill--management {
+  min-width: 0;
+  max-width: 100%;
   background: transparent;
 }
 
-.sites-page .table-fill--management :deep(.ant-table) {
+.sites-page .table-fill--management .ant-table {
   background: transparent !important;
 }
 
-.sites-page .table-fill--management :deep(.ant-table-container) {
+.sites-page .table-fill--management .ant-table-container {
   border-radius: 0;
 }
 
-.sites-page .table-fill--management :deep(.ant-table-thead > tr > th) {
+.sites-page .table-fill--management .ant-table-thead > tr > th {
   height: 38px;
   padding: 0 var(--rhythm-2) !important;
   background: var(--bg-muted) !important;
@@ -68,12 +76,12 @@
   font-size: 13px;
 }
 
-.sites-page .table-fill--management :deep(.ant-table-selection-column) {
+.sites-page .table-fill--management .ant-table-selection-column {
   width: 48px !important;
   min-width: 48px !important;
 }
 
-.sites-page .table-fill--management :deep(.ant-table-tbody > tr > td) {
+.sites-page .table-fill--management .ant-table-tbody > tr > td {
   padding: 9px 12px !important;
   font-size: 13px;
   color: #2e4381;
@@ -81,11 +89,11 @@
   background: rgba(255, 255, 255, 0.88);
 }
 
-.sites-page .table-fill--management :deep(.ant-table-tbody > tr:hover > td) {
+.sites-page .table-fill--management .ant-table-tbody > tr:hover > td {
   background: var(--bg-subtle) !important;
 }
 
-.sites-page .table-fill--management :deep(.ant-pagination) {
+.sites-page .table-fill--management .ant-pagination {
   background: rgba(255, 255, 255, 0.9);
 }
 
@@ -210,28 +218,28 @@
   padding: 0;
 }
 
-.site-actions-menu :deep(.ant-dropdown-menu-item) {
+.site-actions-menu .ant-dropdown-menu-item {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.sites-page :deep(.ant-switch) {
+.sites-page .ant-switch {
   min-width: 56px;
   height: var(--control-height);
   line-height: var(--control-height);
   border-radius: var(--radius-control);
 }
 
-.sites-page :deep(.ant-switch.ant-switch-checked) {
+.sites-page .ant-switch.ant-switch-checked {
   background: var(--accent);
 }
 
-.sites-page :deep(.plugin-tag.ant-tag),
-.sites-page :deep(.ant-tag) {
+.sites-page .plugin-tag.ant-tag,
+.sites-page .ant-tag {
   font-size: 12px;
 }
 
-.sites-page :deep(.management-row--active > td:first-child::before) {
+.sites-page .management-row--active > td:first-child::before {
   background: var(--accent);
 }

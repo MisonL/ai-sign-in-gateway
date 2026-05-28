@@ -1,0 +1,95 @@
+<script setup lang="ts">
+import {
+  KeyOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  ShareAltOutlined,
+} from '@ant-design/icons-vue'
+
+defineProps<{
+  busy: boolean
+  includedCheckinCount: number
+  checkinAllIncludedLabel: string
+  connectivitySweepLabel: string
+  duplicateCheckLoading: boolean
+  inviteRefreshAllLoading: boolean
+  inviteRefreshAllLabel: string
+  apiKeyRefreshAllLoading: boolean
+  apiKeyRefreshAllLabel: string
+  ccSwitchExportLoading: boolean
+}>()
+
+const emit = defineEmits<{
+  'open-checkin-config': []
+  'open-checkin-logs': []
+  'checkin-all-included': []
+  refresh: []
+  'connectivity-sweep': []
+  'duplicate-check': []
+  'refresh-all-invites': []
+  'refresh-all-api-keys': []
+  'export-cc-switch': []
+  'import-cc-switch': []
+  'create-site': []
+}>()
+</script>
+
+<template>
+  <div class="sites-toolbar">
+    <div class="sites-toolbar__segment">
+      <a-button class="sites-toolbar__seg-btn" @click="emit('open-checkin-config')">签到配置</a-button>
+      <a-button class="sites-toolbar__seg-btn" @click="emit('open-checkin-logs')">最近执行</a-button>
+      <a-button
+        type="primary"
+        class="sites-toolbar__seg-btn sites-toolbar__seg-btn--primary"
+        :loading="busy"
+        :disabled="!includedCheckinCount"
+        @click="emit('checkin-all-included')"
+      >
+        {{ checkinAllIncludedLabel }}
+      </a-button>
+    </div>
+
+    <div class="sites-toolbar__actions">
+      <a-button class="sites-toolbar__ghost-btn" :loading="busy" @click="emit('refresh')">
+        <template #icon>
+          <ReloadOutlined />
+        </template>
+        刷新
+      </a-button>
+      <a-button class="sites-toolbar__ghost-btn" :loading="busy" @click="emit('connectivity-sweep')">
+        {{ connectivitySweepLabel }}
+      </a-button>
+      <a-button class="sites-toolbar__ghost-btn" :loading="duplicateCheckLoading" @click="emit('duplicate-check')">
+        清理检测
+      </a-button>
+      <a-button class="sites-toolbar__ghost-btn" :loading="inviteRefreshAllLoading" @click="emit('refresh-all-invites')">
+        <template #icon>
+          <ShareAltOutlined />
+        </template>
+        {{ inviteRefreshAllLabel }}
+      </a-button>
+      <a-button
+        type="primary"
+        class="sites-toolbar__ghost-btn sites-toolbar__ghost-btn--strong"
+        :loading="apiKeyRefreshAllLoading"
+        @click="emit('refresh-all-api-keys')"
+      >
+        <template #icon>
+          <KeyOutlined />
+        </template>
+        {{ apiKeyRefreshAllLabel }}
+      </a-button>
+      <a-button class="sites-toolbar__ghost-btn" :loading="ccSwitchExportLoading" @click="emit('export-cc-switch')">
+        导出供应商
+      </a-button>
+      <a-button class="sites-toolbar__ghost-btn" @click="emit('import-cc-switch')">导入供应商</a-button>
+      <a-button type="primary" class="sites-toolbar__create-btn" @click="emit('create-site')">
+        <template #icon>
+          <PlusOutlined />
+        </template>
+        新建站点
+      </a-button>
+    </div>
+  </div>
+</template>

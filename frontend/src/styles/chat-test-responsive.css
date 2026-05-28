@@ -1,0 +1,146 @@
+@media (max-width: 1180px) {
+  .chat-workbench {
+    grid-template-columns: minmax(0, 1fr) 260px;
+  }
+
+  .session-toolbar__select {
+    width: clamp(200px, 24vw, 340px);
+  }
+
+  .session-toolbar__select--model {
+    width: clamp(220px, 28vw, 380px);
+  }
+
+  .session-composer__controls,
+  .session-composer__frame,
+  .session-attachments {
+    width: min(100%, calc(100vw - 40px));
+  }
+
+  .session-composer__alert {
+    width: min(100%, calc(100vw - 40px));
+  }
+
+  .session-composer__image-size {
+    min-width: min(560px, 100%);
+  }
+}
+
+@media (max-width: 900px) {
+  .chat-workbench {
+    grid-template-columns: 1fr;
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+  }
+
+  .session-sidebar {
+    order: 2;
+    max-height: 320px;
+    border-left: 0;
+    border-top: 1px solid rgba(137, 174, 232, 0.28);
+    border-bottom: 1px solid rgba(137, 174, 232, 0.28);
+  }
+
+  .session-toolbar__select,
+  .session-toolbar__select--model,
+  .session-clear-button {
+    width: 100%;
+  }
+
+  .session-main {
+    order: 1;
+    grid-template-rows: auto auto;
+    min-height: auto;
+    overflow: visible;
+  }
+
+  .session-history {
+    min-height: auto;
+    overflow: visible;
+    padding: 16px 14px 12px;
+  }
+
+  .session-empty {
+    margin: 0 auto;
+    padding: 20px;
+  }
+
+  .session-empty__art {
+    width: min(360px, 86vw);
+  }
+
+  .session-composer {
+    padding: 0 14px 18px;
+  }
+
+  .session-composer__frame {
+    grid-template-columns: var(--control-height) minmax(0, 1fr);
+    width: 100%;
+    min-height: 118px;
+    padding: 14px;
+  }
+
+  .session-composer__input.ant-input,
+  .session-composer__input textarea.ant-input {
+    min-height: 78px !important;
+  }
+
+  .session-composer__side {
+    grid-column: 1 / -1;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+
+  .session-tool-button {
+    width: var(--control-height);
+    height: var(--control-height);
+  }
+
+  .session-send-button {
+    min-width: 112px;
+  }
+
+  .session-attachments {
+    width: 100%;
+  }
+
+  .session-composer__controls {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .session-toolbar__select,
+  .session-toolbar__select--model {
+    flex-basis: auto;
+    min-height: var(--control-height);
+  }
+
+  .chat-workbench .ant-select-selector {
+    height: var(--control-height) !important;
+  }
+
+  .chat-workbench .ant-select-selection-search-input,
+  .chat-workbench .ant-select-selection-item,
+  .chat-workbench .ant-select-selection-placeholder {
+    height: 34px !important;
+    line-height: 34px !important;
+  }
+
+  .session-clear-button {
+    height: var(--control-height);
+  }
+
+  .session-composer__image-size {
+    grid-template-columns: 1fr;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .image-ratio-presets {
+    flex-wrap: wrap;
+  }
+}

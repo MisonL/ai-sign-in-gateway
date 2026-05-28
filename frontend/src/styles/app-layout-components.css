@@ -91,7 +91,7 @@
   gap: 8px;
   padding: 8px var(--content-gutter);
   border-top: 1px solid var(--border-muted);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.96) 22%);
+  background: var(--bg-panel);
 }
 
 .card-actions--left {

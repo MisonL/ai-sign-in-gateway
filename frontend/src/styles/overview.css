@@ -144,7 +144,7 @@
 
 .overview-metric-card__value {
   color: var(--text-main);
-  font-size: clamp(1.7rem, 2vw, 2.15rem);
+  font-size: 30px;
   font-weight: 700;
   line-height: 1.1;
   font-feature-settings: 'tnum';

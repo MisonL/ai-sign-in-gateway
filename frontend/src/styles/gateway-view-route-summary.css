@@ -39,12 +39,15 @@
   gap: var(--rhythm-2);
   flex-wrap: wrap;
   min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .route-management-heading {
   display: inline-flex;
   align-items: center;
   gap: 10px;
+  flex: 0 0 auto;
   min-width: 0;
 }
 
@@ -284,7 +287,7 @@
   background: var(--accent);
 }
 
-.route-pool-card :deep(.ant-card-body) {
+.route-pool-card .ant-card-body {
   padding: 0;
 }
 
