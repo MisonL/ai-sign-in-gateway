@@ -32,6 +32,7 @@ func NewRouter(db *gorm.DB, cfg config.Config) http.Handler {
 		}, cfg))
 		protected.Get("/api/auth/me", app.Me)
 		protected.Put("/api/auth/account", app.UpdateAccount)
+		protected.Route("/api/auth/admin-users", app.AdminUserRoutes)
 		protected.Get("/api/overview", app.Overview)
 		protected.Get("/api/features", app.Features)
 		protected.Get("/api/plugins", app.Plugins)

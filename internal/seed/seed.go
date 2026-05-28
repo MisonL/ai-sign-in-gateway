@@ -24,6 +24,15 @@ func InitialData(db *gorm.DB, cfg config.Config) error {
 		if err := db.Create(&models.AdminUser{
 			Username:     cfg.DefaultAdminUsername,
 			PasswordHash: passwordHash,
+			Role:         models.AdminRoleSuper,
+			IsEnabled:    true,
+		}).Error; err != nil {
+			return err
+		}
+	} else if admin.Role == "" {
+		if err := db.Model(&admin).Updates(map[string]any{
+			"role":       models.AdminRoleSuper,
+			"is_enabled": true,
 		}).Error; err != nil {
 			return err
 		}

@@ -44,7 +44,46 @@ func Open(cfg config.Config) (*gorm.DB, error) {
 }
 
 func AutoMigrate(db *gorm.DB) error {
-	return db.AutoMigrate(models.All()...)
+	if err := db.AutoMigrate(models.All()...); err != nil {
+		return err
+	}
+	return NormalizeAdminUsers(db)
+}
+
+func NormalizeAdminUsers(db *gorm.DB) error {
+	if db == nil || !db.Migrator().HasTable(&models.AdminUser{}) {
+		return nil
+	}
+	var admins []models.AdminUser
+	if err := db.Order("id ASC").Find(&admins).Error; err != nil {
+		return err
+	}
+	if len(admins) == 0 {
+		return nil
+	}
+	hasSuperAdmin := false
+	for _, admin := range admins {
+		if admin.Role == models.AdminRoleSuper {
+			hasSuperAdmin = true
+			break
+		}
+	}
+	for idx, admin := range admins {
+		updates := map[string]any{}
+		role := models.NormalizeAdminRole(admin.Role)
+		if !hasSuperAdmin && idx == 0 {
+			role = models.AdminRoleSuper
+		}
+		if admin.Role != role {
+			updates["role"] = role
+		}
+		if len(updates) > 0 {
+			if err := db.Model(&models.AdminUser{}).Where("id = ?", admin.ID).Updates(updates).Error; err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func Close(db *gorm.DB) error {

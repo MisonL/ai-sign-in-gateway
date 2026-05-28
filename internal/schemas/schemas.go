@@ -17,8 +17,13 @@ type LoginRequest struct {
 }
 
 type AdminUserResponse struct {
-	ID       uint   `json:"id"`
-	Username string `json:"username"`
+	ID          uint       `json:"id"`
+	Username    string     `json:"username"`
+	Role        string     `json:"role"`
+	IsEnabled   bool       `json:"is_enabled"`
+	LastLoginAt *time.Time `json:"last_login_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
 type AdminAccountUpdateRequest struct {
@@ -31,6 +36,20 @@ type AdminAccountUpdateResponse struct {
 	User        AdminUserResponse `json:"user"`
 	AccessToken string            `json:"access_token"`
 	TokenType   string            `json:"token_type"`
+}
+
+type AdminUserCreateRequest struct {
+	Username  string `json:"username"`
+	Password  string `json:"password"`
+	Role      string `json:"role"`
+	IsEnabled *bool  `json:"is_enabled"`
+}
+
+type AdminUserUpdateRequest struct {
+	Username    string `json:"username"`
+	Role        string `json:"role"`
+	IsEnabled   *bool  `json:"is_enabled"`
+	NewPassword string `json:"new_password"`
 }
 
 type FieldDescriptor struct {

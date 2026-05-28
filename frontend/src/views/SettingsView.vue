@@ -4,9 +4,12 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   backupRuntimeDatabaseNow,
+  createAdminUser,
+  deleteAdminUser,
   deleteRuntimeDatabaseBackup,
   downloadRuntimeConfigArchive,
   downloadRuntimeDatabaseBackup,
+  getAdminUsers,
   getMe,
   getRuntimeDatabaseBackups,
   getSettings,
@@ -16,11 +19,12 @@ import {
   stopStaleRuntimePorts,
   uploadRuntimeDatabase,
   updateAdminAccount,
+  updateAdminUser,
   updateSettings,
 } from '../api'
 import ShellLayout from '../components/ShellLayout.vue'
 import { useToast } from '../toast'
-import type { GatewayModelPrice, GatewayPricingScheme, RuntimeDatabaseBackupFile, RuntimeStopPortResult, SettingsData } from '../types'
+import type { AdminUser, GatewayModelPrice, GatewayPricingScheme, RuntimeDatabaseBackupFile, RuntimeStopPortResult, SettingsData } from '../types'
 
 const toast = useToast()
 const route = useRoute()
@@ -63,6 +67,9 @@ const form = reactive<SettingsData>({
 
 const loading = ref(false)
 const accountLoading = ref(false)
+const adminUsersLoading = ref(false)
+const adminUserSavingID = ref<number | null>(null)
+const adminUserDeletingID = ref<number | null>(null)
 const runtimeStopLoading = ref(false)
 const configDirLoading = ref(false)
 const configArchiveDownloading = ref(false)
@@ -75,6 +82,8 @@ const databaseBackupDir = ref('')
 const runtimeConfigDirInput = ref('')
 const runtimeDatabaseFileInput = ref<HTMLInputElement | null>(null)
 const currentUsername = ref('')
+const currentAdmin = ref<AdminUser | null>(null)
+const adminUsers = ref<AdminUser[]>([])
 const activeTab = ref<'schedule' | 'runtime' | 'database' | 'pricing' | 'extensions' | 'config' | 'account'>('schedule')
 const isDesktopEmbedded = computed(() => route.path === '/desktop')
 const settingsFrameComponent = computed(() => (isDesktopEmbedded.value ? 'div' : ShellLayout))
@@ -93,12 +102,28 @@ const activePricingScheme = computed(() =>
   form.gateway_pricing_schemes.find((scheme) => scheme.id === form.gateway_pricing_active_scheme_id) ?? form.gateway_pricing_schemes[0] ?? null,
 )
 const activePricingEditable = computed(() => Boolean(activePricingScheme.value && !activePricingScheme.value.readonly))
+const canManageAdminUsers = computed(() => currentAdmin.value?.role === 'super_admin')
+const roleOptions = [
+  { label: '管理员', value: 'admin' },
+  { label: '超级管理员', value: 'super_admin' },
+]
 const accountForm = reactive({
   new_username: '',
   current_password: '',
   new_password: '',
   confirm_password: '',
 })
+const adminUserCreateForm = reactive({
+  username: '',
+  password: '',
+  role: 'admin',
+  is_enabled: true,
+})
+const adminUserPasswordEdits = reactive<Record<number, string>>({})
+
+function asAdminUser(record: unknown) {
+  return record as AdminUser
+}
 
 async function loadData() {
   loading.value = true
@@ -115,8 +140,14 @@ async function loadData() {
     await loadDatabaseBackups(false)
     try {
       const me = await getMe()
+      currentAdmin.value = me
       currentUsername.value = me.username
       accountForm.new_username = me.username
+      if (me.role === 'super_admin') {
+        await loadAdminUsers(false)
+      } else {
+        adminUsers.value = []
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '获取当前账号失败')
     }
@@ -124,6 +155,24 @@ async function loadData() {
     toast.error(err instanceof Error ? err.message : '加载失败')
   } finally {
     loading.value = false
+  }
+}
+
+async function loadAdminUsers(showError = true) {
+  if (!canManageAdminUsers.value) {
+    adminUsers.value = []
+    return
+  }
+  adminUsersLoading.value = true
+  try {
+    adminUsers.value = await getAdminUsers()
+  } catch (err) {
+    adminUsers.value = []
+    if (showError) {
+      toast.error(err instanceof Error ? err.message : '读取管理员列表失败')
+    }
+  } finally {
+    adminUsersLoading.value = false
   }
 }
 
@@ -368,6 +417,13 @@ function formatBackupTime(value: string) {
   return date.toLocaleString()
 }
 
+function formatOptionalTime(value?: string | null) {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString()
+}
+
 function formatFileSize(size: number) {
   if (!Number.isFinite(size) || size <= 0) return '-'
   if (size < 1024) return `${size} B`
@@ -404,6 +460,7 @@ async function saveAccount() {
       new_username: usernameChanged ? trimmedUsername : undefined,
       new_password: passwordChanged ? accountForm.new_password : undefined,
     })
+    currentAdmin.value = result.user
     currentUsername.value = result.user.username
     accountForm.new_username = result.user.username
     accountForm.current_password = ''
@@ -414,6 +471,87 @@ async function saveAccount() {
     toast.error(err instanceof Error ? err.message : '账号更新失败')
   } finally {
     accountLoading.value = false
+  }
+}
+
+function adminRoleLabel(role: string) {
+  return role === 'super_admin' ? '超级管理员' : '管理员'
+}
+
+function adminRoleColor(role: string) {
+  return role === 'super_admin' ? 'gold' : 'processing'
+}
+
+async function createAdmin() {
+  const username = adminUserCreateForm.username.trim()
+  if (!username) {
+    toast.error('请填写用户名。')
+    return
+  }
+  if (adminUserCreateForm.password.length < 6) {
+    toast.error('密码至少 6 位。')
+    return
+  }
+  adminUsersLoading.value = true
+  try {
+    await createAdminUser({
+      username,
+      password: adminUserCreateForm.password,
+      role: adminUserCreateForm.role,
+      is_enabled: adminUserCreateForm.is_enabled,
+    })
+    adminUserCreateForm.username = ''
+    adminUserCreateForm.password = ''
+    adminUserCreateForm.role = 'admin'
+    adminUserCreateForm.is_enabled = true
+    await loadAdminUsers(false)
+    toast.success('管理员已创建。')
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '创建管理员失败')
+  } finally {
+    adminUsersLoading.value = false
+  }
+}
+
+async function saveAdminUser(user: AdminUser) {
+  const username = user.username.trim()
+  if (!username) {
+    toast.error('用户名不能为空。')
+    return
+  }
+  const newPassword = (adminUserPasswordEdits[user.id] || '').trim()
+  if (newPassword && newPassword.length < 6) {
+    toast.error('新密码至少 6 位。')
+    return
+  }
+  adminUserSavingID.value = user.id
+  try {
+    await updateAdminUser(user.id, {
+      username,
+      role: user.role,
+      is_enabled: user.is_enabled,
+      new_password: newPassword || undefined,
+    })
+    adminUserPasswordEdits[user.id] = ''
+    await loadAdminUsers(false)
+    toast.success('管理员已更新。')
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '更新管理员失败')
+  } finally {
+    adminUserSavingID.value = null
+  }
+}
+
+async function removeAdminUser(user: AdminUser) {
+  adminUserDeletingID.value = user.id
+  try {
+    await deleteAdminUser(user.id)
+    await loadAdminUsers(false)
+    toast.success('管理员已删除。')
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '删除管理员失败')
+  } finally {
+    adminUserDeletingID.value = null
   }
 }
 
@@ -1041,8 +1179,120 @@ onMounted(loadData)
                         </a-space>
                       </div>
                       <small class="account-hint">
-                        修改成功后会自动续签登录凭据，老 token 仍有效；建议下次登录使用新账号密码。
+                        修改成功后会自动续签登录凭据，建议下次登录使用新账号密码。
                       </small>
+
+                      <template v-if="canManageAdminUsers">
+                        <a-divider />
+                        <div class="admin-users-panel">
+                          <div class="admin-users-create">
+                            <a-input
+                              v-model:value="adminUserCreateForm.username"
+                              placeholder="新管理员用户名"
+                              autocomplete="off"
+                            />
+                            <a-input-password
+                              v-model:value="adminUserCreateForm.password"
+                              placeholder="初始密码"
+                              autocomplete="new-password"
+                            />
+                            <a-select
+                              v-model:value="adminUserCreateForm.role"
+                              :options="roleOptions"
+                            />
+                            <a-switch
+                              v-model:checked="adminUserCreateForm.is_enabled"
+                              checked-children="启用"
+                              un-checked-children="停用"
+                            />
+                            <a-button type="primary" :loading="adminUsersLoading" @click="createAdmin">
+                              <template #icon><PlusOutlined /></template>
+                              新增管理员
+                            </a-button>
+                          </div>
+
+                          <a-table
+                            class="admin-users-table"
+                            size="small"
+                            :data-source="adminUsers"
+                            :loading="adminUsersLoading"
+                            :pagination="false"
+                            row-key="id"
+                          >
+                            <a-table-column title="用户名" key="username" :width="180">
+                              <template #default="{ record }">
+                                <a-input v-model:value="asAdminUser(record).username" autocomplete="off" />
+                              </template>
+                            </a-table-column>
+                            <a-table-column title="角色" key="role" :width="150">
+                              <template #default="{ record }">
+                                <a-select v-model:value="asAdminUser(record).role" :options="roleOptions" style="width: 100%" />
+                              </template>
+                            </a-table-column>
+                            <a-table-column title="状态" key="is_enabled" :width="120">
+                              <template #default="{ record }">
+                                <a-switch
+                                  v-model:checked="asAdminUser(record).is_enabled"
+                                  checked-children="启用"
+                                  un-checked-children="停用"
+                                  :disabled="asAdminUser(record).id === currentAdmin?.id"
+                                />
+                              </template>
+                            </a-table-column>
+                            <a-table-column title="新密码" key="new_password" :width="180">
+                              <template #default="{ record }">
+                                <a-input-password
+                                  v-model:value="adminUserPasswordEdits[asAdminUser(record).id]"
+                                  placeholder="留空不修改"
+                                  autocomplete="new-password"
+                                />
+                              </template>
+                            </a-table-column>
+                            <a-table-column title="最后登录" key="last_login_at" :width="170">
+                              <template #default="{ record }">
+                                {{ formatOptionalTime(asAdminUser(record).last_login_at) }}
+                              </template>
+                            </a-table-column>
+                            <a-table-column title="标签" key="tag" :width="120">
+                              <template #default="{ record }">
+                                <a-space size="small">
+                                  <a-tag :color="adminRoleColor(asAdminUser(record).role)">{{ adminRoleLabel(asAdminUser(record).role) }}</a-tag>
+                                </a-space>
+                              </template>
+                            </a-table-column>
+                            <a-table-column title="操作" key="actions" :width="180">
+                              <template #default="{ record }">
+                                <a-space size="small">
+                                  <a-button
+                                    size="small"
+                                    type="primary"
+                                    :loading="adminUserSavingID === asAdminUser(record).id"
+                                    @click="saveAdminUser(asAdminUser(record))"
+                                  >
+                                    保存
+                                  </a-button>
+                                  <a-popconfirm
+                                    title="确认删除这个管理员？"
+                                    ok-text="删除"
+                                    cancel-text="取消"
+                                    :disabled="asAdminUser(record).id === currentAdmin?.id"
+                                    @confirm="removeAdminUser(asAdminUser(record))"
+                                  >
+                                    <a-button
+                                      danger
+                                      size="small"
+                                      :disabled="asAdminUser(record).id === currentAdmin?.id"
+                                      :loading="adminUserDeletingID === asAdminUser(record).id"
+                                    >
+                                      删除
+                                    </a-button>
+                                  </a-popconfirm>
+                                </a-space>
+                              </template>
+                            </a-table-column>
+                          </a-table>
+                        </div>
+                      </template>
                     </a-form>
                   </div>
                 </div>
@@ -1163,6 +1413,28 @@ onMounted(loadData)
   color: #94a3b8;
 }
 
+.admin-users-panel {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.admin-users-create {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(140px, 1fr) minmax(130px, 0.8fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.admin-users-table {
+  min-width: 0;
+}
+
+.admin-users-table :deep(.ant-table-cell) {
+  overflow-wrap: anywhere;
+}
+
 .settings-security-alert {
   margin-bottom: 14px;
 }
@@ -1264,6 +1536,15 @@ onMounted(loadData)
 }
 
 @media (max-width: 680px) {
+  .admin-users-create {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .admin-users-create :deep(.ant-btn) {
+    width: 100%;
+  }
+
   .runtime-config-loader {
     grid-template-columns: minmax(0, 1fr);
   }

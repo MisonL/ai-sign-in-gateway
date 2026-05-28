@@ -154,6 +154,10 @@ function signOut() {
   router.push('/login')
 }
 
+function adminRoleLabel(role?: string) {
+  return role === 'super_admin' ? '超级管理员' : '管理员'
+}
+
 onMounted(async () => {
   mounted = true
   await loadAdmin()
@@ -231,6 +235,10 @@ onBeforeUnmount(() => {
             <strong>{{ admin?.username ?? 'admin' }}</strong>
           </div>
           <div class="sider-footer__meta">
+            <span>权限</span>
+            <strong>{{ adminRoleLabel(admin?.role) }}</strong>
+          </div>
+          <div class="sider-footer__meta">
             <span>控制台</span>
             <strong>爱签网关</strong>
           </div>
@@ -262,6 +270,7 @@ onBeforeUnmount(() => {
         <a-space>
           <GroupManagerButton />
           <a-tag color="processing">{{ admin?.username ?? 'admin' }}</a-tag>
+          <a-tag :color="admin?.role === 'super_admin' ? 'gold' : 'default'">{{ adminRoleLabel(admin?.role) }}</a-tag>
           <a-button @click="signOut">退出登录</a-button>
         </a-space>
       </a-layout-header>

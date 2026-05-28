@@ -1,6 +1,11 @@
 export interface AdminUser {
   id: number
   username: string
+  role: 'super_admin' | 'admin' | string
+  is_enabled: boolean
+  last_login_at?: string | null
+  created_at: string
+  updated_at: string
 }
 
 export interface FieldDescriptor {

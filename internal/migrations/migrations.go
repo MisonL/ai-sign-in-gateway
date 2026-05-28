@@ -33,6 +33,9 @@ func Apply(db *gorm.DB) error {
 	if err := features.AutoMigrate(db); err != nil {
 		return err
 	}
+	if err := database.NormalizeAdminUsers(db); err != nil {
+		return err
+	}
 	return ensureIndexes(db)
 }
 
@@ -52,6 +55,10 @@ func addMissingColumns(db *gorm.DB) error {
 		statement string
 	}
 	patches := []columnPatch{
+		{table: "admin_users", column: "role", statement: "ALTER TABLE admin_users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'"},
+		{table: "admin_users", column: "is_enabled", statement: "ALTER TABLE admin_users ADD COLUMN is_enabled BOOLEAN NOT NULL DEFAULT 1"},
+		{table: "admin_users", column: "last_login_at", statement: "ALTER TABLE admin_users ADD COLUMN last_login_at DATETIME"},
+		{table: "admin_users", column: "updated_at", statement: "ALTER TABLE admin_users ADD COLUMN updated_at DATETIME"},
 		{table: "gateway_request_logs", column: "is_stream", statement: "ALTER TABLE gateway_request_logs ADD COLUMN is_stream BOOLEAN NOT NULL DEFAULT 0"},
 		{table: "gateway_request_logs", column: "route_state_id", statement: "ALTER TABLE gateway_request_logs ADD COLUMN route_state_id INTEGER"},
 		{table: "gateway_request_logs", column: "prompt_tokens", statement: "ALTER TABLE gateway_request_logs ADD COLUMN prompt_tokens INTEGER"},
@@ -225,6 +232,8 @@ func ensureGatewayRouteGroupTables(db *gorm.DB) error {
 
 func ensureIndexes(db *gorm.DB) error {
 	statements := []string{
+		"CREATE INDEX IF NOT EXISTS ix_admin_users_role ON admin_users (role)",
+		"CREATE INDEX IF NOT EXISTS ix_admin_users_is_enabled ON admin_users (is_enabled)",
 		"CREATE INDEX IF NOT EXISTS ix_gateway_route_states_route_type ON gateway_route_states (route_type)",
 		"CREATE INDEX IF NOT EXISTS ix_gateway_route_states_route_priority ON gateway_route_states (route_priority)",
 		"CREATE INDEX IF NOT EXISTS ix_gateway_route_states_circuit_state ON gateway_route_states (circuit_state)",

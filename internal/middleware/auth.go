@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"ai-sign-in-gateway/internal/config"
@@ -38,14 +39,15 @@ func RequireAdminDynamic(dbProvider func() *gorm.DB, cfg config.Config) func(htt
 				httpx.Error(w, http.StatusUnauthorized, "登录状态失效，请重新登录。")
 				return
 			}
-			username, _ := claims["sub"].(string)
+			subject, _ := claims["sub"].(string)
+			uid, _ := claims["uid"].(string)
 			var admin models.AdminUser
 			db := dbProvider()
 			if db == nil {
 				httpx.Error(w, http.StatusUnauthorized, "登录状态失效，请重新登录。")
 				return
 			}
-			if username == "" || db.Where("username = ?", username).First(&admin).Error != nil {
+			if findAdminForToken(db, uid, subject, &admin) != nil || !admin.IsEnabled {
 				httpx.Error(w, http.StatusUnauthorized, "登录状态失效，请重新登录。")
 				return
 			}
@@ -53,4 +55,24 @@ func RequireAdminDynamic(dbProvider func() *gorm.DB, cfg config.Config) func(htt
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+func findAdminForToken(db *gorm.DB, uid, subject string, admin *models.AdminUser) error {
+	if strings.TrimSpace(uid) != "" {
+		id, err := strconv.ParseUint(uid, 10, 64)
+		if err != nil || id == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		if err := db.First(admin, uint(id)).Error; err != nil {
+			return err
+		}
+		if subject != "" && admin.Username != subject {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	}
+	if subject == "" {
+		return gorm.ErrRecordNotFound
+	}
+	return db.Where("username = ?", subject).First(admin).Error
 }

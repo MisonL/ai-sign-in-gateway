@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -46,14 +47,29 @@ func VerifyPassword(password, passwordHash string) bool {
 }
 
 func CreateAccessToken(cfg config.Config, subject string) (string, error) {
+	return createAccessTokenWithClaims(cfg, jwt.MapClaims{"sub": subject})
+}
+
+func CreateAdminAccessToken(cfg config.Config, adminID uint, username string) (string, error) {
+	claims := jwt.MapClaims{
+		"uid": strconv.FormatUint(uint64(adminID), 10),
+	}
+	username = strings.TrimSpace(username)
+	if username != "" {
+		claims["sub"] = username
+	}
+	return createAccessTokenWithClaims(cfg, claims)
+}
+
+func createAccessTokenWithClaims(cfg config.Config, claims jwt.MapClaims) (string, error) {
 	if cfg.Algorithm != "" && cfg.Algorithm != "HS256" {
 		return "", errors.New("only HS256 JWT signing is supported")
 	}
 	expiresAt := time.Now().UTC().Add(time.Duration(cfg.AccessTokenExpireMinutes) * time.Minute)
-	claims := jwt.MapClaims{
-		"sub": subject,
-		"exp": expiresAt.Unix(),
+	if claims == nil {
+		claims = jwt.MapClaims{}
 	}
+	claims["exp"] = expiresAt.Unix()
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(cfg.SecretKey))
 }
 

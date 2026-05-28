@@ -2,11 +2,31 @@ package models
 
 import "time"
 
+const (
+	AdminRoleSuper = "super_admin"
+	AdminRoleAdmin = "admin"
+)
+
+func NormalizeAdminRole(role string) string {
+	if role == AdminRoleSuper {
+		return AdminRoleSuper
+	}
+	return AdminRoleAdmin
+}
+
+func IsAdminRole(role string) bool {
+	return role == AdminRoleSuper || role == AdminRoleAdmin
+}
+
 type AdminUser struct {
-	ID           uint      `gorm:"primaryKey" json:"id"`
-	Username     string    `gorm:"size:50;uniqueIndex;not null" json:"username"`
-	PasswordHash string    `gorm:"size:255;not null" json:"-"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID           uint       `gorm:"primaryKey" json:"id"`
+	Username     string     `gorm:"size:50;uniqueIndex;not null" json:"username"`
+	PasswordHash string     `gorm:"size:255;not null" json:"-"`
+	Role         string     `gorm:"size:30;default:admin;index;not null" json:"role"`
+	IsEnabled    bool       `gorm:"default:true;index;not null" json:"is_enabled"`
+	LastLoginAt  *time.Time `json:"last_login_at,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
 type Site struct {

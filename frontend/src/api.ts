@@ -234,6 +234,44 @@ export function getMe(options: RequestOptions = {}): Promise<AdminUser> {
   return request('/auth/me', { signal: options.signal })
 }
 
+export function getAdminUsers(): Promise<AdminUser[]> {
+  return request('/auth/admin-users')
+}
+
+export interface AdminUserCreatePayload {
+  username: string
+  password: string
+  role?: string
+  is_enabled?: boolean
+}
+
+export interface AdminUserUpdatePayload {
+  username?: string
+  role?: string
+  is_enabled?: boolean
+  new_password?: string
+}
+
+export function createAdminUser(payload: AdminUserCreatePayload): Promise<AdminUser> {
+  return request('/auth/admin-users', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function updateAdminUser(id: number, payload: AdminUserUpdatePayload): Promise<AdminUser> {
+  return request(`/auth/admin-users/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function deleteAdminUser(id: number): Promise<{ deleted: boolean }> {
+  return request(`/auth/admin-users/${id}`, {
+    method: 'DELETE',
+  })
+}
+
 export function getPublicInvites(): Promise<PublicInvite[]> {
   return request('/public/invites')
 }
