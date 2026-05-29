@@ -52,6 +52,7 @@
 }
 
 .session-tool-button {
+  align-self: center;
   width: var(--control-height);
   height: var(--control-height);
   border: 1px solid rgba(177, 199, 233, 0.48);
@@ -63,6 +64,7 @@
 }
 
 .session-send-button {
+  align-self: start;
   gap: 8px;
   min-width: 112px;
   height: var(--control-height);

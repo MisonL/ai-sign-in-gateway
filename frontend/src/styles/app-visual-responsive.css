@@ -2,6 +2,7 @@
   .route-pool-filters {
     align-items: stretch !important;
     flex-wrap: wrap !important;
+    grid-template-columns: 1fr !important;
   }
 
   .route-pool-type-tabs {

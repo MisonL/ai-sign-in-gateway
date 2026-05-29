@@ -185,3 +185,50 @@
   overflow-wrap: anywhere;
   white-space: normal;
 }
+
+.settings-switch-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 16px;
+  margin-top: 4px;
+}
+
+.settings-switch-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 58px;
+  padding: 11px 13px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-control);
+  background: var(--bg-panel);
+}
+
+.settings-switch-row strong,
+.settings-switch-row small {
+  display: block;
+}
+
+.settings-switch-row strong {
+  color: var(--text-main);
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+.settings-switch-row small {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.settings-switch-row .ant-switch {
+  justify-self: end;
+}
+
+@media (max-width: 900px) {
+  .settings-switch-grid {
+    grid-template-columns: 1fr;
+  }
+}
