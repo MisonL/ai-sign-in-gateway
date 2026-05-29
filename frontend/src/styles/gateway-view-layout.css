@@ -97,6 +97,8 @@
 
 .gateway-panel--route-status {
   grid-area: route;
+  min-height: 456px;
+  overflow: visible;
 }
 
 .gateway-panel--strategy {

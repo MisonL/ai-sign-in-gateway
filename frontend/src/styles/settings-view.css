@@ -223,8 +223,15 @@
   line-height: 1.35;
 }
 
-.settings-switch-row .ant-switch {
+.settings-page.settings-page .settings-switch-row .ant-switch {
   justify-self: end;
+  min-width: 66px !important;
+}
+
+.settings-page.settings-page .settings-switch-row .ant-switch-inner,
+.settings-page.settings-page .settings-switch-row .ant-switch-inner-checked,
+.settings-page.settings-page .settings-switch-row .ant-switch-inner-unchecked {
+  padding-inline: 8px !important;
 }
 
 @media (max-width: 900px) {

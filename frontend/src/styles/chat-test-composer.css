@@ -264,11 +264,13 @@
   line-height: 30px !important;
 }
 
+.session-composer__input.ant-input,
 .session-composer__input textarea {
   min-height: 62px !important;
-  padding: 0 !important;
+  padding: 8px 12px !important;
   border: 0 !important;
   background: transparent !important;
+  box-sizing: border-box;
   color: #203a67 !important;
   box-shadow: none !important;
   resize: none;

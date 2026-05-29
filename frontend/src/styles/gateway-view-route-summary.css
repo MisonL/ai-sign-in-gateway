@@ -134,7 +134,7 @@
   z-index: 1;
   display: grid;
   gap: var(--rhythm-2);
-  padding: var(--rhythm-2) var(--rhythm-3) 0;
+  padding: var(--rhythm-2) var(--rhythm-3) var(--rhythm-3);
 }
 
 .route-pool-status__card {

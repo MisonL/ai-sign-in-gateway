@@ -110,6 +110,10 @@
     border-radius: 8px;
   }
 
+  .login-options {
+    margin-bottom: 18px;
+  }
+
   .login-card__head {
     gap: 14px;
   }

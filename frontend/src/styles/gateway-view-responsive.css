@@ -21,26 +21,57 @@
     width: 100%;
   }
 
-  .gateway-toolbar-actions.ant-space {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .gateway-route-page.gateway-route-page .gateway-toolbar-actions.ant-space {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    align-items: center !important;
     gap: 8px !important;
+    overflow-x: visible !important;
+    padding-bottom: 0 !important;
   }
 
-  .gateway-toolbar-actions.ant-space > .ant-space-item,
-  .gateway-toolbar-actions.ant-space .ant-btn,
-  .gateway-toolbar-actions.ant-space .route-probe-control {
-    min-width: 0;
+  .gateway-route-page.gateway-route-page .gateway-toolbar-actions.ant-space > .ant-space-item,
+  .gateway-route-page.gateway-route-page .gateway-toolbar-actions.ant-space .ant-btn,
+  .gateway-route-page.gateway-route-page .gateway-toolbar-actions.ant-space .route-probe-control {
+    flex: none !important;
+    min-width: 0 !important;
+    width: 100% !important;
+  }
+
+  .gateway-route-page.gateway-route-page .gateway-toolbar-actions.ant-space .ant-btn {
+    flex: 0 0 auto !important;
+    height: var(--control-height) !important;
+    padding-inline: 8px !important;
+  }
+
+  .gateway-route-page.gateway-route-page .gateway-toolbar-actions.ant-space .route-probe-control {
+    display: grid !important;
+    align-items: center !important;
+    height: auto !important;
+  }
+
+  .gateway-route-page.gateway-route-page .gateway-toolbar-actions.ant-space .route-probe-control .ant-btn {
+    flex: 0 0 var(--control-height) !important;
+    width: 100% !important;
+  }
+
+  .gateway-route-page.gateway-route-page .gateway-toolbar-actions.ant-space > .ant-space-item:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .gateway-monitor-page.gateway-monitor-page .gateway-toolbar-actions.ant-space {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     width: 100%;
   }
 
-  .gateway-toolbar-actions.ant-space .ant-btn {
-    height: var(--control-height);
-    padding-inline: 8px;
+  .gateway-monitor-page.gateway-monitor-page .gateway-toolbar-actions.ant-space .ant-space-item,
+  .gateway-monitor-page.gateway-monitor-page .gateway-toolbar-actions.ant-space .ant-btn {
+    width: 100%;
   }
 
-  .gateway-toolbar-actions.ant-space .route-probe-control .ant-btn {
-    width: 100%;
+  .gateway-monitor-page.gateway-monitor-page .gateway-toolbar-actions.ant-space .ant-space-item:last-child {
+    grid-column: 1 / -1;
   }
 
   .gateway-access--route {
