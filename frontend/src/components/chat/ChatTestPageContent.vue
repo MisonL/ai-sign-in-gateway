@@ -78,7 +78,7 @@ defineProps<{
             placeholder="选择站点"
             @change="view.handleSiteChange"
           >
-            <template #suffixIcon><DownOutlined /></template>
+            <template #suffixIcon><DownOutlined aria-hidden="true" /></template>
           </a-select>
 
           <a-select
@@ -93,7 +93,7 @@ defineProps<{
             option-filter-prop="label"
             placeholder="选择模型"
           >
-            <template #suffixIcon><DownOutlined /></template>
+            <template #suffixIcon><DownOutlined aria-hidden="true" /></template>
           </a-select>
 
           <div v-if="view.activeMode === 'image'" class="image-size-editor session-composer__image-size">
@@ -140,8 +140,8 @@ defineProps<{
                 @click="view.toggleImageRatioLock"
               >
                 <template #icon>
-                  <LockOutlined v-if="view.imageRatioLocked" />
-                  <UnlockOutlined v-else />
+                  <LockOutlined v-if="view.imageRatioLocked" aria-hidden="true" />
+                  <UnlockOutlined v-else aria-hidden="true" />
                 </template>
               </a-button>
             </a-tooltip>
@@ -154,7 +154,7 @@ defineProps<{
             :disabled="!view.visibleMessages.length && !view.referenceImages.length"
             @click="view.clearConversation"
           >
-            <ClearOutlined />
+            <ClearOutlined aria-hidden="true" />
             <span class="session-clear-button__text">清空会话</span>
           </button>
         </div>
@@ -164,7 +164,7 @@ defineProps<{
             <img :src="view.imageSource(image)" :alt="image.name" />
             <span>{{ image.name }}</span>
             <button type="button" title="移除参考图" aria-label="移除参考图" @click="view.removeReferenceImage(index)">
-              <DeleteOutlined />
+              <DeleteOutlined aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -184,7 +184,7 @@ defineProps<{
 
         <div class="session-composer__frame">
           <button type="button" class="session-tool-button" :disabled="view.loading" title="添加参考图" aria-label="添加参考图" @click="view.triggerImagePicker">
-            <PaperClipOutlined />
+            <PaperClipOutlined aria-hidden="true" />
           </button>
 
           <a-textarea
@@ -200,7 +200,7 @@ defineProps<{
 
           <div class="session-composer__side">
             <button type="button" class="session-send-button" :disabled="view.loading" @click="view.sendMessage">
-              <SendOutlined />
+              <SendOutlined aria-hidden="true" />
               <span>{{ view.loading ? '发送中' : '发送请求' }}</span>
             </button>
             <span class="session-footnote">{{ view.referenceImages.length }}/{{ view.maxReferenceImages }} 张参考图</span>
@@ -217,10 +217,10 @@ defineProps<{
         </div>
         <div class="session-sidebar__actions">
           <button type="button" title="新建会话" aria-label="新建会话" @click="view.startNewSession">
-            <PlusOutlined />
+            <PlusOutlined aria-hidden="true" />
           </button>
           <button type="button" title="刷新历史" aria-label="刷新历史" :disabled="view.sessionsLoading" @click="view.loadChatSessions">
-            <ReloadOutlined />
+            <ReloadOutlined aria-hidden="true" />
           </button>
         </div>
       </div>
@@ -253,7 +253,7 @@ defineProps<{
               title="删除会话"
               aria-label="删除会话"
             >
-              <DeleteOutlined />
+              <DeleteOutlined aria-hidden="true" />
             </button>
           </a-popconfirm>
         </div>

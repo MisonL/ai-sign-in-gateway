@@ -136,7 +136,8 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 34px;
+  height: 32px;
+  line-height: 30px;
 }
 
 @media (max-width: 1180px) {

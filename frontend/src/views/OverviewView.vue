@@ -129,7 +129,7 @@ onMounted(loadData)
         </div>
         <a-button :loading="loading" type="primary" @click="loadData">
           <template #icon>
-            <ReloadOutlined />
+            <ReloadOutlined aria-hidden="true" />
           </template>
           刷新数据
         </a-button>
@@ -145,7 +145,7 @@ onMounted(loadData)
         >
           <div class="overview-metric-card__head">
             <span class="overview-metric-card__icon">
-              <component :is="metric.icon" />
+              <component :is="metric.icon" aria-hidden="true" />
             </span>
             <span class="overview-metric-card__title">{{ metric.title }}</span>
           </div>
@@ -201,7 +201,7 @@ onMounted(loadData)
             <div class="overview-schedule-list">
               <div v-for="item in scheduleRows" :key="item.key" class="overview-schedule-item">
                 <span class="overview-schedule-item__icon">
-                  <component :is="item.icon" />
+                  <component :is="item.icon" aria-hidden="true" />
                 </span>
                 <div>
                   <span>{{ item.label }}</span>

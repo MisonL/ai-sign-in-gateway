@@ -31,7 +31,7 @@ defineProps<{
             </div>
           </div>
         </template>
-        <InfoCircleOutlined class="table-info-icon" />
+        <InfoCircleOutlined class="table-info-icon" aria-hidden="true" />
       </a-tooltip>
     </div>
     <div class="table-cell-compact__meta">

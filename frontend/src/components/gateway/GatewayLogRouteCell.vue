@@ -14,7 +14,7 @@ defineProps<{
     <div class="table-cell-compact__head">
       <strong class="table-cell-compact__title">{{ logRouteLabel(log) }}</strong>
       <a-tooltip placement="right" :title="logRouteMeta(log)">
-        <InfoCircleOutlined class="table-info-icon" />
+        <InfoCircleOutlined class="table-info-icon" aria-hidden="true" />
       </a-tooltip>
     </div>
   </div>

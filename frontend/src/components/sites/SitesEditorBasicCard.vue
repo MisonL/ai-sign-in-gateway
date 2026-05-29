@@ -61,7 +61,7 @@ defineProps<{
                         <div v-for="example in emailPatternExamples" :key="example">{{ example }}</div>
                       </div>
                     </template>
-                    <QuestionCircleOutlined class="field-help-icon" />
+                    <QuestionCircleOutlined class="field-help-icon" aria-hidden="true" />
                   </a-tooltip>
                 </span>
               </template>

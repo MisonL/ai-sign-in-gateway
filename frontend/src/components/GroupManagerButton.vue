@@ -110,7 +110,7 @@ async function handleDelete(name: string) {
 </script>
 
 <template>
-  <a-button size="small" @click="openManager">分组管理</a-button>
+  <a-button @click="openManager">分组管理</a-button>
 
   <a-modal
     v-model:open="open"

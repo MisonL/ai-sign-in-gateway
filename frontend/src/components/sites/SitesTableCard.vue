@@ -128,7 +128,7 @@ function asSite(record: unknown): Site {
                       @click.stop="emit('open-site', asSite(record))"
                     >
                       <template #icon>
-                        <ExportOutlined />
+                        <ExportOutlined aria-hidden="true" />
                       </template>
                     </a-button>
                   </a-tooltip>
@@ -205,12 +205,12 @@ function asSite(record: unknown): Site {
                     :loading="isInviteLoading(asSite(record).id) || isBalanceProbing(asSite(record).id) || isApiKeyRefreshing(asSite(record).id)"
                     @click.stop
                   >
-                    <template #icon><MoreOutlined /></template>
+                    <template #icon><MoreOutlined aria-hidden="true" /></template>
                   </a-button>
                   <template #overlay>
                     <a-menu @click.stop class="site-actions-menu">
                       <a-menu-item key="test" @click="emit('test', asSite(record))">
-                        <ExperimentOutlined />
+                        <ExperimentOutlined aria-hidden="true" />
                         <span>{{ isRelayOnlySitePayload(asSite(record)) ? '验证出口' : '测试连接' }}</span>
                       </a-menu-item>
                       <a-menu-item
@@ -218,11 +218,11 @@ function asSite(record: unknown): Site {
                         key="checkin"
                         @click="emit('checkin', asSite(record))"
                       >
-                        <ReloadOutlined />
+                        <ReloadOutlined aria-hidden="true" />
                         <span>{{ siteCheckinActionLabel(asSite(record)) }}</span>
                       </a-menu-item>
                       <a-menu-item key="api-key" @click="emit('open-api-key', asSite(record))">
-                        <KeyOutlined />
+                        <KeyOutlined aria-hidden="true" />
                         <span>API Key</span>
                       </a-menu-item>
                       <a-menu-item
@@ -230,7 +230,7 @@ function asSite(record: unknown): Site {
                         :disabled="isBalanceProbing(asSite(record).id)"
                         @click="emit('probe-balance', asSite(record))"
                       >
-                        <DollarCircleOutlined />
+                        <DollarCircleOutlined aria-hidden="true" />
                         <span>{{ isBalanceProbing(asSite(record).id) ? '余额读取中' : '读取余额' }}</span>
                       </a-menu-item>
                       <a-menu-item
@@ -239,7 +239,7 @@ function asSite(record: unknown): Site {
                         :disabled="isApiKeyRefreshing(asSite(record).id)"
                         @click="emit('refresh-api-keys', asSite(record))"
                       >
-                        <ReloadOutlined />
+                        <ReloadOutlined aria-hidden="true" />
                         <span>{{ isApiKeyRefreshing(asSite(record).id) ? '更新中' : '更新 API Key' }}</span>
                       </a-menu-item>
                       <a-menu-item
@@ -248,11 +248,11 @@ function asSite(record: unknown): Site {
                         :disabled="isInviteLoading(asSite(record).id)"
                         @click="emit('load-invite', asSite(record))"
                       >
-                        <ShareAltOutlined />
+                        <ShareAltOutlined aria-hidden="true" />
                         <span>{{ isInviteLoading(asSite(record).id) ? '邀请读取中' : '邀请信息' }}</span>
                       </a-menu-item>
                       <a-menu-item key="delete" danger @click="emit('delete-site', asSite(record))">
-                        <DeleteOutlined />
+                        <DeleteOutlined aria-hidden="true" />
                         <span>删除站点</span>
                       </a-menu-item>
                     </a-menu>

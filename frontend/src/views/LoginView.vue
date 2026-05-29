@@ -112,7 +112,7 @@ onMounted(loadInvites)
           <em>运维控制台</em>
         </div>
         <div class="security-line">
-          <SafetyCertificateOutlined />
+          <SafetyCertificateOutlined aria-hidden="true" />
           <span>安全 / 稳定 / 高效 / 可观测</span>
         </div>
       </header>
@@ -126,7 +126,7 @@ onMounted(loadInvites)
 
           <div class="capability-list">
             <article v-for="item in capabilityCards" :key="item.title" class="capability-item">
-              <span class="capability-icon">
+              <span class="capability-icon" aria-hidden="true">
                 <component :is="item.icon" />
               </span>
               <div>
@@ -139,7 +139,7 @@ onMounted(loadInvites)
           <div class="metric-panel">
             <article v-for="item in metricCards" :key="item.label" class="metric-card">
               <div class="metric-head">
-                <span class="metric-icon">
+                <span class="metric-icon" aria-hidden="true">
                   <component :is="item.icon" />
                 </span>
                 <strong>{{ item.label }}</strong>
@@ -160,7 +160,7 @@ onMounted(loadInvites)
 
             <article class="metric-card metric-card--score">
               <div class="metric-head">
-                <span class="metric-icon">
+                <span class="metric-icon" aria-hidden="true">
                   <SafetyCertificateOutlined />
                 </span>
                 <strong>路由健康度</strong>
@@ -169,7 +169,7 @@ onMounted(loadInvites)
                 <span>96</span>
                 <small>分</small>
               </div>
-              <p><CheckCircleOutlined /> 状态良好</p>
+              <p><CheckCircleOutlined aria-hidden="true" /> 状态良好</p>
             </article>
           </div>
         </section>
@@ -195,7 +195,7 @@ onMounted(loadInvites)
                   placeholder="请输入邮箱 / 用户名"
                 >
                   <template #prefix>
-                    <UserOutlined />
+                    <UserOutlined aria-hidden="true" />
                   </template>
                 </a-input>
               </a-form-item>
@@ -210,7 +210,7 @@ onMounted(loadInvites)
                   placeholder="请输入登录密码"
                 >
                   <template #prefix>
-                    <LockOutlined />
+                    <LockOutlined aria-hidden="true" />
                   </template>
                 </a-input-password>
               </a-form-item>
@@ -220,7 +220,7 @@ onMounted(loadInvites)
               </div>
 
               <a-button class="login-submit" block type="primary" html-type="submit" size="large" :loading="loading">
-                <template #icon><LoginOutlined /></template>
+                <template #icon><LoginOutlined aria-hidden="true" /></template>
                 登录后台
               </a-button>
             </a-form>
@@ -231,7 +231,7 @@ onMounted(loadInvites)
               <strong>公开邀请入口</strong>
               <small>查看可注册站点与邀请链接</small>
             </span>
-            <LinkOutlined />
+            <LinkOutlined aria-hidden="true" />
           </button>
         </div>
       </main>
@@ -254,7 +254,7 @@ onMounted(loadInvites)
         <div class="invite-modal__toolbar">
           <span>{{ invites.length ? `共 ${invites.length} 个公开邀请站点` : '暂无公开邀请站点' }}</span>
           <a-button size="small" :loading="invitesLoading" @click="loadInvites">
-            <template #icon><ReloadOutlined /></template>
+            <template #icon><ReloadOutlined aria-hidden="true" /></template>
             刷新
           </a-button>
         </div>
@@ -266,14 +266,14 @@ onMounted(loadInvites)
                 <strong>{{ invite.site_name }}</strong>
                 <span>{{ inviteMeta(invite) }}</span>
                 <a :href="inviteUrl(invite)" target="_blank" rel="noopener noreferrer">
-                  <LinkOutlined />
+                  <LinkOutlined aria-hidden="true" />
                   {{ inviteUrl(invite) }}
                 </a>
               </div>
               <div class="invite-item__actions">
                 <a-tag v-if="invite.invite_code" color="processing">{{ invite.invite_code }}</a-tag>
                 <a-button size="small" :disabled="!inviteUrl(invite)" @click="copyText(inviteUrl(invite), '邀请链接')">
-                  <template #icon><CopyOutlined /></template>
+                  <template #icon><CopyOutlined aria-hidden="true" /></template>
                   链接
                 </a-button>
                 <a-button
@@ -281,11 +281,11 @@ onMounted(loadInvites)
                   :disabled="!invite.invite_code && !inviteUrl(invite)"
                   @click="copyInviteBundle(invite)"
                 >
-                  <template #icon><CopyOutlined /></template>
+                  <template #icon><CopyOutlined aria-hidden="true" /></template>
                   信息
                 </a-button>
                 <a-button size="small" type="primary" :disabled="!inviteUrl(invite)" @click="openInviteURL(invite)">
-                  <template #icon><ExportOutlined /></template>
+                  <template #icon><ExportOutlined aria-hidden="true" /></template>
                   打开
                 </a-button>
               </div>

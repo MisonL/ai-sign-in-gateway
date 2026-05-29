@@ -115,7 +115,7 @@ const emit = defineEmits<{
                   placement="top"
                   title="用于加权轮询和智能评分。权重越大，在健康且满足并发/熔断条件时获得请求的概率越高；智能策略还会结合延迟、并发、失败记录和优先级共同计算。"
                 >
-                  <QuestionCircleOutlined class="table-info-icon" />
+                  <QuestionCircleOutlined class="table-info-icon" aria-hidden="true" />
                 </a-tooltip>
               </span>
             </template>

@@ -25,7 +25,7 @@ const emit = defineEmits<{
     <code>地址 {{ requestUrl }}</code>
     <a-tooltip placement="bottom" :title="codexTooltip">
       <span class="gateway-access__hint">
-        <InfoCircleOutlined />
+        <InfoCircleOutlined aria-hidden="true" />
         Codex /v1
       </span>
     </a-tooltip>

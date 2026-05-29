@@ -75,7 +75,7 @@
   min-height: 46px !important;
   border: 1px solid rgba(155, 181, 215, 0.75) !important;
   border-radius: 7px !important;
-  background: rgba(255, 255, 255, 0.72);
+  background: rgba(255, 255, 255, 0.72) !important;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
   overflow: hidden;
   padding-block: 0 !important;

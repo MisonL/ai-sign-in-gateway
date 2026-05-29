@@ -53,7 +53,7 @@ const emit = defineEmits<{
     <div class="sites-toolbar__actions">
       <a-button class="sites-toolbar__ghost-btn" :loading="busy" @click="emit('refresh')">
         <template #icon>
-          <ReloadOutlined />
+          <ReloadOutlined aria-hidden="true" />
         </template>
         刷新
       </a-button>
@@ -65,7 +65,7 @@ const emit = defineEmits<{
       </a-button>
       <a-button class="sites-toolbar__ghost-btn" :loading="inviteRefreshAllLoading" @click="emit('refresh-all-invites')">
         <template #icon>
-          <ShareAltOutlined />
+          <ShareAltOutlined aria-hidden="true" />
         </template>
         {{ inviteRefreshAllLabel }}
       </a-button>
@@ -76,7 +76,7 @@ const emit = defineEmits<{
         @click="emit('refresh-all-api-keys')"
       >
         <template #icon>
-          <KeyOutlined />
+          <KeyOutlined aria-hidden="true" />
         </template>
         {{ apiKeyRefreshAllLabel }}
       </a-button>
@@ -86,7 +86,7 @@ const emit = defineEmits<{
       <a-button class="sites-toolbar__ghost-btn" @click="emit('import-cc-switch')">导入供应商</a-button>
       <a-button type="primary" class="sites-toolbar__create-btn" @click="emit('create-site')">
         <template #icon>
-          <PlusOutlined />
+          <PlusOutlined aria-hidden="true" />
         </template>
         新建站点
       </a-button>

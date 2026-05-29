@@ -43,7 +43,7 @@ const emit = defineEmits<{
           :loading="routeProbing || balanceProbing"
           @click.stop
         >
-          <template #icon><MoreOutlined /></template>
+          <template #icon><MoreOutlined aria-hidden="true" /></template>
         </a-button>
       </a-tooltip>
       <template #overlay>
@@ -53,36 +53,36 @@ const emit = defineEmits<{
             :disabled="route.circuit_state === 'closed'"
             @click="emit('reset-circuit', route)"
           >
-            <ReloadOutlined />
+            <ReloadOutlined aria-hidden="true" />
             <span>重置熔断</span>
           </a-menu-item>
           <a-menu-item key="probe" :disabled="routeProbing" @click="emit('probe', route)">
-            <SyncOutlined />
+            <SyncOutlined aria-hidden="true" />
             <span>探测</span>
           </a-menu-item>
           <a-menu-item key="balance" :disabled="balanceProbing" @click="emit('probe-balance', route)">
-            <InfoCircleOutlined />
+            <InfoCircleOutlined aria-hidden="true" />
             <span>余额</span>
           </a-menu-item>
           <a-menu-item key="supported-models" @click="emit('configure-models', route)">
-            <ToolOutlined />
+            <ToolOutlined aria-hidden="true" />
             <span>路由配置</span>
           </a-menu-item>
           <a-menu-divider />
           <a-menu-item key="enable-only" @click="emit('enable-only', route)">
-            <SettingOutlined />
+            <SettingOutlined aria-hidden="true" />
             <span>禁用其他</span>
           </a-menu-item>
           <a-menu-item key="priority" @click="emit('priority', route)">
-            <SettingOutlined />
+            <SettingOutlined aria-hidden="true" />
             <span>优先权</span>
           </a-menu-item>
           <a-menu-item key="diagnosis" @click="emit('diagnose', route)">
-            <ToolOutlined />
+            <ToolOutlined aria-hidden="true" />
             <span>诊断</span>
           </a-menu-item>
           <a-menu-item key="history" @click="emit('history', route)">
-            <HistoryOutlined />
+            <HistoryOutlined aria-hidden="true" />
             <span>历史</span>
           </a-menu-item>
         </a-menu>

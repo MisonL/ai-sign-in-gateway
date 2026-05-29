@@ -28,6 +28,8 @@
 
 @media (max-width: 900px) {
   .chat-workbench {
+    --control-height: 44px;
+
     grid-template-columns: 1fr;
     height: auto;
     min-height: 100vh;
@@ -92,6 +94,17 @@
     height: var(--control-height);
   }
 
+  .session-sidebar__actions button,
+  .session-history-delete {
+    width: var(--control-height);
+    height: var(--control-height);
+    min-width: var(--control-height);
+  }
+
+  .session-history-item {
+    grid-template-columns: minmax(0, 1fr) var(--control-height);
+  }
+
   .session-send-button {
     min-width: 112px;
   }
@@ -103,10 +116,20 @@
   .session-composer__controls {
     width: 100%;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) var(--control-height);
-    align-items: stretch;
+    grid-template-columns: minmax(0, 1fr) var(--control-height);
+    align-items: center;
     gap: 8px;
     margin-bottom: 8px;
+  }
+
+  .session-toolbar__select {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .session-toolbar__select--model {
+    grid-column: 1 / -1;
+    grid-row: 2;
   }
 
   .session-toolbar__select,
@@ -124,8 +147,8 @@
   .chat-workbench .ant-select-selection-search-input,
   .chat-workbench .ant-select-selection-item,
   .chat-workbench .ant-select-selection-placeholder {
-    height: 34px !important;
-    line-height: 34px !important;
+    height: var(--control-height) !important;
+    line-height: var(--control-height) !important;
   }
 
   .session-clear-button {
@@ -152,16 +175,15 @@
   .image-ratio-presets {
     flex-wrap: wrap;
   }
+
+  .image-size-editor__lock {
+    width: var(--control-height);
+  }
 }
 
 @media (max-width: 460px) {
   .session-composer__controls {
     grid-template-columns: minmax(0, 1fr) var(--control-height);
-  }
-
-  .session-toolbar__select--model {
-    grid-column: 1 / -1;
-    grid-row: 2;
   }
 
   .session-clear-button {

@@ -34,13 +34,13 @@ const emit = defineEmits<{
     <a-space class="gateway-toolbar-actions">
       <a-button :loading="loading" @click="emit('refresh')">
         <template #icon>
-          <ReloadOutlined />
+          <ReloadOutlined aria-hidden="true" />
         </template>
         刷新
       </a-button>
       <a-button @click="emit('open-settings')">
         <template #icon>
-          <SettingOutlined />
+          <SettingOutlined aria-hidden="true" />
         </template>
         网关策略
       </a-button>

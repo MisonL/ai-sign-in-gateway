@@ -40,7 +40,7 @@ const view = useShellLayoutController()
           @click="view.navigate(item.to)"
         >
           <template #icon>
-            <component :is="item.icon" />
+            <component :is="item.icon" aria-hidden="true" />
           </template>
           <span>{{ item.label }}</span>
         </a-menu-item>
@@ -66,14 +66,14 @@ const view = useShellLayoutController()
           </div>
           <a-button class="sider-footer__button" block @click="view.navigate('/gateway/monitor')">
             <template #icon>
-              <component :is="view.ApiOutlined" />
+              <component :is="view.ApiOutlined" aria-hidden="true" />
             </template>
             网关监控
           </a-button>
         </div>
         <a-button class="sider-collapse-button" block @click="view.toggleCollapsed">
           <template #icon>
-            <MenuFoldOutlined />
+            <MenuFoldOutlined aria-hidden="true" />
           </template>
           收起导航
         </a-button>
@@ -82,7 +82,7 @@ const view = useShellLayoutController()
       <div v-else class="sider-footer sider-footer--collapsed">
         <a-button class="sider-collapse-button" shape="circle" @click="view.toggleCollapsed" aria-label="展开导航">
           <template #icon>
-            <MenuUnfoldOutlined />
+            <MenuUnfoldOutlined aria-hidden="true" />
           </template>
         </a-button>
       </div>
@@ -115,7 +115,7 @@ const view = useShellLayoutController()
         <a-space class="app-header__actions">
           <GroupManagerButton />
           <a-tag color="processing" class="app-header__user">
-            <UserOutlined />
+            <UserOutlined aria-hidden="true" />
             {{ view.admin?.username ?? 'admin' }}
           </a-tag>
           <a-tag :color="view.adminRoleColor(view.admin?.role)" class="app-header__user">
@@ -123,7 +123,7 @@ const view = useShellLayoutController()
           </a-tag>
           <a-button @click="view.signOut">
             <template #icon>
-              <LogoutOutlined />
+              <LogoutOutlined aria-hidden="true" />
             </template>
             退出
           </a-button>

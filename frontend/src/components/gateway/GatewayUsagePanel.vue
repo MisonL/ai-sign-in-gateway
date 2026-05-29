@@ -84,7 +84,7 @@ function readInputValue(event: Event) {
             <div class="table-cell-compact__head">
               <strong class="table-cell-compact__title">{{ usageRouteLabel(record as GatewayUsageRoute) }}</strong>
               <a-tooltip placement="right" :title="usageRouteMeta(record as GatewayUsageRoute)">
-                <InfoCircleOutlined class="table-info-icon" />
+                <InfoCircleOutlined class="table-info-icon" aria-hidden="true" />
               </a-tooltip>
             </div>
           </div>

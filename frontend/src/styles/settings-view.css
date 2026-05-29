@@ -255,5 +255,19 @@
 
   .settings-page.settings-page .settings-switch-row .ant-switch {
     justify-self: end;
+    min-width: 66px !important;
+    height: 44px !important;
+    line-height: 44px !important;
+  }
+
+  .settings-page.settings-page .settings-switch-row .ant-switch .ant-switch-handle {
+    top: 12px !important;
+  }
+
+  .settings-page.settings-page .settings-switch-row .ant-switch-inner,
+  .settings-page.settings-page .settings-switch-row .ant-switch-inner-checked,
+  .settings-page.settings-page .settings-switch-row .ant-switch-inner-unchecked {
+    min-height: 42px !important;
+    line-height: 42px !important;
   }
 }

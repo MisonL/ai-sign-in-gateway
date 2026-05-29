@@ -53,13 +53,13 @@ const emit = defineEmits<{
     <a-space class="gateway-toolbar-actions">
       <a-button :loading="loading" @click="emit('refresh')">
         <template #icon>
-          <ReloadOutlined />
+          <ReloadOutlined aria-hidden="true" />
         </template>
         刷新
       </a-button>
       <a-button :loading="loading" :disabled="probeLoading || balanceProbeAllLoading" @click="emit('sync')">
         <template #icon>
-          <SyncOutlined />
+          <SyncOutlined aria-hidden="true" />
         </template>
         同步路由
       </a-button>
@@ -83,13 +83,13 @@ const emit = defineEmits<{
       <a-button danger :disabled="!routeCount" @click="emit('disable-all')">禁用全部</a-button>
       <a-button type="primary" @click="emit('add-upstream')">
         <template #icon>
-          <PlusOutlined />
+          <PlusOutlined aria-hidden="true" />
         </template>
         添加上游
       </a-button>
       <a-button @click="emit('open-settings')">
         <template #icon>
-          <SettingOutlined />
+          <SettingOutlined aria-hidden="true" />
         </template>
         网关策略
       </a-button>
