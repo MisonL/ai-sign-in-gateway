@@ -19,19 +19,21 @@
 .route-pool-type-tabs {
   display: grid !important;
   grid-auto-flow: column;
-  grid-auto-columns: minmax(76px, auto);
+  grid-auto-columns: max-content;
   gap: var(--rhythm-1) !important;
   align-items: center;
+  justify-content: start;
 }
 
 .route-pool-type-tabs .ant-btn {
-  width: 100%;
-  min-width: 0;
+  width: auto;
+  min-width: 76px;
 }
 
 .route-pool-searchbar {
   display: grid !important;
-  grid-template-columns: minmax(180px, 1fr) minmax(150px, 0.8fr) minmax(128px, 0.6fr) auto auto;
+  grid-template-columns: minmax(220px, 1fr) minmax(180px, 0.85fr) minmax(132px, 0.55fr) max-content max-content;
+  align-items: center;
   justify-content: stretch !important;
 }
 
@@ -43,6 +45,18 @@
   min-width: 0 !important;
   max-width: none !important;
   flex: 1 1 auto !important;
+}
+
+.route-pool-filter-switch.ant-switch {
+  width: auto !important;
+  max-width: 72px !important;
+  justify-self: start;
+}
+
+.route-pool-clear.ant-btn {
+  width: auto !important;
+  min-width: 82px !important;
+  justify-self: start;
 }
 
 .gateway-route-page .route-pool-card--standalone,

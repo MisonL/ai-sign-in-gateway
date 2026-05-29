@@ -1,4 +1,4 @@
-@media (max-width: 1500px) {
+@media (max-width: 1120px) {
   .route-pool-filters {
     align-items: stretch !important;
     flex-wrap: wrap !important;
@@ -17,11 +17,11 @@
 
   .route-pool-filter-switch,
   .route-pool-clear {
-    width: 100%;
+    width: auto;
   }
 
   .route-pool-filter-switch.ant-switch {
-    justify-self: stretch;
+    justify-self: start;
   }
 }
 

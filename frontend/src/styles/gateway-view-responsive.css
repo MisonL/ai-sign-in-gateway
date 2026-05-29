@@ -90,11 +90,12 @@
   }
 
   .route-pool-filter-switch.ant-switch {
-    justify-self: stretch;
+    justify-self: start;
   }
 
   .route-pool-clear.ant-btn {
     height: var(--control-height);
+    justify-self: stretch;
   }
 
   .gateway-policy-help__grid,
