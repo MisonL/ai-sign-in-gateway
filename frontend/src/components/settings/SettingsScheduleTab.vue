@@ -106,32 +106,34 @@ defineProps<{
         </a-row>
 
         <div class="settings-switch-grid">
-          <label class="settings-switch-row" for="settings-schedule-enabled">
+          <div class="settings-switch-row">
             <span>
-              <strong>启用计划任务</strong>
-              <small>按每日执行时间自动运行签到计划。</small>
+              <strong id="settings-schedule-enabled-label">启用计划任务</strong>
+              <small id="settings-schedule-enabled-help">按每日执行时间自动运行签到计划。</small>
             </span>
             <a-switch
               id="settings-schedule-enabled"
               v-model:checked="view.form.schedule_enabled"
-              aria-label="启用计划任务"
+              aria-labelledby="settings-schedule-enabled-label"
+              aria-describedby="settings-schedule-enabled-help"
               checked-children="启用"
               un-checked-children="关闭"
             />
-          </label>
-          <label class="settings-switch-row" for="settings-only-enabled-sites">
+          </div>
+          <div class="settings-switch-row">
             <span>
-              <strong>仅执行启用站点</strong>
-              <small>关闭后会包含所有站点。</small>
+              <strong id="settings-only-enabled-sites-label">仅执行启用站点</strong>
+              <small id="settings-only-enabled-sites-help">关闭后会包含所有站点。</small>
             </span>
             <a-switch
               id="settings-only-enabled-sites"
               v-model:checked="view.form.only_enabled_sites"
-              aria-label="仅执行启用站点"
+              aria-labelledby="settings-only-enabled-sites-label"
+              aria-describedby="settings-only-enabled-sites-help"
               checked-children="启用"
               un-checked-children="全部"
             />
-          </label>
+          </div>
         </div>
       </a-form>
 
