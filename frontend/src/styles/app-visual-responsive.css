@@ -1,7 +1,6 @@
 @media (max-width: 1120px) {
   .route-pool-filters {
     align-items: stretch !important;
-    flex-wrap: wrap !important;
     grid-template-columns: 1fr !important;
   }
 

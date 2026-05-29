@@ -68,7 +68,9 @@
   font-weight: 800;
 }
 
-.login-form .ant-input-affix-wrapper {
+.login-form .ant-input-affix-wrapper,
+.login-screen.login-screen .login-form .ant-input-affix-wrapper {
+  align-items: center;
   height: 46px !important;
   min-height: 46px !important;
   border: 1px solid rgba(155, 181, 215, 0.75) !important;
@@ -77,6 +79,23 @@
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
   overflow: hidden;
   padding-block: 0 !important;
+}
+
+.login-form .ant-input-affix-wrapper:hover,
+.login-screen.login-screen .login-form .ant-input-affix-wrapper:hover {
+  border-color: rgba(96, 141, 207, 0.95) !important;
+}
+
+.login-form .ant-input-affix-wrapper-focused,
+.login-form .ant-input-affix-wrapper:focus,
+.login-form .ant-input-affix-wrapper:focus-within,
+.login-screen.login-screen .login-form .ant-input-affix-wrapper-focused,
+.login-screen.login-screen .login-form .ant-input-affix-wrapper:focus,
+.login-screen.login-screen .login-form .ant-input-affix-wrapper:focus-within {
+  border-color: #2563eb !important;
+  box-shadow:
+    0 0 0 3px rgba(37, 99, 235, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7) !important;
 }
 
 .login-form .ant-input-prefix,
