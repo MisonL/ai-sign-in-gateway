@@ -69,23 +69,30 @@
 }
 
 .login-form .ant-input-affix-wrapper {
-  min-height: 46px;
-  border-color: rgba(155, 181, 215, 0.75);
+  height: 46px !important;
+  min-height: 46px !important;
+  border: 1px solid rgba(155, 181, 215, 0.75) !important;
   border-radius: 7px !important;
   background: rgba(255, 255, 255, 0.72);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  overflow: hidden;
+  padding-block: 0 !important;
 }
 
 .login-form .ant-input-prefix,
 .login-form .ant-input-suffix {
   color: #7893b8;
   font-size: 17px;
+  background: transparent;
 }
 
 .login-form .ant-input {
+  height: auto !important;
+  min-height: 0 !important;
   color: #14315e;
   font-weight: 600;
-  background: transparent;
+  line-height: 1.5 !important;
+  background: transparent !important;
 }
 
 .login-options {
