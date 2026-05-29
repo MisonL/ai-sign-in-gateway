@@ -147,9 +147,15 @@ defineProps<{
             </a-tooltip>
           </div>
 
-          <button type="button" class="session-clear-button" :disabled="!view.visibleMessages.length && !view.referenceImages.length" @click="view.clearConversation">
+          <button
+            type="button"
+            class="session-clear-button"
+            aria-label="清空会话"
+            :disabled="!view.visibleMessages.length && !view.referenceImages.length"
+            @click="view.clearConversation"
+          >
             <ClearOutlined />
-            清空会话
+            <span class="session-clear-button__text">清空会话</span>
           </button>
         </div>
 
@@ -187,7 +193,7 @@ defineProps<{
             class="session-composer__input"
             name="chat_message_input"
             aria-label="聊天消息输入"
-            :rows="3"
+            :auto-size="{ minRows: 2, maxRows: 5 }"
             :placeholder="view.sendPlaceholder"
             @keydown="view.handleEditorKeydown"
           />

@@ -36,3 +36,44 @@
     flex-direction: column;
   }
 }
+
+@media (max-width: 720px) {
+  .sites-page .table-fill--management .ant-table-body {
+    border-top: 1px solid var(--border-muted);
+    scrollbar-width: thin;
+  }
+
+  .sites-page .table-fill--management {
+    overflow: hidden;
+    position: relative;
+  }
+
+  .sites-page .table-fill--management .ant-table-thead > tr > th,
+  .sites-page .table-fill--management .ant-table-tbody > tr > td {
+    padding-inline: 8px !important;
+  }
+
+  .sites-page .table-fill--management::before {
+    content: "横向滑动查看表格";
+    display: block;
+    padding: 8px 10px;
+    border-top: 1px solid var(--border-muted);
+    border-radius: var(--radius-container) var(--radius-container) 0 0;
+    background: var(--bg-subtle);
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .sites-page .table-fill--management::after {
+    content: "";
+    position: absolute;
+    top: 35px;
+    right: 0;
+    bottom: 0;
+    width: 18px;
+    background: linear-gradient(to left, rgba(15, 23, 42, 0.08), rgba(15, 23, 42, 0));
+    border-bottom-right-radius: var(--radius-container);
+    pointer-events: none;
+  }
+}

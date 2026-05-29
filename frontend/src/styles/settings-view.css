@@ -239,3 +239,21 @@
     grid-template-columns: 1fr;
   }
 }
+
+@media (max-width: 720px) {
+  .settings-switch-row {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+    gap: 10px;
+    min-height: 0;
+    padding: 12px;
+  }
+
+  .settings-switch-row small {
+    max-width: 100%;
+  }
+
+  .settings-page.settings-page .settings-switch-row .ant-switch {
+    justify-self: end;
+  }
+}
