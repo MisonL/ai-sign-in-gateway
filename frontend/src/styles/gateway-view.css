@@ -1,4 +1,5 @@
 @import './gateway-view-shared.css';
+@import './gateway-view-diagnostics.css';
 @import './gateway-view-layout.css';
 @import './gateway-view-usage.css';
 @import './gateway-view-feed.css';

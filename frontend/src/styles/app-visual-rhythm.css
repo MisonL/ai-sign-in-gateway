@@ -8,10 +8,8 @@
   --rhythm-5: 55px;
   --control-height: 34px;
   --control-height-comfort: 38px;
-  --page-gutter-x: 21px;
-  --page-gutter-y: 21px;
-  --content-gutter: 13px;
-  --table-filter-gutter: 13px;
+  --rhythm-page-gutter-x: 21px;
+  --rhythm-content-gutter: 13px;
 }
 
 body {
@@ -21,18 +19,18 @@ body {
 .app-content,
 .desktop-console .desktop-main,
 .login-screen .login-page {
-  padding-inline: var(--page-gutter-x) !important;
+  padding-inline: var(--rhythm-page-gutter-x) !important;
 }
 
 .ant-layout-header.app-header {
-  padding-inline: var(--page-gutter-x) !important;
+  padding-inline: var(--rhythm-page-gutter-x) !important;
 }
 
 .page-stack,
 .overview-screen,
 .desktop-console .desktop-main,
 .chat-workbench .session-history {
-  gap: var(--content-gutter) !important;
+  gap: var(--rhythm-content-gutter) !important;
 }
 
 .admin-card.ant-card,

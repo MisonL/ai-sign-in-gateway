@@ -138,7 +138,7 @@
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-control);
   background: var(--bg-panel);
-  color: #24334d;
+  color: var(--text-code);
   font-family: 'IBM Plex Mono', monospace;
   font-size: 12px;
   text-overflow: ellipsis;

@@ -193,7 +193,7 @@
 }
 
 .service-line em {
-  color: #334155;
+  color: var(--text-secondary);
   font-size: 12px;
   font-style: normal;
   font-weight: 700;
@@ -247,12 +247,9 @@
 
 @media (max-width: 760px) {
   .desktop-topbar {
+    position: static;
     grid-template-columns: 1fr;
     align-items: start;
-  }
-
-  .desktop-topbar {
-    position: static;
   }
 
   .desktop-actions,

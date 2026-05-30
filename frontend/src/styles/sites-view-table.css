@@ -115,6 +115,14 @@
   color: var(--sites-accent) !important;
 }
 
+@media (max-width: 760px) {
+  .site-name-open-btn.ant-btn {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+  }
+}
+
 .site-subline {
   gap: 8px;
   min-width: 0;

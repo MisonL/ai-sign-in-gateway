@@ -1,67 +1,67 @@
-.login-screen.login-screen {
-  height: auto !important;
-  min-height: 100dvh !important;
-  overflow-x: hidden !important;
-  overflow-y: auto !important;
+.login-screen {
+  height: auto;
+  min-height: 100dvh;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
-.login-screen.login-screen .login-page {
-  width: min(1320px, 100%) !important;
-  height: auto !important;
-  min-height: 100dvh !important;
-  margin: 0 auto !important;
-  padding: 24px !important;
-  overflow: visible !important;
+.login-screen .login-page {
+  width: min(1320px, 100%);
+  height: auto;
+  min-height: 100dvh;
+  margin: 0 auto;
+  padding: 24px;
+  overflow: visible;
 }
 
-.login-screen.login-screen .login-main {
-  display: grid !important;
-  grid-template-columns: minmax(0, 1fr) minmax(360px, 420px) !important;
-  align-items: center !important;
-  gap: 24px !important;
+.login-screen .login-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 420px);
+  align-items: center;
+  gap: 24px;
 }
 
-.login-screen.login-screen .login-story {
-  display: grid !important;
-  grid-template-columns: minmax(0, 1fr) !important;
-  grid-template-rows: auto auto !important;
-  gap: var(--content-gutter) !important;
+.login-screen .login-story {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  gap: var(--rhythm-content-gutter);
 }
 
-.login-screen.login-screen .capability-list {
-  max-width: 760px !important;
-  gap: 10px !important;
+.login-screen .capability-list {
+  max-width: 760px;
+  gap: 10px;
 }
 
-.login-screen.login-screen .capability-item {
-  padding: 14px !important;
+.login-screen .capability-item {
+  padding: 14px;
 }
 
-.login-screen.login-screen .capability-icon {
-  font-size: 20px !important;
+.login-screen .capability-icon {
+  font-size: 20px;
 }
 
-.login-screen.login-screen .login-side {
-  min-width: 0 !important;
-  flex-basis: auto !important;
+.login-screen .login-side {
+  min-width: 0;
+  flex-basis: auto;
 }
 
-.login-screen.login-screen .login-card {
-  padding: 24px !important;
+.login-screen .login-card {
+  padding: 24px;
 }
 
-.login-screen.login-screen .login-card__head {
-  gap: 14px !important;
-  margin-bottom: 16px !important;
+.login-screen .login-card__head {
+  gap: 14px;
+  margin-bottom: 16px;
 }
 
-.login-screen.login-screen .login-card__head h2 {
-  color: var(--text-main) !important;
-  font-size: 24px !important;
+.login-screen .login-card__head h2 {
+  color: var(--text-main);
+  font-size: 24px;
 }
 
-.login-screen.login-screen .login-form .ant-form-item-label > label {
-  color: var(--text-main) !important;
+.login-screen .login-form .ant-form-item-label > label {
+  color: var(--text-main);
 }
 
 .invite-modal .ant-modal-content {
@@ -71,15 +71,15 @@
 }
 
 @media (max-width: 900px) {
-  .login-screen.login-screen .login-main {
-    grid-template-columns: 1fr !important;
+  .login-screen .login-main {
+    grid-template-columns: 1fr;
   }
 
-  .login-screen.login-screen .login-page {
-    padding: 16px !important;
+  .login-screen .login-page {
+    padding: 16px;
   }
 
-  .login-screen.login-screen .login-story {
-    display: none !important;
+  .login-screen .login-story {
+    display: none;
   }
 }

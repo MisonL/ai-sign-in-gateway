@@ -17,8 +17,10 @@
 
   /* Text */
   --text-main: #0f172a;
+  --text-secondary: #344054;
   --text-muted: #64748b;
   --text-faint: #94a3b8;
+  --text-code: #24334d;
 
   /* Brand & status */
   --accent: #2563eb;
@@ -31,8 +33,12 @@
   --success-soft: #dcfce7;
   --warning: #f59e0b;
   --warning-soft: #fef3c7;
+  --warning-strong: #b86b00;
   --danger: #dc2626;
   --danger-soft: #fee2e2;
+  --table-header-bg: #f2f5f9;
+  --table-hover-bg: #f7f9ff;
+  --table-selected-bg: #eef8f5;
 
   /* Shadow */
   --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04);
@@ -140,7 +146,7 @@ select {
 }
 
 .ant-form-item-label > label {
-  color: #344054;
+  color: var(--text-secondary);
   font-size: 13px;
   font-weight: 600;
 }
@@ -167,8 +173,8 @@ select {
 }
 
 .ant-table-wrapper .ant-table-thead > tr > th {
-  background: #f2f5f9;
-  color: #344054;
+  background: var(--table-header-bg);
+  color: var(--text-secondary);
   font-size: 12px;
   font-weight: 700;
 }

@@ -7,8 +7,8 @@ import { capabilityCards, metricCards } from '../loginViewContent'
 import { useToast } from '../toast'
 import type { PublicInvite } from '../types'
 import '../styles/workspace-surfaces.css'
-import '../styles/login-workspace-surfaces.css'
 import '../styles/login-view.css'
+import '../styles/login-workspace-surfaces.css'
 
 const router = useRouter()
 const toast = useToast()

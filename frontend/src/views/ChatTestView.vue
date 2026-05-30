@@ -6,6 +6,7 @@ import '../styles/workspace-surfaces.css'
 import '../styles/chat-test-shell.css'
 import '../styles/chat-test-history.css'
 import '../styles/chat-test-composer.css'
+import '../styles/chat-test-image-size.css'
 import '../styles/chat-test-responsive.css'
 
 const view = useChatTestController()
