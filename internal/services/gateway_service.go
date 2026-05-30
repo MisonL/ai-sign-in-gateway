@@ -131,8 +131,8 @@ func ListGatewayActiveRequestsWithRecent(includeRecent bool) []GatewayActiveRequ
 		out = append(out, takeGatewayRecentActiveRequests(now)...)
 	}
 	for idx := range out {
-		out[idx].ElapsedMS = now.Sub(out[idx].StartedAt).Milliseconds()
 		if out[idx].FinishedAt == nil {
+			out[idx].ElapsedMS = now.Sub(out[idx].StartedAt).Milliseconds()
 			out[idx].ActiveConcurrency = RouteActiveCount(out[idx].RouteID)
 		}
 	}

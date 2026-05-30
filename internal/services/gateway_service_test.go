@@ -4478,6 +4478,77 @@ func TestGatewayActiveRequestsSnapshot(t *testing.T) {
 	}
 }
 
+func TestGatewayActiveRequestsKeepRecentElapsedTime(t *testing.T) {
+	ResetGatewayCountersForTest()
+
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		entered <- struct{}{}
+		<-release
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer upstream.Close()
+
+	db := newGatewayTestDB(t)
+	createGatewaySite(t, db, "recent-up", upstream.URL, "recent-key")
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+	var state models.GatewayRouteState
+	if err := db.First(&state).Error; err != nil {
+		t.Fatal(err)
+	}
+	state.SupportedModels = EncodeGatewaySupportedModels([]string{"gpt-4o"})
+	if err := db.Save(&state).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodPost, "/api/gateway/v1/chat/completions", strings.NewReader(`{"model":"gpt-4o","messages":[]}`))
+		req.Header.Set("Content-Type", "application/json")
+		result, err := ProxyGatewayRequest(req.Context(), db, req, "chat/completions", "", "", GatewayPolicy{
+			RouteStrategy:  "round_robin",
+			RequestTimeout: 5,
+			MaxAttempts:    1,
+		})
+		if err == nil && !result.Success {
+			err = io.ErrUnexpectedEOF
+		}
+		done <- err
+	}()
+
+	select {
+	case <-entered:
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Fatal("proxy returned before upstream request was observed")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for upstream request")
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	recent := ListGatewayActiveRequestsWithRecent(true)
+	if len(recent) != 1 || !recent[0].Recent || recent[0].FinishedAt == nil {
+		t.Fatalf("recent active requests = %+v", recent)
+	}
+	elapsed := recent[0].ElapsedMS
+	time.Sleep(25 * time.Millisecond)
+	recent = ListGatewayActiveRequestsWithRecent(true)
+	if len(recent) != 1 {
+		t.Fatalf("recent active request count = %d", len(recent))
+	}
+	if recent[0].ElapsedMS != elapsed {
+		t.Fatalf("recent elapsed changed from %d to %d", elapsed, recent[0].ElapsedMS)
+	}
+}
+
 func TestGatewayConcurrencyPeakStatsTrackAllTimeAndToday(t *testing.T) {
 	db := newGatewayTestDB(t)
 
