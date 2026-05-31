@@ -50,6 +50,8 @@ function handleSave() {
     wrap-class-name="gateway-settings-modal-wrap"
     class="gateway-settings-modal"
     :confirm-loading="loading"
+    ok-text="确定"
+    cancel-text="取消"
     @ok="handleSave"
   >
     <a-form layout="vertical">

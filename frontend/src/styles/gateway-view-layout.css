@@ -33,6 +33,12 @@
   overflow: visible;
 }
 
+.gateway-monitor-page.gateway-monitor-page .page-toolbar--actions {
+  margin-top: calc(var(--page-gutter-y) * -1);
+  padding-top: var(--page-gutter-y);
+  top: calc(var(--page-gutter-y) * -1);
+}
+
 .gateway-fill > .page-grid-fill {
   flex: 1 1 auto;
   min-height: 0;
