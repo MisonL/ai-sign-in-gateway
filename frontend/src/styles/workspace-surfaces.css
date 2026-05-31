@@ -46,10 +46,10 @@
   padding: 28px 24px 20px !important;
 }
 .chat-workbench.chat-workbench .session-empty {
-  width: min(720px, 100%) !important;
+  width: min(560px, 100%) !important;
   min-height: auto !important;
   margin: auto !important;
-  padding: 28px !important;
+  padding: 24px !important;
   text-align: left !important;
 }
 .chat-workbench.chat-workbench .session-empty__copy h1,
@@ -65,6 +65,16 @@
 .login-screen.login-screen .login-copy h1 {
   font-size: 32px !important;
   line-height: 1.16 !important;
+}
+
+.chat-workbench.chat-workbench .session-empty__copy h1 {
+  font-size: 24px !important;
+  line-height: 1.24 !important;
+}
+
+.chat-workbench.chat-workbench .session-empty__copy p {
+  font-size: 15px !important;
+  line-height: 1.55 !important;
 }
 .chat-workbench.chat-workbench .session-empty__copy p,
 .chat-workbench.chat-workbench .session-sidebar__header span,

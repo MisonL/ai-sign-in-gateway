@@ -18,6 +18,21 @@
   height: 100%;
 }
 
+.gateway-monitor-page.page-stack--dashboard {
+  height: auto;
+  grid-template-rows: auto;
+}
+
+.gateway-monitor-page .gateway-fill,
+.gateway-monitor-page .gateway-overview-shell {
+  height: auto;
+  min-height: 0;
+}
+
+.gateway-monitor-page .gateway-overview-shell {
+  overflow: visible;
+}
+
 .gateway-fill > .page-grid-fill {
   flex: 1 1 auto;
   min-height: 0;

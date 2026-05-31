@@ -106,6 +106,10 @@
     background: var(--bg-subtle);
   }
 
+  .settings-page .settings-tabs .ant-tabs-tab:nth-last-child(2) {
+    grid-column: 1 / -1;
+  }
+
   .settings-page .settings-tabs .ant-tabs-tab-active {
     border-color: rgba(37, 99, 235, 0.28);
     background: var(--accent-soft);
