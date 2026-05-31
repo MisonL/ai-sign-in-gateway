@@ -16,6 +16,7 @@
   }
 
   .route-pool-filter-switch,
+  .route-pool-switch-field,
   .route-pool-clear {
     width: auto;
   }
@@ -63,6 +64,11 @@
     grid-template-columns: 1fr !important;
     width: 100%;
     min-width: 0;
+  }
+
+  .route-pool-switch-field {
+    justify-content: flex-start;
+    width: 100%;
   }
 
   .sites-list-toolbar__meta {

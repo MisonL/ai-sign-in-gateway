@@ -153,18 +153,18 @@ body {
   height: 17px !important;
 }
 
-.ant-switch {
+.ant-switch:not(.route-pool-filter-switch) {
   min-width: 56px !important;
   height: var(--control-height) !important;
   line-height: var(--control-height) !important;
   border-radius: var(--radius-control) !important;
 }
 
-.ant-switch .ant-switch-handle {
+.ant-switch:not(.route-pool-filter-switch) .ant-switch-handle {
   top: 7px !important;
 }
 
-.ant-switch .ant-switch-inner {
+.ant-switch:not(.route-pool-filter-switch) .ant-switch-inner {
   min-height: calc(var(--control-height) - 2px) !important;
   line-height: calc(var(--control-height) - 2px) !important;
 }

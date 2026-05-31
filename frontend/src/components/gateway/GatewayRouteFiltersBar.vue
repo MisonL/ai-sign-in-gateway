@@ -90,14 +90,17 @@ function updateIncludeDisabled(value: boolean) {
         placeholder="按异常"
         @update:value="emit('update:selectedIssueStates', $event as GatewayIssueState[])"
       />
-      <a-switch
-        :checked="includeDisabled"
-        class="route-pool-filter-switch"
-        aria-label="包含停用路由"
-        checked-children="含"
-        un-checked-children="启"
-        @change="updateIncludeDisabled($event as boolean)"
-      />
+      <div class="route-pool-switch-field">
+        <span>停用</span>
+        <a-switch
+          :checked="includeDisabled"
+          class="route-pool-filter-switch"
+          aria-label="包含停用路由"
+          checked-children="含"
+          un-checked-children="不含"
+          @change="updateIncludeDisabled($event as boolean)"
+        />
+      </div>
       <a-button class="route-pool-clear" size="small" :disabled="!activeRouteFilterCount" @click="emit('clear-filters')">
         清空筛选
       </a-button>

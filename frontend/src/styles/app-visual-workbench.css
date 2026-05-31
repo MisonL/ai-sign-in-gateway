@@ -32,12 +32,14 @@
 
 .route-pool-type-tabs .ant-btn {
   width: auto;
-  min-width: 76px;
+  min-width: 66px;
+  font-size: 13px !important;
+  font-weight: 600 !important;
 }
 
 .route-pool-searchbar {
   display: grid !important;
-  grid-template-columns: minmax(240px, 1.15fr) minmax(200px, 0.9fr) minmax(150px, 0.65fr) 56px max-content;
+  grid-template-columns: minmax(240px, 1.15fr) minmax(200px, 0.9fr) minmax(150px, 0.65fr) minmax(104px, max-content) max-content;
   align-items: center;
   justify-content: stretch !important;
   min-width: 0;
@@ -53,10 +55,28 @@
   flex: 1 1 auto !important;
 }
 
+.route-pool-switch-field {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+  height: var(--control-height);
+}
+
+.route-pool-switch-field > span {
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
 .route-pool-filter-switch.ant-switch {
+  flex: 0 0 auto;
   width: auto !important;
-  max-width: 72px !important;
-  justify-self: center;
+  max-width: none !important;
+  justify-self: end;
 }
 
 .route-pool-clear.ant-btn {
@@ -115,19 +135,22 @@
 }
 
 .gateway-route-page.gateway-route-page .route-pool-filter-switch.ant-switch {
-  min-width: 56px !important;
-  height: var(--control-height) !important;
-  line-height: var(--control-height) !important;
-  border-radius: var(--radius-control) !important;
+  min-width: 62px !important;
+  height: 30px !important;
+  line-height: 30px !important;
+  border-radius: var(--radius-pill) !important;
 }
 
 .gateway-route-page.gateway-route-page .route-pool-filter-switch.ant-switch .ant-switch-handle {
-  top: 7px !important;
+  top: 6px !important;
 }
 
 .gateway-route-page.gateway-route-page .route-pool-filter-switch.ant-switch .ant-switch-inner {
-  min-height: calc(var(--control-height) - 2px) !important;
-  line-height: calc(var(--control-height) - 2px) !important;
+  min-height: 28px !important;
+  line-height: 28px !important;
+  padding-inline: 24px 8px !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
 }
 
 .sites-list-toolbar {

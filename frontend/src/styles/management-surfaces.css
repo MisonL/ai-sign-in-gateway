@@ -139,6 +139,12 @@
   box-shadow: none !important;
 }
 
+.gateway-route-page.gateway-route-page .route-pool-switch-field .route-pool-filter-switch.ant-switch {
+  height: 30px !important;
+  min-height: 30px !important;
+  border-radius: var(--radius-pill) !important;
+}
+
 .sites-page.sites-page .sites-toolbar__seg-btn--primary.ant-btn,
 .sites-page.sites-page .sites-toolbar__ghost-btn--strong.ant-btn,
 .sites-page.sites-page .sites-toolbar__create-btn.ant-btn,

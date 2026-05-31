@@ -21,6 +21,10 @@
     flex-direction: column;
   }
 
+  .route-management-toolbar {
+    display: flex;
+  }
+
   .gateway-route-page .page-toolbar > :last-child,
   .gateway-toolbar-actions.ant-space {
     width: 100%;
@@ -100,6 +104,11 @@
     width: 100%;
   }
 
+  .gateway-access--route {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
   .gateway-access--route code:first-child,
   .gateway-access--route code:nth-of-type(2) {
     max-width: 100%;
@@ -133,26 +142,32 @@
   }
 
   .route-pool-filter-switch,
+  .route-pool-switch-field,
   .route-pool-clear {
     width: 100%;
   }
 
+  .route-pool-switch-field {
+    justify-content: flex-start;
+  }
+
   .route-pool-filter-switch.ant-switch {
     justify-self: start;
+    width: auto !important;
     min-width: 66px !important;
-    height: 44px !important;
-    line-height: 44px !important;
+    height: 34px !important;
+    line-height: 34px !important;
   }
 
   .route-pool-filter-switch.ant-switch .ant-switch-handle {
-    top: 12px !important;
+    top: 8px !important;
   }
 
   .route-pool-filter-switch.ant-switch .ant-switch-inner,
   .route-pool-filter-switch.ant-switch .ant-switch-inner-checked,
   .route-pool-filter-switch.ant-switch .ant-switch-inner-unchecked {
-    min-height: 42px !important;
-    line-height: 42px !important;
+    min-height: 32px !important;
+    line-height: 32px !important;
   }
 
   .route-pool-clear.ant-btn {
