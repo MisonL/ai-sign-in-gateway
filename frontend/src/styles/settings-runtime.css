@@ -19,6 +19,7 @@
 .admin-users-panel {
   display: grid;
   gap: 14px;
+  min-width: 0;
 }
 
 .admin-users-create {
@@ -26,10 +27,38 @@
   grid-template-columns: minmax(160px, 1fr) minmax(160px, 1fr) 140px auto auto;
   gap: 8px;
   align-items: center;
+  min-width: 0;
+}
+
+.admin-users-create .ant-input,
+.admin-users-create .ant-input-affix-wrapper,
+.admin-users-create .ant-select,
+.admin-users-create .ant-btn {
+  width: 100%;
+  min-width: 0;
+}
+
+.admin-users-create .ant-switch {
+  justify-self: start;
 }
 
 .admin-users-table {
   min-width: 0;
+  max-width: 100%;
+}
+
+.admin-users-table .ant-table-container,
+.admin-users-table .ant-table-content {
+  width: 100%;
+  max-width: 100%;
+}
+
+.admin-users-table .ant-table-content {
+  overflow-x: auto !important;
+}
+
+.admin-users-table .ant-table-cell {
+  vertical-align: middle;
 }
 
 .settings-security-alert {
@@ -131,5 +160,25 @@
 
   .pricing-grid--head {
     display: none;
+  }
+}
+
+@media (max-width: 900px) {
+  .admin-users-create {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-users-create .ant-switch {
+    min-width: 66px;
+  }
+}
+
+@media (max-width: 560px) {
+  .admin-users-create {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-users-create .ant-btn {
+    justify-content: center;
   }
 }

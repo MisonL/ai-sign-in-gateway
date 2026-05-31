@@ -47,6 +47,8 @@ function handleSave() {
     v-model:open="open"
     title="网关策略"
     width="980px"
+    wrap-class-name="gateway-settings-modal-wrap"
+    class="gateway-settings-modal"
     :confirm-loading="loading"
     @ok="handleSave"
   >

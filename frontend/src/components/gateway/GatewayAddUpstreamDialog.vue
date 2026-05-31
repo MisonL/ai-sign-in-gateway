@@ -63,6 +63,8 @@ const apiFormatOptions = [
     ok-text="保存并加入路由池"
     cancel-text="取消"
     width="640px"
+    wrap-class-name="gateway-add-upstream-modal-wrap"
+    class="gateway-add-upstream-modal"
     @ok="handleSubmit"
     @cancel="handleCancel"
   >

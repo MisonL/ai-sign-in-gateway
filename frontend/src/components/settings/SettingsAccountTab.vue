@@ -112,6 +112,7 @@ const isPasswordMismatch = computed(() =>
               :data-source="view.adminUsers"
               :loading="view.adminUsersLoading"
               :pagination="false"
+              :scroll="{ x: 1100 }"
               row-key="id"
             >
               <a-table-column title="用户名" key="username" :width="180">
