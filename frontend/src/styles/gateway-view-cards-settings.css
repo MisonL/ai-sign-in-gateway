@@ -188,8 +188,22 @@
     padding-bottom: 16px;
   }
 
+  .gateway-settings-modal .ant-modal-body {
+    overflow-x: hidden;
+  }
+
   .gateway-policy-settings-layout {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .gateway-policy-settings-layout .ant-row {
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+  }
+
+  .gateway-policy-settings-layout .ant-col {
+    padding-left: 0 !important;
+    padding-right: 0 !important;
   }
 
   .gateway-policy-settings-layout__side {

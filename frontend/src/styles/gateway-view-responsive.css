@@ -257,6 +257,32 @@
     width: 100%;
   }
 
+  .gateway-panel--usage .gateway-usage-range-controls.ant-space {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px !important;
+    width: 100%;
+  }
+
+  .gateway-panel--usage .gateway-usage-range-controls.ant-space > .ant-space-item {
+    min-width: 0;
+  }
+
+  .gateway-panel--usage .gateway-usage-range-controls.ant-space > .ant-space-item:nth-child(1),
+  .gateway-panel--usage .gateway-usage-range-controls.ant-space > .ant-space-item:nth-child(2),
+  .gateway-panel--usage .gateway-usage-range-controls.ant-space > .ant-space-item:nth-child(3) {
+    grid-column: 1 / -1;
+  }
+
+  .gateway-panel--usage .gateway-usage-range-controls.ant-space > .ant-space-item:nth-child(2) {
+    justify-self: center;
+  }
+
+  .gateway-panel--usage .gateway-usage-range-controls.ant-space > .ant-space-item:nth-child(4) .ant-btn,
+  .gateway-panel--usage .gateway-usage-range-controls.ant-space > .ant-space-item:nth-child(5) .ant-btn {
+    width: 100%;
+  }
+
   .gateway-usage-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

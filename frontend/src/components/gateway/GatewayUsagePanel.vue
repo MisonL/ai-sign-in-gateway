@@ -37,7 +37,7 @@ function readInputValue(event: Event) {
       <div>
         <div class="gateway-panel__title">时间段消耗</div>
       </div>
-      <a-space wrap>
+      <a-space class="gateway-usage-range-controls" wrap>
         <input
           :value="usageRange.start"
           class="gateway-usage-input"
