@@ -49,7 +49,7 @@
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: nowrap;
   min-width: 0;
   max-width: 100%;
@@ -70,10 +70,10 @@
 .header-status {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  height: 32px;
+  gap: 5px;
+  height: 30px;
   min-width: 0;
-  padding: 0 10px;
+  padding: 0 9px;
   border-radius: var(--radius-control);
   border: 1px solid var(--border-soft);
   background: var(--bg-panel);
@@ -91,9 +91,9 @@
 
 .header-status__value {
   color: var(--text-main);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
-  line-height: 16px;
+  line-height: 15px;
   font-feature-settings: 'tnum';
   overflow: hidden;
   text-overflow: ellipsis;
@@ -171,6 +171,15 @@
 
   .app-header__actions {
     justify-self: start;
+    display: flex !important;
+    flex-wrap: wrap;
+    gap: 6px !important;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .app-header__actions .ant-space-item {
+    min-width: 0;
   }
 
   .app-header__page p {

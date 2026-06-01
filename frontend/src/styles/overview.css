@@ -92,9 +92,9 @@
 
 .overview-metric-card .ant-card-body {
   align-content: start;
-  gap: 8px;
-  min-height: 124px;
-  padding: 18px 20px 18px 22px;
+  gap: 7px;
+  min-height: 108px;
+  padding: 14px 16px 14px 20px;
   position: relative;
   z-index: 1;
 }
@@ -102,16 +102,16 @@
 .overview-metric-card__head {
   align-items: center;
   justify-content: flex-start;
-  gap: 10px;
-  min-height: 32px;
+  gap: 8px;
+  min-height: 28px;
 }
 
 .overview-metric-card__icon,
 .overview-schedule-item__icon {
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   border-radius: var(--radius-control);
   background: var(--accent-soft);
   color: var(--accent);
@@ -141,9 +141,9 @@
 
 .overview-metric-card__title {
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
-  line-height: 18px;
+  line-height: 16px;
 }
 
 .overview-metric-card__value {

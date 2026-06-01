@@ -136,8 +136,8 @@
 .sider-footer {
   flex-shrink: 0;
   display: grid;
-  gap: 10px;
-  padding: 0 12px 12px;
+  gap: 8px;
+  padding: 0 10px 10px;
   position: relative;
   z-index: 3;
 }
@@ -150,8 +150,8 @@
 
 .sider-footer__panel {
   display: grid;
-  gap: 10px;
-  padding: 12px;
+  gap: 8px;
+  padding: 10px;
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-container);
   background: var(--bg-subtle);
@@ -172,8 +172,8 @@
 .sider-footer__badge {
   display: inline-flex;
   align-items: center;
-  height: 22px;
-  padding: 0 8px;
+  height: 20px;
+  padding: 0 7px;
   border-radius: 999px;
   background: var(--success-soft);
   color: var(--success);
@@ -185,7 +185,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
   color: var(--text-muted);
   font-size: 12px;
