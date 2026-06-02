@@ -77,7 +77,6 @@ export interface GatewayRoute {
 export interface GatewayRouteGroup {
   id: number
   name: string
-  api_key: string
   has_api_key?: boolean
   route_count: number
   created_at?: string

@@ -347,6 +347,92 @@ func TestGatewayRouteGroupManagementAssignsRouteToMultipleGroups(t *testing.T) {
 	}
 }
 
+func TestGatewayRouteGroupResponseDoesNotExposeAPIKey(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:gateway-route-group-secret-response?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(models.All()...); err != nil {
+		t.Fatalf("auto migrate: %v", err)
+	}
+
+	app := &App{DB: db}
+	router := chi.NewRouter()
+	router.Post("/route-groups", app.CreateGatewayRouteGroup)
+	router.Get("/route-groups", app.GatewayRouteGroups)
+	router.Put("/route-groups/{groupID}", app.UpdateGatewayRouteGroup)
+
+	createBody, _ := json.Marshal(map[string]any{"name": "secure", "api_key": "group-secret"})
+	createRec := httptest.NewRecorder()
+	router.ServeHTTP(createRec, httptest.NewRequest(http.MethodPost, "/route-groups", bytes.NewReader(createBody)))
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body = %s", createRec.Code, createRec.Body.String())
+	}
+	var created map[string]any
+	if err := json.Unmarshal(createRec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	assertRouteGroupKeyHidden(t, created)
+
+	groupID := uint(created["id"].(float64))
+	updateBody, _ := json.Marshal(map[string]any{"name": "secure-renamed"})
+	updateRec := httptest.NewRecorder()
+	router.ServeHTTP(updateRec, httptest.NewRequest(http.MethodPut, fmt.Sprintf("/route-groups/%d", groupID), bytes.NewReader(updateBody)))
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("update status = %d body = %s", updateRec.Code, updateRec.Body.String())
+	}
+	var updated map[string]any
+	if err := json.Unmarshal(updateRec.Body.Bytes(), &updated); err != nil {
+		t.Fatalf("decode update response: %v", err)
+	}
+	assertRouteGroupKeyHidden(t, updated)
+
+	var stored models.GatewayRouteGroup
+	if err := db.First(&stored, groupID).Error; err != nil {
+		t.Fatalf("load stored group: %v", err)
+	}
+	if stored.APIKey != "group-secret" {
+		t.Fatalf("stored APIKey changed after keyless update: %q", stored.APIKey)
+	}
+
+	listRec := httptest.NewRecorder()
+	router.ServeHTTP(listRec, httptest.NewRequest(http.MethodGet, "/route-groups", nil))
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status = %d body = %s", listRec.Code, listRec.Body.String())
+	}
+	var listed []map[string]any
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode list response: %v", err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("listed len = %d body = %s", len(listed), listRec.Body.String())
+	}
+	assertRouteGroupKeyHidden(t, listed[0])
+
+	clearBody, _ := json.Marshal(map[string]any{"name": "secure-renamed", "clear_api_key": true})
+	clearRec := httptest.NewRecorder()
+	router.ServeHTTP(clearRec, httptest.NewRequest(http.MethodPut, fmt.Sprintf("/route-groups/%d", groupID), bytes.NewReader(clearBody)))
+	if clearRec.Code != http.StatusOK {
+		t.Fatalf("clear status = %d body = %s", clearRec.Code, clearRec.Body.String())
+	}
+	if err := db.First(&stored, groupID).Error; err != nil {
+		t.Fatalf("reload stored group: %v", err)
+	}
+	if stored.APIKey != "" {
+		t.Fatalf("stored APIKey after clear = %q", stored.APIKey)
+	}
+}
+
+func assertRouteGroupKeyHidden(t *testing.T, payload map[string]any) {
+	t.Helper()
+	if _, ok := payload["api_key"]; ok {
+		t.Fatalf("route group response exposed api_key: %#v", payload)
+	}
+	if payload["has_api_key"] != true {
+		t.Fatalf("has_api_key = %v", payload["has_api_key"])
+	}
+}
+
 func TestDeleteGatewayRouteRemovesMatchingSiteAPIKeyAndGroupMembership(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:gateway-route-delete-api-key?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
@@ -997,6 +1083,23 @@ func TestGatewayAdminResponsesRedactHistoricalFailureSecrets(t *testing.T) {
 	secretReason := "failed token=history-secret cookie=session=history-secret"
 	status := http.StatusUnauthorized
 	app := &App{}
+	activeResponse, err := app.gatewayActiveRequestResponse([]services.GatewayActiveRequest{
+		{
+			ID:         "active-secret-request",
+			RequestURL: "https://upstream.example/v1/chat/completions?debug=1&api_key=active-secret&token=active-token",
+			StartedAt:  time.Now().UTC(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("active response: %v", err)
+	}
+	if len(activeResponse) != 1 {
+		t.Fatalf("active response length = %d", len(activeResponse))
+	}
+	if got := fmt.Sprint(activeResponse[0]["request_url"]); strings.Contains(got, "active-secret") || strings.Contains(got, "active-token") || !strings.Contains(got, "debug=1") {
+		t.Fatalf("active request_url redaction = %s", got)
+	}
+
 	logResponse := app.gatewayLogResponse([]models.GatewayRequestLog{
 		{
 			ID:            1,

@@ -28,6 +28,7 @@ type LoadGatewayDataOptions<
   TOutputRoute,
   TLog,
   TSiteGroup,
+  TRouteGroup,
   TUsage,
   TActiveRequest,
   TController extends AbortControllerLike = AbortController,
@@ -45,6 +46,7 @@ type LoadGatewayDataOptions<
   requestRoutes: (options: { includeDisabled: boolean; signal: TController['signal'] }) => Promise<TInputRoute[]>
   requestLogs: (limit: number, options: { signal: TController['signal'] }) => Promise<TLog[]>
   requestSiteGroups: (options: { signal: TController['signal'] }) => Promise<TSiteGroup[]>
+  requestRouteGroups: (options: { signal: TController['signal'] }) => Promise<TRouteGroup[]>
   requestUsage: (options: GatewayUsageRequestRange & { signal: TController['signal'] }) => Promise<TUsage>
   requestActiveRequests: (options: { signal: TController['signal'] }) => Promise<TActiveRequest[]>
   normalizeRoute: (route: TInputRoute) => TOutputRoute
@@ -54,6 +56,7 @@ type LoadGatewayDataOptions<
   setRoutes: (routes: TOutputRoute[]) => void
   setLogs: (logs: TLog[]) => void
   setSiteGroups: (groups: TSiteGroup[]) => void
+  setRouteGroups: (groups: TRouteGroup[]) => void
   setUsage: (usage: TUsage | null) => void
   setActiveRequests: (activeRequests: TActiveRequest[]) => void
   applyActiveRequestSnapshot: (activeRequests: TActiveRequest[]) => void
@@ -68,6 +71,7 @@ type CreateLoadGatewayInitialDataRuntimeActionOptions<
   TOutputRoute,
   TLog,
   TSiteGroup,
+  TRouteGroup,
   TUsage,
   TActiveRequest,
   TController extends AbortControllerLike = AbortController,
@@ -79,6 +83,7 @@ type CreateLoadGatewayInitialDataRuntimeActionOptions<
     TOutputRoute,
     TLog,
     TSiteGroup,
+    TRouteGroup,
     TUsage,
     TActiveRequest,
     TController
@@ -93,6 +98,7 @@ type CreateLoadGatewayInitialDataRuntimeActionOptions<
       TOutputRoute,
       TLog,
       TSiteGroup,
+      TRouteGroup,
       TUsage,
       TActiveRequest,
       TController
@@ -111,6 +117,7 @@ export function createLoadGatewayInitialDataRuntimeAction<
   TOutputRoute,
   TLog,
   TSiteGroup,
+  TRouteGroup,
   TUsage,
   TActiveRequest,
   TController extends AbortControllerLike = AbortController,
@@ -129,6 +136,7 @@ export function createLoadGatewayInitialDataRuntimeAction<
   requestRoutes,
   requestLogs,
   requestSiteGroups,
+  requestRouteGroups,
   requestUsage,
   requestActiveRequests,
   normalizeRoute,
@@ -138,6 +146,7 @@ export function createLoadGatewayInitialDataRuntimeAction<
   setRoutes,
   setLogs,
   setSiteGroups,
+  setRouteGroups,
   setUsage,
   setActiveRequests,
   applyActiveRequestSnapshot,
@@ -150,6 +159,7 @@ export function createLoadGatewayInitialDataRuntimeAction<
   TOutputRoute,
   TLog,
   TSiteGroup,
+  TRouteGroup,
   TUsage,
   TActiveRequest,
   TController
@@ -169,6 +179,7 @@ export function createLoadGatewayInitialDataRuntimeAction<
       requestRoutes,
       requestLogs,
       requestSiteGroups,
+      requestRouteGroups,
       requestUsage,
       requestActiveRequests,
       normalizeRoute,
@@ -178,6 +189,7 @@ export function createLoadGatewayInitialDataRuntimeAction<
       setRoutes,
       setLogs,
       setSiteGroups,
+      setRouteGroups,
       setUsage,
       setActiveRequests,
       applyActiveRequestSnapshot,
@@ -193,6 +205,7 @@ export async function loadGatewayData<
   TOutputRoute,
   TLog,
   TSiteGroup,
+  TRouteGroup,
   TUsage,
   TActiveRequest,
   TController extends AbortControllerLike = AbortController,
@@ -210,6 +223,7 @@ export async function loadGatewayData<
   requestRoutes,
   requestLogs,
   requestSiteGroups,
+  requestRouteGroups,
   requestUsage,
   requestActiveRequests,
   normalizeRoute,
@@ -219,6 +233,7 @@ export async function loadGatewayData<
   setRoutes,
   setLogs,
   setSiteGroups,
+  setRouteGroups,
   setUsage,
   setActiveRequests,
   applyActiveRequestSnapshot,
@@ -231,6 +246,7 @@ export async function loadGatewayData<
   TOutputRoute,
   TLog,
   TSiteGroup,
+  TRouteGroup,
   TUsage,
   TActiveRequest,
   TController
@@ -244,7 +260,10 @@ export async function loadGatewayData<
       requestSettings({ signal: controller.signal }),
       requestRoutes({ includeDisabled, signal: controller.signal }),
       loadPlan.loadLogs ? requestLogs(80, { signal: controller.signal }) : Promise.resolve([] as TLog[]),
-      requestSiteGroups({ signal: controller.signal }),
+      Promise.all([
+        requestSiteGroups({ signal: controller.signal }),
+        requestRouteGroups({ signal: controller.signal }),
+      ]),
       loadPlan.loadUsage ? requestUsage({
         ...requestRange,
         signal: controller.signal,
@@ -266,7 +285,8 @@ export async function loadGatewayData<
     setPriorityRoutes(applyPlan.normalizedRoutes)
     setRoutes(applyPlan.normalizedRoutes)
     setLogs(logData)
-    setSiteGroups(groupData)
+    setSiteGroups(groupData[0])
+    setRouteGroups(groupData[1])
     setUsage(usageData)
     setActiveRequests(activeRequestData)
     if (applyPlan.applyActiveRequestSnapshot) {

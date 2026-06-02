@@ -6,7 +6,7 @@ import {
   createRefreshGatewaySiteGroupsAction,
   refreshGatewaySiteGroups,
 } from '../src/gatewaySiteGroupsController.ts'
-import type { SiteGroup } from '../src/types.ts'
+import type { GatewayRouteGroup, SiteGroup } from '../src/types.ts'
 
 const gatewayViewPath = new URL('../src/views/GatewayView.vue', import.meta.url)
 const gatewayPageControllerPath = new URL('../src/gatewayPageController.ts', import.meta.url)
@@ -31,9 +31,18 @@ function group(name: string): SiteGroup {
   }
 }
 
+function routeGroup(name: string, id = 1): GatewayRouteGroup {
+  return {
+    id,
+    name,
+    route_count: 1,
+  }
+}
+
 test('refreshGatewaySiteGroups loads site groups and replaces the current options', async () => {
   const events: string[] = []
   let currentGroups = [group('旧分组')]
+  let currentRouteGroups = [routeGroup('旧路由分组')]
 
   await refreshGatewaySiteGroups({
     requestSiteGroups: async () => {
@@ -44,18 +53,30 @@ test('refreshGatewaySiteGroups loads site groups and replaces the current option
       events.push(`set:${groups.map((item) => item.name).join(',')}`)
       currentGroups = groups
     },
+    requestRouteGroups: async () => {
+      events.push('request-route-groups')
+      return [routeGroup('新路由分组')]
+    },
+    setRouteGroups: (groups) => {
+      events.push(`set-route:${groups.map((item) => item.name).join(',')}`)
+      currentRouteGroups = groups
+    },
   })
 
   assert.deepEqual(events, [
     'request',
     'set:新分组',
+    'request-route-groups',
+    'set-route:新路由分组',
   ])
   assert.deepEqual(currentGroups.map((item) => item.name), ['新分组'])
+  assert.deepEqual(currentRouteGroups.map((item) => item.name), ['新路由分组'])
 })
 
 test('refreshGatewaySiteGroups keeps existing options when loading fails', async () => {
   const events: string[] = []
   const currentGroups = [group('旧分组')]
+  const currentRouteGroups = [routeGroup('旧路由分组')]
 
   await refreshGatewaySiteGroups({
     requestSiteGroups: async () => {
@@ -65,16 +86,26 @@ test('refreshGatewaySiteGroups keeps existing options when loading fails', async
     setSiteGroups: () => {
       events.push('set')
     },
+    requestRouteGroups: async () => {
+      events.push('request-route-groups')
+      throw new Error('route groups failed')
+    },
+    setRouteGroups: () => {
+      events.push('set-route')
+    },
   })
 
-  assert.deepEqual(events, ['request'])
+  assert.deepEqual(events, ['request', 'request-route-groups'])
   assert.deepEqual(currentGroups.map((item) => item.name), ['旧分组'])
+  assert.deepEqual(currentRouteGroups.map((item) => item.name), ['旧路由分组'])
 })
 
 test('createRefreshGatewaySiteGroupsAction refreshes groups through injected dependencies', async () => {
   const events: string[] = []
   let requestCount = 0
+  let routeRequestCount = 0
   let currentGroups: SiteGroup[] = []
+  let currentRouteGroups: GatewayRouteGroup[] = []
 
   const action = createRefreshGatewaySiteGroupsAction({
     requestSiteGroups: async () => {
@@ -86,6 +117,15 @@ test('createRefreshGatewaySiteGroupsAction refreshes groups through injected dep
       events.push(`set:${groups.map((item) => item.name).join(',')}`)
       currentGroups = groups
     },
+    requestRouteGroups: async () => {
+      routeRequestCount += 1
+      events.push(`request-route:${routeRequestCount}`)
+      return [routeGroup(`路由分组 ${routeRequestCount}`, routeRequestCount)]
+    },
+    setRouteGroups: (groups) => {
+      events.push(`set-route:${groups.map((item) => item.name).join(',')}`)
+      currentRouteGroups = groups
+    },
   })
 
   await action()
@@ -94,10 +134,15 @@ test('createRefreshGatewaySiteGroupsAction refreshes groups through injected dep
   assert.deepEqual(events, [
     'request:1',
     'set:分组 1',
+    'request-route:1',
+    'set-route:路由分组 1',
     'request:2',
     'set:分组 2',
+    'request-route:2',
+    'set-route:路由分组 2',
   ])
   assert.deepEqual(currentGroups.map((item) => item.name), ['分组 2'])
+  assert.deepEqual(currentRouteGroups.map((item) => item.name), ['路由分组 2'])
 })
 
 test('GatewayView delegates site group changes through the site groups controller', async () => {

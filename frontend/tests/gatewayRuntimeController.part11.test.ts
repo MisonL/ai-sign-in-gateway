@@ -63,6 +63,7 @@ test('refreshes realtime gateway data through injected runtime dependencies', as
     routes: [] as string[],
     priorityRoutes: [] as string[],
     logs: [] as string[],
+    routeGroups: [] as string[],
   }
 
   await refreshGatewayRealtimeData({
@@ -107,6 +108,11 @@ test('refreshes realtime gateway data through injected runtime dependencies', as
       calls.push('logs')
       return ['log']
     },
+    requestRouteGroups: async ({ signal }) => {
+      assert.equal(signal, controller.signal)
+      calls.push('route-groups')
+      return ['route-group']
+    },
     currentLogs: () => ['old-log'],
     normalizeRoute: (route) => route.toUpperCase(),
     setOverview: (overview) => {
@@ -125,6 +131,10 @@ test('refreshes realtime gateway data through injected runtime dependencies', as
       state.logs = logs
       calls.push('set-logs')
     },
+    setRouteGroups: (groups) => {
+      state.routeGroups = groups
+      calls.push('set-route-groups')
+    },
     refreshActiveRequests: async (silent) => {
       assert.equal(silent, true)
       calls.push('refresh-active')
@@ -137,10 +147,12 @@ test('refreshes realtime gateway data through injected runtime dependencies', as
     'overview',
     'routes',
     'logs',
+    'route-groups',
     'set-overview',
     'set-routes',
     'set-priority-routes',
     'set-logs',
+    'set-route-groups',
     'refresh-active',
     'clear',
     'finish',
@@ -149,6 +161,7 @@ test('refreshes realtime gateway data through injected runtime dependencies', as
   assert.deepEqual(state.routes, ['PRIMARY'])
   assert.deepEqual(state.priorityRoutes, ['PRIMARY'])
   assert.deepEqual(state.logs, ['log'])
+  assert.deepEqual(state.routeGroups, ['route-group'])
 })
 
 test('refreshGatewayRealtimeData skips requests when runtime throttling rejects start', async () => {
@@ -184,12 +197,16 @@ test('refreshGatewayRealtimeData skips requests when runtime throttling rejects 
     requestLogs: async () => {
       throw new Error('logs should not load')
     },
+    requestRouteGroups: async () => {
+      throw new Error('route groups should not load')
+    },
     currentLogs: () => [],
     normalizeRoute: (route: string) => route,
     setOverview: () => {},
     setRoutes: () => {},
     setPriorityRoutes: () => {},
     setLogs: () => {},
+    setRouteGroups: () => {},
     refreshActiveRequests: async () => {},
     isAbortError: () => false,
   })
@@ -215,6 +232,7 @@ test('refreshGatewayRealtimeData preserves stale, mounted-out, and priority-edit
     requestOverview: async () => 'overview',
     requestRoutes: async () => ['primary'],
     requestLogs: async () => ['log'],
+    requestRouteGroups: async () => ['route-group'],
     currentLogs: () => ['existing-log'],
     normalizeRoute: (route: string) => route.toUpperCase(),
     setOverview: () => {
@@ -228,6 +246,9 @@ test('refreshGatewayRealtimeData preserves stale, mounted-out, and priority-edit
     },
     setLogs: () => {
       calls.push('set-logs')
+    },
+    setRouteGroups: () => {
+      calls.push('set-route-groups')
     },
     refreshActiveRequests: async () => {
       calls.push('refresh-active')
@@ -274,6 +295,7 @@ test('refreshGatewayRealtimeData preserves stale, mounted-out, and priority-edit
     'set-overview',
     'set-routes',
     'set-logs',
+    'set-route-groups',
     'finish',
   ])
 })

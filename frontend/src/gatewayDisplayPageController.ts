@@ -29,6 +29,7 @@ import {
   buildGatewayMetricCards,
   buildGatewayRouteFilters,
   buildGatewayStrategyCards,
+  buildSiteGroupOptions,
   buildRoutePoolPreviewRoutes,
   buildRoutePoolStatusCards,
   buildUsageSummaryCards,
@@ -41,6 +42,7 @@ import type {
   GatewayLog,
   GatewayOverview,
   GatewayRoute,
+  GatewayRouteGroup,
   GatewayUsage,
   SiteGroup,
 } from './types.ts'
@@ -60,6 +62,7 @@ type GatewayDisplayPageStateOptions = {
   activeRequests: Ref<GatewayActiveRequest[]>
   gatewayUsage: Ref<GatewayUsage | null>
   siteGroups: Ref<SiteGroup[]>
+  routeGroups: Ref<GatewayRouteGroup[]>
   selectedGroups: Ref<string[]>
   addUpstreamGroupNames: Ref<string[]>
   routeFilterState: MaybeReadonlyRef<GatewayRouteFilterState>
@@ -76,6 +79,7 @@ export function useGatewayDisplayPageState({
   activeRequests,
   gatewayUsage,
   siteGroups,
+  routeGroups,
   selectedGroups,
   addUpstreamGroupNames,
   routeFilterState,
@@ -91,6 +95,7 @@ export function useGatewayDisplayPageState({
     activeRequests,
     gatewayUsage,
     siteGroups,
+    routeGroups,
     selectedGroups,
     addUpstreamGroupNames,
     routeFilterState: computed(() => buildGatewayRouteFilters(routeFilterState.value)),
@@ -104,6 +109,7 @@ export function useGatewayDisplayPageState({
     buildGatewayStrategyCards,
     buildUsageSummaryCards,
     buildGroupOptions: buildGatewayGroupOptions,
+    buildSiteGroupOptions,
     buildActivityFeed: buildRouteActivityFeed,
     filterRoutes: filterGatewayRoutes,
     filterLogs: filterGatewayLogs,

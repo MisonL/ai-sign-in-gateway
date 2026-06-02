@@ -8,6 +8,7 @@ import type {
   GatewayLog,
   GatewayOverview,
   GatewayRoute,
+  GatewayRouteGroup,
   GatewaySettingsData,
   GatewayUsage,
   SiteGroup,
@@ -46,6 +47,7 @@ type LoadGatewayInitialDataOptions<TController extends AbortControllerLike = Abo
   requestRoutes: (options: { includeDisabled: boolean; signal: TController['signal'] }) => Promise<GatewayRoute[]>
   requestLogs: (limit: number, options: { signal: TController['signal'] }) => Promise<GatewayLog[]>
   requestSiteGroups: (options: { signal: TController['signal'] }) => Promise<SiteGroup[]>
+  requestRouteGroups: (options: { signal: TController['signal'] }) => Promise<GatewayRouteGroup[]>
   requestUsage: (options: GatewayUsageRequestRange & { signal: TController['signal'] }) => Promise<GatewayUsage>
   requestActiveRequests: (options: { signal: TController['signal'] }) => Promise<GatewayActiveRequest[]>
   normalizeRoute: (route: GatewayRoute) => GatewayRoute
@@ -55,6 +57,7 @@ type LoadGatewayInitialDataOptions<TController extends AbortControllerLike = Abo
   setRoutes: (routes: GatewayRoute[]) => void
   setLogs: (logs: GatewayLog[]) => void
   setSiteGroups: (groups: SiteGroup[]) => void
+  setRouteGroups: (groups: GatewayRouteGroup[]) => void
   setUsage: (usage: GatewayUsage | null) => void
   setActiveRequests: (activeRequests: GatewayActiveRequest[]) => void
   applyActiveRequestSnapshot: (activeRequests: GatewayActiveRequest[]) => void
@@ -70,6 +73,7 @@ export type GatewayInitialDataPageOptions<TController extends AbortControllerLik
   activeRequests: Ref<GatewayActiveRequest[]>
   gatewayUsage: Ref<GatewayUsage | null>
   siteGroups: Ref<SiteGroup[]>
+  routeGroups: Ref<GatewayRouteGroup[]>
   includeDisabled: Ref<boolean>
   settingsDialog: {
     setSettings: (settings: GatewaySettingsData) => void
@@ -89,6 +93,7 @@ export type GatewayInitialDataPageOptions<TController extends AbortControllerLik
   requestRoutes: (options: { includeDisabled: boolean; signal: TController['signal'] }) => Promise<GatewayRoute[]>
   requestLogs: (limit: number, options: { signal: TController['signal'] }) => Promise<GatewayLog[]>
   requestSiteGroups: (options: { signal: TController['signal'] }) => Promise<SiteGroup[]>
+  requestRouteGroups: (options: { signal: TController['signal'] }) => Promise<GatewayRouteGroup[]>
   requestUsage: (options: GatewayUsageRequestRange & { signal: TController['signal'] }) => Promise<GatewayUsage>
   requestActiveRequests: (options: { signal: TController['signal'] }) => Promise<GatewayActiveRequest[]>
   normalizeRoute: (route: GatewayRoute) => GatewayRoute
@@ -104,6 +109,7 @@ export function useGatewayInitialDataPageActions<TController extends AbortContro
   activeRequests,
   gatewayUsage,
   siteGroups,
+  routeGroups,
   includeDisabled,
   settingsDialog,
   logsDrawer,
@@ -119,6 +125,7 @@ export function useGatewayInitialDataPageActions<TController extends AbortContro
   requestRoutes,
   requestLogs,
   requestSiteGroups,
+  requestRouteGroups,
   requestUsage,
   requestActiveRequests,
   normalizeRoute,
@@ -133,6 +140,7 @@ export function useGatewayInitialDataPageActions<TController extends AbortContro
     GatewayRoute,
     GatewayLog,
     SiteGroup,
+    GatewayRouteGroup,
     GatewayUsage,
     GatewayActiveRequest,
     TController
@@ -151,6 +159,7 @@ export function useGatewayInitialDataPageActions<TController extends AbortContro
     requestRoutes,
     requestLogs,
     requestSiteGroups,
+    requestRouteGroups,
     requestUsage,
     requestActiveRequests,
     normalizeRoute,
@@ -167,6 +176,9 @@ export function useGatewayInitialDataPageActions<TController extends AbortContro
     setLogs: (logData) => logsDrawer.setLogs(logData),
     setSiteGroups: (groups) => {
       siteGroups.value = groups
+    },
+    setRouteGroups: (groups) => {
+      routeGroups.value = groups
     },
     setUsage: (usage) => {
       gatewayUsage.value = usage

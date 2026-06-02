@@ -4,6 +4,7 @@ import {
   getRuns,
   getSettings,
   runSchedulerNow,
+  runBatch,
   runSiteCheckin,
   updateCheckinParticipation,
   updateSettings,
@@ -137,26 +138,21 @@ export function useSitesCheckin(options: UseSitesCheckinOptions) {
     options.busy.value = true
     checkinBatchProgress.value = { total: targets.length, done: 0, success: 0, failed: 0 }
     try {
+      const results = await runBatch(siteIds, onlyEnabled)
+      const resultBySiteId = new Map(results.map((result) => [result.site_id, result]))
       for (const site of targets) {
-        try {
-          const result = await runSiteCheckin(site.id)
+        const result = resultBySiteId.get(site.id)
+        if (result) {
           applyCheckinResultForSite(site.id, result)
           if (result.status === 'success') {
             checkinBatchProgress.value.success += 1
           } else {
             checkinBatchProgress.value.failed += 1
           }
-        } catch (err) {
+        } else {
           checkinBatchProgress.value.failed += 1
-          applyCheckinResultForSite(site.id, {
-            status: 'failed',
-            message: err instanceof Error ? err.message : '执行失败',
-            balance: site.last_balance,
-            balance_unit: null,
-          })
-        } finally {
-          checkinBatchProgress.value.done += 1
         }
+        checkinBatchProgress.value.done += 1
       }
       options.toast.success(`签到完成：成功 ${checkinBatchProgress.value.success}，失败 ${checkinBatchProgress.value.failed}。`)
       await loadCheckinExtras()

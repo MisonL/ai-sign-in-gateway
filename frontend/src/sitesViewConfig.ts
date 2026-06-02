@@ -99,6 +99,7 @@ export const ccSwitchPreviewColumns: ColumnsType<CCSwitchPreviewRow> = [
 ]
 
 export const duplicateColumns: ColumnsType<DuplicateSiteGroup> = [
+  { title: '插件', key: 'plugin_key', width: 130, sorter: (a, b) => a.plugin_key.localeCompare(b.plugin_key, 'zh-CN') },
   { title: '基础 URL', key: 'base_url', width: 260, sorter: (a, b) => a.base_url.localeCompare(b.base_url, 'zh-CN') },
   { title: '账号', key: 'account', width: 160, sorter: (a, b) => a.account.localeCompare(b.account, 'zh-CN') },
   { title: '密码', key: 'password', width: 90, sorter: (a, b) => Number(a.password_present) - Number(b.password_present) },

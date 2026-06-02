@@ -13,6 +13,8 @@ import type {
   ModelListResult,
 } from './types'
 
+export const mcpTestUnavailableMessage = 'MCP 测试功能尚未接入 Go 后端。'
+
 export function listToolModels(siteId: number): Promise<ModelListResult> {
   return request('/tools/models', {
     method: 'POST',
@@ -86,8 +88,6 @@ export function testMcp(payload: {
   allowed_tools: string[]
   require_approval: 'never' | 'always'
 }): Promise<McpTestResult> {
-  return request('/tools/mcp-test', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  })
+  void payload
+  return Promise.reject(new Error(mcpTestUnavailableMessage))
 }

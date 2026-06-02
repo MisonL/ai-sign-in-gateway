@@ -7,6 +7,7 @@ import type {
   GatewayLog,
   GatewayOverview,
   GatewayRoute,
+  GatewayRouteGroup,
   GatewayUsage,
   SiteGroup,
 } from './types.ts'
@@ -36,6 +37,7 @@ type GatewayDerivedStateOptions<
   activeRequests: Ref<GatewayActiveRequest[]>
   gatewayUsage: Ref<GatewayUsage | null>
   siteGroups: Ref<SiteGroup[]>
+  routeGroups: Ref<GatewayRouteGroup[]>
   selectedGroups: Ref<string[]>
   addUpstreamGroupNames: Ref<string[]>
   routeFilterState: ComputedRef<TRouteFilters>
@@ -52,9 +54,12 @@ type GatewayDerivedStateOptions<
   buildGatewayStrategyCards: (breakdown: GatewayOverview['strategy_breakdown_24h'] | undefined) => TGatewayStrategyCards
   buildUsageSummaryCards: (usage: GatewayUsage | null) => TUsageSummaryCards
   buildGroupOptions: (
-    siteGroups: SiteGroup[],
+    groups: GatewayRouteGroup[],
     routes: GatewayRoute[],
     selectedGroups: string[],
+  ) => TGroupOptions
+  buildSiteGroupOptions: (
+    siteGroups: SiteGroup[],
     addUpstreamGroupNames: string[],
   ) => TGroupOptions
   buildActivityFeed: (activeRequests: GatewayActiveRequest[], logs: GatewayLog[]) => TActivityFeed
@@ -86,6 +91,7 @@ export function useGatewayDerivedState<
   activeRequests,
   gatewayUsage,
   siteGroups,
+  routeGroups,
   selectedGroups,
   addUpstreamGroupNames,
   routeFilterState,
@@ -99,6 +105,7 @@ export function useGatewayDerivedState<
   buildGatewayStrategyCards,
   buildUsageSummaryCards,
   buildGroupOptions,
+  buildSiteGroupOptions,
   buildActivityFeed,
   filterRoutes,
   filterLogs,
@@ -126,7 +133,10 @@ export function useGatewayDerivedState<
   const gatewayStrategyCards = computed(() => buildGatewayStrategyCards(overview.value?.strategy_breakdown_24h))
   const usageSummaryCards = computed(() => buildUsageSummaryCards(gatewayUsage.value))
   const groupOptions = computed(() =>
-    buildGroupOptions(siteGroups.value, routes.value, selectedGroups.value, addUpstreamGroupNames.value),
+    buildGroupOptions(routeGroups.value, routes.value, selectedGroups.value),
+  )
+  const siteGroupOptions = computed(() =>
+    buildSiteGroupOptions(siteGroups.value, addUpstreamGroupNames.value),
   )
   const routeConcurrencyLimitLabelValue = computed(() =>
     routeConcurrencyLimitLabel(settingsForm.route_concurrency_limit),
@@ -146,6 +156,7 @@ export function useGatewayDerivedState<
     usageSummaryCards,
     routeConcurrencyLimitLabel: routeConcurrencyLimitLabelValue,
     groupOptions,
+    siteGroupOptions,
     routeColumns: createRouteColumns(),
     logColumns: createLogColumns(),
     routeActivityFeed,

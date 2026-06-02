@@ -4,9 +4,10 @@ import { readFile } from 'node:fs/promises'
 import { reactive, ref } from 'vue'
 
 import { useGatewayOverlayPageBindings } from '../src/gatewayOverlayPageController.ts'
+import type { GatewayErrorDetail } from '../src/gatewayActivityDisplayModel.ts'
 import type { AddUpstreamForm } from '../src/gatewayAddUpstreamModel.ts'
 import type { GatewayPriorityPresetMode } from '../src/gatewayPriorityModel.ts'
-import type { GatewayLog, GatewayRoute, GatewaySettingsData } from '../src/types.ts'
+import type { GatewayLog, GatewayRoute, GatewayRouteGroup, GatewaySettingsData } from '../src/types.ts'
 
 const gatewayViewPath = new URL('../src/views/GatewayView.vue', import.meta.url)
 const gatewayPageControllerPath = new URL('../src/gatewayPageController.ts', import.meta.url)
@@ -67,6 +68,19 @@ test('useGatewayOverlayPageBindings maps overlay props and events from page stat
     form: reactive({ name: 'upstream' }),
     groupNames: ref(['default']),
   }
+  const routeGroupManagerDialog = {
+    open: ref(false),
+    loading: ref(false),
+  }
+  const routeGroupAssignmentDialog = {
+    open: ref(false),
+    loading: ref(false),
+    route: ref<GatewayRoute | null>(route({ id: 5 })),
+    groupIds: ref([101]),
+  }
+  const routeGroups = ref<GatewayRouteGroup[]>([
+    { id: 101, name: '默认路由组', route_count: 1 },
+  ])
   const routeModelsDialog = {
     open: ref(false),
     saving: ref(false),
@@ -91,8 +105,21 @@ test('useGatewayOverlayPageBindings maps overlay props and events from page stat
     loading: ref(false),
     diagnosis: ref(null),
   }
+  const errorDetail = {
+    title: '请求失败',
+    sourceLabel: '路由',
+    statusLabel: '失败',
+    success: false,
+    lines: [],
+    fields: [],
+    fullText: 'upstream error',
+  }
+  const errorDetailDrawer = {
+    open: ref(false),
+    detail: ref<GatewayErrorDetail | null>(errorDetail),
+  }
   const priorityColumns = [{ key: 'priority' }]
-  const groupOptions = ref([{ label: '默认', value: 'default' }])
+  const siteGroupOptions = ref([{ label: '默认', value: 'default' }])
   const logColumns = [{ key: 'created_at' }]
   const filteredLogs = ref([log({ id: 20 })])
   const filteredRouteLogs = ref([log({ id: 21 })])
@@ -106,8 +133,12 @@ test('useGatewayOverlayPageBindings maps overlay props and events from page stat
     balanceManualDialog,
     settingsDialog,
     addUpstreamDialog,
+    routeGroupManagerDialog,
+    routeGroupAssignmentDialog,
+    routeGroups,
     routeModelsDialog,
     logsDrawer,
+    errorDetailDrawer,
     routeLogsDrawer,
     routeDiagnosisDrawer,
     priorityColumns,
@@ -115,7 +146,7 @@ test('useGatewayOverlayPageBindings maps overlay props and events from page stat
     loadRouteLabel,
     routePriorityLabel: (targetRoute) => `priority-${targetRoute?.id ?? 'none'}`,
     formatGroupNames: (value) => String(value ?? ''),
-    groupOptions,
+    siteGroupOptions,
     logColumns,
     logs: filteredLogs,
     routeLogs: filteredRouteLogs,
@@ -129,29 +160,43 @@ test('useGatewayOverlayPageBindings maps overlay props and events from page stat
     logRequestURL: (targetLog) => targetLog.request_path,
     logRouteLabel: (targetLog) => `route-${targetLog.route_id}`,
     logRouteMeta: (targetLog) => `meta-${targetLog.route_id}`,
+    logTransferLines: () => [],
+    gatewayLogHasErrorDetail: (targetLog) => !targetLog.success,
     logModelMeta: (targetLog) => targetLog.model,
     logUserAgent: (targetLog) => targetLog.user_agent,
+    buildLogErrorDetail: () => errorDetail,
     handlePriorityMove: () => events.push('priority-move'),
     handlePriorityPreset: (mode) => events.push(`priority-preset:${mode}`),
     submitManualRouteBalanceProbe: () => events.push('balance-submit'),
+    refreshRouteGroups: () => events.push('route-groups-refresh'),
+    createRouteGroup: (payload) => events.push(`route-group-create:${payload.name}:${payload.apiKey}`),
+    updateRouteGroup: (group, payload) => events.push(`route-group-update:${group.id}:${payload.name}`),
+    deleteRouteGroup: (group) => events.push(`route-group-delete:${group.id}`),
+    saveRouteGroupAssignment: () => events.push('route-group-assignment-save'),
     saveSettings: (settings) => events.push(`settings-save:${settings.gateway_api_key}`),
     submitAddUpstream: (form, groupNames) => events.push(`add-upstream-submit:${form.name}:${groupNames.join(',')}`),
     resetAddUpstreamForm: () => events.push('add-upstream-reset'),
     saveRouteModelsDialog: () => events.push('route-models-save'),
+    openGatewayErrorDetail: (detail) => events.push(`open-error-detail:${detail.title}`),
+    copyGatewayErrorDetail: (value) => events.push(`copy-error-detail:${value}`),
   })
 
   assert.equal(overlayPageProps.value.priorityDialog, priorityDialog)
   assert.equal(overlayPageProps.value.balanceManualDialog, balanceManualDialog)
   assert.equal(overlayPageProps.value.settingsDialog, settingsDialog)
   assert.equal(overlayPageProps.value.addUpstreamDialog, addUpstreamDialog)
+  assert.equal(overlayPageProps.value.routeGroupManagerDialog, routeGroupManagerDialog)
+  assert.equal(overlayPageProps.value.routeGroupAssignmentDialog, routeGroupAssignmentDialog)
+  assert.equal(overlayPageProps.value.routeGroups, routeGroups.value)
   assert.equal(overlayPageProps.value.routeModelsDialog, routeModelsDialog)
   assert.equal(overlayPageProps.value.logsDrawer, logsDrawer)
+  assert.equal(overlayPageProps.value.errorDetailDrawer, errorDetailDrawer)
   assert.equal(overlayPageProps.value.routeLogsDrawer, routeLogsDrawer)
   assert.equal(overlayPageProps.value.routeDiagnosisDrawer, routeDiagnosisDrawer)
   assert.equal(overlayPageProps.value.priorityColumns, priorityColumns)
   assert.equal(overlayPageProps.value.routeRowKey, routeRowKey)
   assert.equal(overlayPageProps.value.loadRouteLabel, loadRouteLabel)
-  assert.equal(overlayPageProps.value.groupOptions, groupOptions.value)
+  assert.equal(overlayPageProps.value.groupOptions, siteGroupOptions.value)
   assert.equal(overlayPageProps.value.logColumns, logColumns)
   assert.equal(overlayPageProps.value.logs, filteredLogs.value)
   assert.equal(overlayPageProps.value.routeLogs, filteredRouteLogs.value)
@@ -159,12 +204,14 @@ test('useGatewayOverlayPageBindings maps overlay props and events from page stat
   assert.equal(overlayPageProps.value.drawerTableY, 480)
   assert.equal(overlayPageProps.value.logRowKey, logRowKey)
 
-  groupOptions.value = [{ label: 'VIP', value: 'vip' }]
+  siteGroupOptions.value = [{ label: 'VIP', value: 'vip' }]
+  routeGroups.value = [{ id: 102, name: 'VIP 路由组', route_count: 2 }]
   filteredLogs.value = [log({ id: 30 })]
   filteredRouteLogs.value = [log({ id: 31 })]
   drawerTableY.value = 520
 
   assert.deepEqual(overlayPageProps.value.groupOptions, [{ label: 'VIP', value: 'vip' }])
+  assert.deepEqual(overlayPageProps.value.routeGroups, [{ id: 102, name: 'VIP 路由组', route_count: 2 }])
   assert.equal(overlayPageProps.value.logs[0].id, 30)
   assert.equal(overlayPageProps.value.routeLogs[0].id, 31)
   assert.equal(overlayPageProps.value.drawerTableY, 520)
@@ -172,19 +219,33 @@ test('useGatewayOverlayPageBindings maps overlay props and events from page stat
   overlayPageHandlers['priority-move']()
   overlayPageHandlers['priority-preset']('balance' as GatewayPriorityPresetMode)
   overlayPageHandlers['balance-submit']()
+  overlayPageHandlers['route-groups-refresh']()
+  overlayPageHandlers['route-group-create']({ name: '新组', apiKey: 'sk-test' })
+  overlayPageHandlers['route-group-update'](routeGroups.value[0], { name: '改名', apiKey: '' })
+  overlayPageHandlers['route-group-delete'](routeGroups.value[0])
+  overlayPageHandlers['route-group-assignment-save']()
   overlayPageHandlers['settings-save']({ gateway_api_key: 'key-from-dialog' } as GatewaySettingsData)
   overlayPageHandlers['add-upstream-submit']({ name: '上游 C' } as AddUpstreamForm, ['默认'])
   overlayPageHandlers['add-upstream-reset']()
   overlayPageHandlers['route-models-save']()
+  overlayPageHandlers['open-log-error-detail'](errorDetail)
+  overlayPageHandlers['copy-error-detail']('raw detail')
 
   assert.deepEqual(events, [
     'priority-move',
     'priority-preset:balance',
     'balance-submit',
+    'route-groups-refresh',
+    'route-group-create:新组:sk-test',
+    'route-group-update:102:改名',
+    'route-group-delete:102',
+    'route-group-assignment-save',
     'settings-save:key-from-dialog',
     'add-upstream-submit:上游 C:默认',
     'add-upstream-reset',
     'route-models-save',
+    'open-error-detail:请求失败',
+    'copy-error-detail:raw detail',
   ])
 })
 

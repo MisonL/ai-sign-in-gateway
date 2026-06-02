@@ -72,7 +72,7 @@ test('summarizes browser storage analysis result', () => {
     '页面：https://example.com',
     '已解析：3 项',
     'Cookie：已包含可读 Cookie',
-    'localStorage Key：local_0，local_1，local_2，local_3，local_4，local_5，local_6，local_7 …',
+    'localStorage Key：local_0，local_1，local_2，local_3，local_4，local_5，local_6，local_7 ...',
     'sessionStorage Key：session',
   ])
 })

@@ -1,11 +1,12 @@
 import {
   createConfirmGatewayRouteAction,
+  createDeleteGatewayRouteAction,
   createDisableAllGatewayRoutesAction,
   createEnableOnlyGatewayRouteAction,
   createResetGatewayRouteCircuitAction,
   createToggleGatewayRouteAction,
 } from './gatewayRouteActionController.ts'
-import type { GatewayRoute } from './types.ts'
+import type { GatewayRoute, GatewayRouteDeleteResult } from './types.ts'
 
 type GatewayRouteNoticePlan = {
   notice: {
@@ -47,6 +48,7 @@ type GatewayRouteActionPageOptions = {
   requestDisableAll: () => Promise<DisableAllGatewayRoutesResult>
   requestEnableOnly: (id: number) => Promise<EnableOnlyGatewayRouteResult>
   requestReset: (id: number) => Promise<ResetGatewayRouteCircuitResult>
+  requestDeleteRoute: (id: number) => Promise<GatewayRouteDeleteResult>
   reloadGatewayData: () => Promise<void>
   routeLabel: (route: GatewayRoute) => string
   showPlanNotice: (plan: GatewayRouteNoticePlan) => void
@@ -58,6 +60,7 @@ export function useGatewayRouteActionPageActions({
   requestDisableAll,
   requestEnableOnly,
   requestReset,
+  requestDeleteRoute,
   reloadGatewayData,
   routeLabel,
   showPlanNotice,
@@ -88,11 +91,19 @@ export function useGatewayRouteActionPageActions({
     reloadGatewayData,
     showPlanNotice,
   })
+  const handleDeleteRoute = createDeleteGatewayRouteAction({
+    confirmWindow,
+    requestDeleteRoute,
+    reloadGatewayData,
+    routeLabel,
+    showPlanNotice,
+  })
 
   return {
     handleToggle,
     handleDisableAllRoutes,
     handleEnableOnlyRoute,
     handleResetCircuit,
+    handleDeleteRoute,
   }
 }

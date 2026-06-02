@@ -9,13 +9,17 @@ import {
 } from './gatewayRouteBalanceProbeController.ts'
 import { useGatewayRouteDiagnosisDrawer } from './gatewayRouteDiagnosisController.ts'
 import { useGatewayRouteFilters } from './gatewayRouteFilterController.ts'
+import {
+  useGatewayRouteGroupAssignmentDialog,
+  useGatewayRouteGroupManagerDialog,
+} from './gatewayRouteGroupsController.ts'
 import { useGatewayRouteLogsDrawer } from './gatewayRouteLogsController.ts'
 import { useGatewayRouteModelsDialog } from './gatewayRouteConfigController.ts'
 import { useGatewayRouteProbeState } from './gatewayRouteProbeController.ts'
 import { useGatewayRuntimeController } from './gatewayRuntimeController.ts'
 import { useGatewaySettingsDialog } from './gatewaySettingsController.ts'
 import { useGatewayUsageRangeState } from './gatewayUsageRangeController.ts'
-import type { GatewayActiveRequest, GatewayOverview, GatewayRoute, GatewayUsage, SiteGroup } from './types.ts'
+import type { GatewayActiveRequest, GatewayOverview, GatewayRoute, GatewayRouteGroup, GatewayUsage, SiteGroup } from './types.ts'
 
 export function useGatewayPageState() {
   const gatewayRuntime = useGatewayRuntimeController()
@@ -27,6 +31,8 @@ export function useGatewayPageState() {
   const addUpstreamDialog = useGatewayAddUpstreamDialog()
   const priorityDialog = useGatewayPriorityDialog()
   const routeModelsDialog = useGatewayRouteModelsDialog()
+  const routeGroupManagerDialog = useGatewayRouteGroupManagerDialog()
+  const routeGroupAssignmentDialog = useGatewayRouteGroupAssignmentDialog()
   const routeLogsDrawer = useGatewayRouteLogsDrawer()
   const routeDiagnosisDrawer = useGatewayRouteDiagnosisDrawer()
   const usageRangeState = useGatewayUsageRangeState()
@@ -57,6 +63,8 @@ export function useGatewayPageState() {
     routeModelsDialogRoute: routeModelsDialog.route,
     routeModelsDialogValue: routeModelsDialog.supportedModels,
     routeModelsDialogRequestURLs: routeModelsDialog.requestURLs,
+    routeGroupManagerDialog,
+    routeGroupAssignmentDialog,
     overview: ref<GatewayOverview | null>(null),
     routes,
     logs: logsDrawer.logs,
@@ -67,6 +75,7 @@ export function useGatewayPageState() {
     usageRangeState,
     usageRange: usageRangeState.range,
     routeDiagnosisDrawer,
+    routeGroups: ref<GatewayRouteGroup[]>([]),
     siteGroups: ref<SiteGroup[]>([]),
     includeDisabled: ref(false),
     autoRefreshTimers: {

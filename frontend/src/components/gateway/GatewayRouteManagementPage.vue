@@ -72,6 +72,7 @@ const emit = defineEmits<{
   (event: 'probe-all'): void
   (event: 'update-all-balances'): void
   (event: 'disable-all'): void
+  (event: 'manage-groups'): void
   (event: 'add-upstream'): void
   (event: 'open-settings'): void
   (event: 'clear-route-types'): void
@@ -85,10 +86,12 @@ const emit = defineEmits<{
   (event: 'probe', route: GatewayRoute): void
   (event: 'probe-balance', route: GatewayRoute): void
   (event: 'configure-models', route: GatewayRoute): void
+  (event: 'assign-groups', route: GatewayRoute): void
   (event: 'enable-only', route: GatewayRoute): void
   (event: 'priority', route: GatewayRoute): void
   (event: 'diagnose', route: GatewayRoute): void
   (event: 'history', route: GatewayRoute): void
+  (event: 'delete', route: GatewayRoute): void
 }>()
 </script>
 
@@ -114,6 +117,7 @@ const emit = defineEmits<{
     @probe-all="emit('probe-all')"
     @update-all-balances="emit('update-all-balances')"
     @disable-all="emit('disable-all')"
+    @manage-groups="emit('manage-groups')"
     @add-upstream="emit('add-upstream')"
     @open-settings="emit('open-settings')"
   />
@@ -161,10 +165,12 @@ const emit = defineEmits<{
       @probe="emit('probe', $event)"
       @probe-balance="emit('probe-balance', $event)"
       @configure-models="emit('configure-models', $event)"
+      @assign-groups="emit('assign-groups', $event)"
       @enable-only="emit('enable-only', $event)"
       @priority="emit('priority', $event)"
       @diagnose="emit('diagnose', $event)"
       @history="emit('history', $event)"
+      @delete="emit('delete', $event)"
     />
   </div>
 </template>

@@ -38,6 +38,7 @@ export function useGatewayPageViewState({
     activeRequests: state.activeRequests,
     gatewayUsage: state.gatewayUsage,
     siteGroups: state.siteGroups,
+    routeGroups: state.routeGroups,
     selectedGroups: state.selectedGroups,
     addUpstreamGroupNames: state.addUpstreamGroupNames,
     routeFilterState: state.routeFilters.state,

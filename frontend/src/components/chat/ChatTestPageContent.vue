@@ -29,7 +29,7 @@ defineProps<{
             :class="[`session-message--${message.role}`, `session-message--${message.status}`]"
           >
             <div v-if="message.role === 'assistant' && message.activity" class="session-message__thought">
-              处理耗时 {{ view.readableLatency(message.latencyMs) || '…' }}
+              处理耗时 {{ view.readableLatency(message.latencyMs) || '...' }}
             </div>
 
             <div class="session-message__bubble">

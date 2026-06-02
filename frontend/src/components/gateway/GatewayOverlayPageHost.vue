@@ -10,10 +10,14 @@ import type {
   GatewayRouteBalanceManualDialog,
 } from '../../gatewayRouteBalanceProbeController'
 import type { GatewayRouteDiagnosisDrawer } from '../../gatewayRouteDiagnosisController'
+import type {
+  GatewayRouteGroupAssignmentDialog,
+  GatewayRouteGroupManagerDialog,
+} from '../../gatewayRouteGroupsController'
 import type { GatewayRouteLogsDrawer } from '../../gatewayRouteLogsController'
 import type { GatewayRouteModelsDialog } from '../../gatewayRouteConfigController'
 import type { GatewaySettingsDialog } from '../../gatewaySettingsController'
-import type { GatewayLog, GatewayRoute, GatewaySettingsData } from '../../types'
+import type { GatewayLog, GatewayRoute, GatewayRouteGroup, GatewaySettingsData } from '../../types'
 import type { GatewayPriorityPresetMode } from '../../gatewayPriorityModel'
 import GatewayOverlayHost from './GatewayOverlayHost.vue'
 
@@ -34,6 +38,9 @@ const props = defineProps<{
   balanceManualDialog: GatewayRouteBalanceManualDialog
   settingsDialog: GatewaySettingsDialog
   addUpstreamDialog: GatewayAddUpstreamDialog
+  routeGroupManagerDialog: GatewayRouteGroupManagerDialog
+  routeGroupAssignmentDialog: GatewayRouteGroupAssignmentDialog
+  routeGroups: GatewayRouteGroup[]
   routeModelsDialog: GatewayRouteModelsDialog
   logsDrawer: GatewayLogsDrawer
   errorDetailDrawer: GatewayErrorDetailDrawer
@@ -72,6 +79,11 @@ const emit = defineEmits<{
   (event: 'settings-save', form: GatewaySettingsData): void
   (event: 'add-upstream-submit', form: AddUpstreamForm, groupNames: string[]): void
   (event: 'add-upstream-reset'): void
+  (event: 'route-groups-refresh'): void
+  (event: 'route-group-create', payload: { name: string; apiKey: string }): void
+  (event: 'route-group-update', group: GatewayRouteGroup, payload: { name: string; apiKey: string }): void
+  (event: 'route-group-delete', group: GatewayRouteGroup): void
+  (event: 'route-group-assignment-save'): void
   (event: 'route-models-save'): void
   (event: 'open-log-error-detail', detail: GatewayErrorDetail): void
   (event: 'copy-error-detail', value: string): void
@@ -123,6 +135,27 @@ const addUpstreamGroupNames = writableValue(
   () => props.addUpstreamDialog.groupNames.value,
   (value) => {
     props.addUpstreamDialog.groupNames.value = value
+  },
+)
+
+const routeGroupManagerOpen = writableValue(
+  () => props.routeGroupManagerDialog.open.value,
+  (value) => {
+    props.routeGroupManagerDialog.open.value = value
+  },
+)
+
+const routeGroupAssignmentOpen = writableValue(
+  () => props.routeGroupAssignmentDialog.open.value,
+  (value) => {
+    props.routeGroupAssignmentDialog.open.value = value
+  },
+)
+
+const routeGroupAssignmentIds = writableValue(
+  () => props.routeGroupAssignmentDialog.groupIds.value,
+  (value) => {
+    props.routeGroupAssignmentDialog.groupIds.value = value
   },
 )
 
@@ -204,6 +237,9 @@ const routeLogsTitle = computed(() => {
     v-model:settings-open="settingsOpen"
     v-model:add-upstream-open="addUpstreamOpen"
     v-model:add-upstream-group-names="addUpstreamGroupNames"
+    v-model:route-group-manager-open="routeGroupManagerOpen"
+    v-model:route-group-assignment-open="routeGroupAssignmentOpen"
+    v-model:route-group-assignment-ids="routeGroupAssignmentIds"
     v-model:route-models-open="routeModelsOpen"
     v-model:route-models-request-urls="routeModelsRequestURLs"
     v-model:route-models-supported-models="routeModelsSupportedModels"
@@ -230,6 +266,10 @@ const routeLogsTitle = computed(() => {
     :add-upstream-form="addUpstreamDialog.form"
     :group-options="groupOptions"
     :add-upstream-loading="addUpstreamDialog.loading.value"
+    :route-group-manager-loading="routeGroupManagerDialog.loading.value"
+    :route-group-assignment-loading="routeGroupAssignmentDialog.loading.value"
+    :route-group-assignment-route="routeGroupAssignmentDialog.route.value"
+    :route-groups="routeGroups"
     :route-models-route="routeModelsDialog.route.value"
     :route-models-saving="routeModelsDialog.saving.value"
     :log-columns="logColumns"
@@ -261,6 +301,11 @@ const routeLogsTitle = computed(() => {
     @settings-save="emit('settings-save', $event)"
     @add-upstream-submit="(form, selectedGroupNames) => emit('add-upstream-submit', form, selectedGroupNames)"
     @add-upstream-reset="emit('add-upstream-reset')"
+    @route-groups-refresh="emit('route-groups-refresh')"
+    @route-group-create="emit('route-group-create', $event)"
+    @route-group-update="(group, payload) => emit('route-group-update', group, payload)"
+    @route-group-delete="emit('route-group-delete', $event)"
+    @route-group-assignment-save="emit('route-group-assignment-save')"
     @route-models-save="emit('route-models-save')"
     @open-log-error-detail="emit('open-log-error-detail', $event)"
     @copy-error-detail="emit('copy-error-detail', $event)"

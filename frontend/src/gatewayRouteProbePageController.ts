@@ -38,7 +38,6 @@ type GatewayRouteProbePageOptions = {
   routes: Ref<GatewayRoute[]>
   overview: Ref<GatewayOverview | null>
   probeLoading: Ref<boolean>
-  probeAllProgress: Ref<RouteBatchProgress | null>
   balanceProbeAllProgress: Ref<RouteBatchProgress | null>
   balanceProbeManualRoute: Ref<GatewayRoute | null>
   balanceProbeManualURL: Ref<string>
@@ -57,6 +56,7 @@ type GatewayRouteProbePageOptions = {
     trackRoute: (routeId: number) => void
     untrackRoute: (routeId: number) => void
   }
+  requestProbeBatch: (routeIds: number[]) => Promise<GatewayRouteProbeResult[]>
   requestProbe: (routeId: number) => Promise<GatewayRouteProbeResult>
   requestBalance: BalanceRequest
   requestOverview: () => Promise<GatewayOverview>
@@ -77,12 +77,12 @@ export function useGatewayRouteProbePageActions({
   routes,
   overview,
   probeLoading,
-  probeAllProgress,
   balanceProbeAllProgress,
   balanceProbeManualRoute,
   balanceProbeManualURL,
   routeProbeState,
   routeBalanceProbeState,
+  requestProbeBatch,
   requestProbe,
   requestBalance,
   requestOverview,
@@ -111,10 +111,9 @@ export function useGatewayRouteProbePageActions({
   })
   const handleProbeAll = createProbeAllGatewayRoutesAction({
     getRoutes: () => routes.value,
-    requestProbe,
+    requestProbeBatch,
     applyProbeResult,
     probeState: routeProbeState,
-    getSuccessCount: () => probeAllProgress.value?.success ?? 0,
     now,
     showPlanNotice,
   })

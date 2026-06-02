@@ -10,11 +10,15 @@ import type {
   GatewayRouteBalanceManualDialog,
 } from './gatewayRouteBalanceProbeController.ts'
 import type { GatewayRouteDiagnosisDrawer } from './gatewayRouteDiagnosisController.ts'
+import type {
+  GatewayRouteGroupAssignmentDialog,
+  GatewayRouteGroupManagerDialog,
+} from './gatewayRouteGroupsController.ts'
 import type { GatewayRouteLogsDrawer } from './gatewayRouteLogsController.ts'
 import type { GatewayRouteModelsDialog } from './gatewayRouteConfigController.ts'
 import type { GatewaySettingsDialog } from './gatewaySettingsController.ts'
 import type { GatewayPriorityPresetMode } from './gatewayPriorityModel.ts'
-import type { GatewayLog, GatewayRoute, GatewaySettingsData } from './types.ts'
+import type { GatewayLog, GatewayRoute, GatewayRouteGroup, GatewaySettingsData } from './types.ts'
 
 type ReadonlyRef<T> = {
   readonly value: T
@@ -30,6 +34,9 @@ export type GatewayOverlayPageBindingOptions = {
   balanceManualDialog: GatewayRouteBalanceManualDialog
   settingsDialog: GatewaySettingsDialog
   addUpstreamDialog: GatewayAddUpstreamDialog
+  routeGroupManagerDialog: GatewayRouteGroupManagerDialog
+  routeGroupAssignmentDialog: GatewayRouteGroupAssignmentDialog
+  routeGroups: ReadonlyRef<GatewayRouteGroup[]>
   routeModelsDialog: GatewayRouteModelsDialog
   logsDrawer: GatewayLogsDrawer
   errorDetailDrawer: GatewayErrorDetailDrawer
@@ -40,7 +47,7 @@ export type GatewayOverlayPageBindingOptions = {
   loadRouteLabel: (route: GatewayRoute) => string
   routePriorityLabel: (route: GatewayRoute | null) => string
   formatGroupNames: (value: string | string[] | null | undefined) => string
-  groupOptions: ReadonlyRef<SelectOption[]>
+  siteGroupOptions: ReadonlyRef<SelectOption[]>
   logColumns: ColumnsType<GatewayLog>
   logs: ReadonlyRef<GatewayLog[]>
   routeLogs: ReadonlyRef<GatewayLog[]>
@@ -62,6 +69,11 @@ export type GatewayOverlayPageBindingOptions = {
   handlePriorityMove: () => void
   handlePriorityPreset: (mode: GatewayPriorityPresetMode) => void
   submitManualRouteBalanceProbe: () => void
+  refreshRouteGroups: () => void
+  createRouteGroup: (payload: { name: string; apiKey: string }) => void
+  updateRouteGroup: (group: GatewayRouteGroup, payload: { name: string; apiKey: string }) => void
+  deleteRouteGroup: (group: GatewayRouteGroup) => void
+  saveRouteGroupAssignment: () => void
   saveSettings: (settings: GatewaySettingsData) => void
   submitAddUpstream: (form: AddUpstreamForm, groupNames: string[]) => void
   resetAddUpstreamForm: () => void
@@ -75,6 +87,9 @@ export function useGatewayOverlayPageBindings({
   balanceManualDialog,
   settingsDialog,
   addUpstreamDialog,
+  routeGroupManagerDialog,
+  routeGroupAssignmentDialog,
+  routeGroups,
   routeModelsDialog,
   logsDrawer,
   errorDetailDrawer,
@@ -85,7 +100,7 @@ export function useGatewayOverlayPageBindings({
   loadRouteLabel,
   routePriorityLabel,
   formatGroupNames,
-  groupOptions,
+  siteGroupOptions,
   logColumns,
   logs,
   routeLogs,
@@ -107,6 +122,11 @@ export function useGatewayOverlayPageBindings({
   handlePriorityMove,
   handlePriorityPreset,
   submitManualRouteBalanceProbe,
+  refreshRouteGroups,
+  createRouteGroup,
+  updateRouteGroup,
+  deleteRouteGroup,
+  saveRouteGroupAssignment,
   saveSettings,
   submitAddUpstream,
   resetAddUpstreamForm,
@@ -119,6 +139,9 @@ export function useGatewayOverlayPageBindings({
     balanceManualDialog,
     settingsDialog,
     addUpstreamDialog,
+    routeGroupManagerDialog,
+    routeGroupAssignmentDialog,
+    routeGroups: routeGroups.value,
     routeModelsDialog,
     logsDrawer,
     errorDetailDrawer,
@@ -129,7 +152,7 @@ export function useGatewayOverlayPageBindings({
     loadRouteLabel,
     routePriorityLabel,
     formatGroupNames,
-    groupOptions: groupOptions.value,
+    groupOptions: siteGroupOptions.value,
     logColumns,
     logs: logs.value,
     routeLogs: routeLogs.value,
@@ -154,6 +177,11 @@ export function useGatewayOverlayPageBindings({
     'priority-move': handlePriorityMove,
     'priority-preset': handlePriorityPreset,
     'balance-submit': submitManualRouteBalanceProbe,
+    'route-groups-refresh': refreshRouteGroups,
+    'route-group-create': createRouteGroup,
+    'route-group-update': updateRouteGroup,
+    'route-group-delete': deleteRouteGroup,
+    'route-group-assignment-save': saveRouteGroupAssignment,
     'settings-save': saveSettings,
     'add-upstream-submit': submitAddUpstream,
     'add-upstream-reset': resetAddUpstreamForm,

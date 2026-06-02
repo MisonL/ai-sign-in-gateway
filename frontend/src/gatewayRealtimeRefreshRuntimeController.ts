@@ -20,6 +20,7 @@ type RefreshGatewayRealtimeDataOptions<
   TInputRoute,
   TOutputRoute,
   TLog,
+  TRouteGroup,
   TController extends AbortControllerLike = AbortController,
 > = {
   now: number
@@ -35,12 +36,14 @@ type RefreshGatewayRealtimeDataOptions<
   requestOverview: (options: { signal: TController['signal'] }) => Promise<TOverview>
   requestRoutes: (options: { includeDisabled: boolean; signal: TController['signal'] }) => Promise<TInputRoute[]>
   requestLogs: (limit: number, options: { signal: TController['signal'] }) => Promise<TLog[]>
+  requestRouteGroups: (options: { signal: TController['signal'] }) => Promise<TRouteGroup[]>
   currentLogs: () => TLog[]
   normalizeRoute: (route: TInputRoute) => TOutputRoute
   setOverview: (overview: TOverview) => void
   setRoutes: (routes: TOutputRoute[]) => void
   setPriorityRoutes: (routes: TOutputRoute[]) => void
   setLogs: (logs: TLog[]) => void
+  setRouteGroups: (groups: TRouteGroup[]) => void
   refreshActiveRequests: (silent: true) => Promise<void>
   isAbortError: (error: unknown) => boolean
 }
@@ -50,13 +53,14 @@ type CreateRefreshGatewayRealtimeDataRuntimeActionOptions<
   TInputRoute,
   TOutputRoute,
   TLog,
+  TRouteGroup,
   TController extends AbortControllerLike = AbortController,
 > = Omit<
-  RefreshGatewayRealtimeDataOptions<TOverview, TInputRoute, TOutputRoute, TLog, TController>,
+  RefreshGatewayRealtimeDataOptions<TOverview, TInputRoute, TOutputRoute, TLog, TRouteGroup, TController>,
   'now' | 'visible' | 'isMonitor' | 'logsDrawerOpen' | 'includeDisabled'
 > & {
   refreshRealtimeData: (
-    options: RefreshGatewayRealtimeDataOptions<TOverview, TInputRoute, TOutputRoute, TLog, TController>
+    options: RefreshGatewayRealtimeDataOptions<TOverview, TInputRoute, TOutputRoute, TLog, TRouteGroup, TController>
   ) => Promise<void>
   now: () => number
   isVisible: () => boolean
@@ -70,6 +74,7 @@ export function createRefreshGatewayRealtimeDataRuntimeAction<
   TInputRoute,
   TOutputRoute,
   TLog,
+  TRouteGroup,
   TController extends AbortControllerLike = AbortController,
 >({
   refreshRealtimeData,
@@ -86,15 +91,17 @@ export function createRefreshGatewayRealtimeDataRuntimeAction<
   requestOverview,
   requestRoutes,
   requestLogs,
+  requestRouteGroups,
   currentLogs,
   normalizeRoute,
   setOverview,
   setRoutes,
   setPriorityRoutes,
   setLogs,
+  setRouteGroups,
   refreshActiveRequests,
   isAbortError,
-}: CreateRefreshGatewayRealtimeDataRuntimeActionOptions<TOverview, TInputRoute, TOutputRoute, TLog, TController>) {
+}: CreateRefreshGatewayRealtimeDataRuntimeActionOptions<TOverview, TInputRoute, TOutputRoute, TLog, TRouteGroup, TController>) {
   return () =>
     refreshRealtimeData({
       now: now(),
@@ -110,12 +117,14 @@ export function createRefreshGatewayRealtimeDataRuntimeAction<
       requestOverview,
       requestRoutes,
       requestLogs,
+      requestRouteGroups,
       currentLogs,
       normalizeRoute,
       setOverview,
       setRoutes,
       setPriorityRoutes,
       setLogs,
+      setRouteGroups,
       refreshActiveRequests,
       isAbortError,
     })

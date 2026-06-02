@@ -102,7 +102,6 @@ test('useGatewayRouteProbePageActions wires route probe and balance probe depend
   const events: string[] = []
   const routes = ref([route({ id: 41 }), route({ id: 42 })])
   const overview = ref<GatewayOverview | null>(null)
-  const probeProgress = ref({ total: 2, done: 0, success: 0, failed: 0 })
   const balanceProgress = ref(null)
   const manualRoute = ref<GatewayRoute | null>(route({ id: 43 }))
   const manualURL = ref('/dashboard/billing')
@@ -148,12 +147,15 @@ test('useGatewayRouteProbePageActions wires route probe and balance probe depend
     routes,
     overview,
     probeLoading: ref(false),
-    probeAllProgress: probeProgress,
     balanceProbeAllProgress: balanceProgress,
     balanceProbeManualRoute: manualRoute,
     balanceProbeManualURL: manualURL,
     routeProbeState,
     routeBalanceProbeState,
+    requestProbeBatch: async (routeIds) => {
+      events.push(`request-probe-batch:${routeIds.join(',')}`)
+      return routeIds.map((routeId) => probeResult({ id: routeId }))
+    },
     requestProbe: async (routeId) => {
       events.push(`request-probe:${routeId}`)
       return probeResult({ id: routeId })
@@ -209,13 +211,12 @@ test('useGatewayRouteProbePageActions wires route probe and balance probe depend
   assert.deepEqual(balanceProgress.value, { total: 2, done: 2, success: 2, failed: 0 })
   assert.deepEqual(events, [
     'probe-start:41,42',
-    'request-probe:41',
+    'request-probe-batch:41,42',
     'apply-probe:41',
     'probe-finish-route:41:true',
-    'request-probe:42',
     'apply-probe:42',
     'probe-finish-route:42:true',
-    'plan:路由探测完成，0 条全部可用。',
+    'plan:路由探测完成，2 条全部可用。',
     'probe-finish:41,42',
     'balance-start:41,42',
     'balance-track-routes:41,42',

@@ -39,14 +39,10 @@ func (a *App) SiteRoutes(r chi.Router) {
 	r.Delete("/groups", a.DeleteSiteGroup)
 	r.Post("/invites/refresh", a.RefreshSiteInvites)
 	r.Post("/api-keys/refresh", a.RefreshSiteAPIKeys)
-	r.Get("/cleanup-duplicates", a.EmptyDuplicateSites)
+	r.Get("/cleanup-duplicates", a.ListDuplicateSites)
 	r.Post("/cleanup-duplicates/merge", a.MergeDuplicateSites)
 	r.Post("/refresh-summaries", a.RefreshSiteSummaries)
 	r.Post("/storage/analyze", a.AnalyzeLocalStorage)
-	r.Post("/cc-switch/import", a.CCSwitchImport)
-	r.Post("/cc-switch/sql/convert", a.CCSwitchSQLConvert)
-	r.Post("/cc-switch/sql/import", a.CCSwitchImport)
-	r.Post("/cc-switch/export", a.CCSwitchExport)
 	r.Post("/test-draft", a.TestSiteDraft)
 	r.Get("/{siteID}", a.GetSite)
 	r.Put("/{siteID}", a.UpdateSite)
@@ -59,8 +55,6 @@ func (a *App) SiteRoutes(r chi.Router) {
 	r.Get("/{siteID}/queue", a.SiteQueue)
 	r.Post("/{siteID}/queue/{taskKey}/activate", a.ActivateQueueTask)
 	r.Get("/{siteID}/totp-preview", a.TotpPreview)
-	r.Post("/browser/open", a.BrowserOpen)
-	r.Post("/browser/scan", a.BrowserScan)
 }
 
 func (a *App) ListSites(w http.ResponseWriter, r *http.Request) {
@@ -777,12 +771,24 @@ func deleteGroupValue(value, name string) string {
 	return strings.Join(next, ",")
 }
 
-func (a *App) EmptyDuplicateSites(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, []any{})
+func (a *App) ListDuplicateSites(w http.ResponseWriter, r *http.Request) {
+	groups, err := duplicateSiteGroups(a.DB)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, groups)
 }
+
 func (a *App) MergeDuplicateSites(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"merged_group_count": 0, "deleted_site_count": 0, "remaining_group_count": 0, "kept_site_ids": []uint{}, "deleted_site_ids": []uint{}})
+	result, err := mergeDuplicateSites(a.DB)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
+
 func (a *App) RefreshSiteSummaries(w http.ResponseWriter, r *http.Request) {
 	var payload struct {
 		SiteIDs     []uint `json:"site_ids"`
@@ -1406,16 +1412,6 @@ func uniqueStrings(values []string) []string {
 	}
 	return out
 }
-func (a *App) CCSwitchImport(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"created": 0, "updated": 0, "deleted": 0, "skipped": 0, "imported_site_ids": []uint{}, "messages": []string{"Go CC-Switch 导入待接入。"}})
-}
-func (a *App) CCSwitchSQLConvert(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"payload": map[string]any{}, "provider_count": 0})
-}
-func (a *App) CCSwitchExport(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"site_count": 0, "payload": map[string]any{}})
-}
-
 func (a *App) TestSite(w http.ResponseWriter, r *http.Request) {
 	site, ok := a.getSite(w, chi.URLParam(r, "siteID"))
 	if !ok {
@@ -1424,7 +1420,7 @@ func (a *App) TestSite(w http.ResponseWriter, r *http.Request) {
 	a.siteHealth(w, r.Context(), site)
 }
 func (a *App) TestSiteDraft(w http.ResponseWriter, r *http.Request) {
-	var payload schemas.SiteCreate
+	var payload schemas.SiteDraftTestRequest
 	if err := httpx.Decode(r, &payload); err != nil {
 		writeError(w, http.StatusBadRequest, "请求格式错误")
 		return
@@ -1471,13 +1467,6 @@ func (a *App) applySub2APIBalanceFallback(ctx context.Context, site models.Site,
 		status.Message = strings.TrimSpace(status.Message) + " API Key 余额兜底读取成功。"
 	}
 }
-func (a *App) BrowserOpen(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusNotImplemented, map[string]any{"detail": "Go 浏览器自动化待接入。"})
-}
-func (a *App) BrowserScan(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusNotImplemented, map[string]any{"detail": "Go 浏览器自动化待接入。"})
-}
-
 func (a *App) getSite(w http.ResponseWriter, rawID string) (models.Site, bool) {
 	var site models.Site
 	if err := a.DB.First(&site, rawID).Error; err != nil {

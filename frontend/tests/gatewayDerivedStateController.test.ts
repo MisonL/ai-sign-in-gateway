@@ -14,6 +14,7 @@ import {
   buildGatewayMetricCards,
   buildGatewayRouteFilters,
   buildGatewayStrategyCards,
+  buildSiteGroupOptions,
   buildRouteActivityFeed,
   buildRoutePoolPreviewRoutes,
   buildRoutePoolStatusCards,
@@ -22,7 +23,7 @@ import {
   filterGatewayRoutes,
   routeTotalBalanceSummary,
 } from '../src/gatewayViewModel.ts'
-import type { GatewayActiveRequest, GatewayLog, GatewayOverview, GatewayRoute, GatewayUsage, SiteGroup } from '../src/types.ts'
+import type { GatewayActiveRequest, GatewayLog, GatewayOverview, GatewayRoute, GatewayRouteGroup, GatewayUsage, SiteGroup } from '../src/types.ts'
 
 const gatewayViewPath = new URL('../src/views/GatewayView.vue', import.meta.url)
 const gatewayPageControllerPath = new URL('../src/gatewayPageController.ts', import.meta.url)
@@ -158,6 +159,10 @@ test('useGatewayDerivedState computes gateway page display state from injected r
     routes: [],
   } as GatewayUsage)
   const siteGroups = ref<SiteGroup[]>([{ name: '生产', site_count: 1 } as SiteGroup])
+  const routeGroups = ref<GatewayRouteGroup[]>([
+    { id: 1, name: '生产', route_count: 1 },
+    { id: 2, name: '专线', route_count: 0 },
+  ])
   const selectedGroups = ref(['生产'])
   const addUpstreamGroupNames = ref(['新增组'])
   const routeFilterState = computed(() => buildGatewayRouteFilters({
@@ -177,6 +182,7 @@ test('useGatewayDerivedState computes gateway page display state from injected r
     activeRequests,
     gatewayUsage,
     siteGroups,
+    routeGroups,
     selectedGroups,
     addUpstreamGroupNames,
     routeFilterState,
@@ -190,6 +196,7 @@ test('useGatewayDerivedState computes gateway page display state from injected r
     buildGatewayStrategyCards,
     buildUsageSummaryCards,
     buildGroupOptions: buildGatewayGroupOptions,
+    buildSiteGroupOptions,
     buildActivityFeed: buildRouteActivityFeed,
     filterRoutes: filterGatewayRoutes,
     filterLogs: filterGatewayLogs,
@@ -215,7 +222,9 @@ test('useGatewayDerivedState computes gateway page display state from injected r
   assert.equal(derived.routePoolPreviewRoutes.value[0]?.id, 1)
   assert.equal(derived.gatewayStrategyCards.value.length > 0, true)
   assert.equal(derived.usageSummaryCards.value.length > 0, true)
-  assert.equal(derived.groupOptions.value.some((option) => option.value === '新增组'), true)
+  assert.equal(derived.groupOptions.value.some((option) => option.value === '专线'), true)
+  assert.equal(derived.groupOptions.value.some((option) => option.value === '新增组'), false)
+  assert.equal(derived.siteGroupOptions.value.some((option) => option.value === '新增组'), true)
   assert.equal(derived.routeActivityFeed.value[0]?.kind, 'active')
   assert.deepEqual(derived.filteredRoutes.value.map((item) => item.id), [1])
   assert.deepEqual(derived.filteredLogs.value.map((item) => item.id), [1])

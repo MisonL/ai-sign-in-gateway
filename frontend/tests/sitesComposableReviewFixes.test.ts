@@ -9,6 +9,16 @@ const sitesInvitesPath = new URL('../src/composables/useSitesInvites.ts', import
 const sitesCheckinConfigModalPath = new URL('../src/components/sites/SitesCheckinConfigModal.vue', import.meta.url)
 const sitesApiKeyDialogComponentPath = new URL('../src/components/sites/SitesApiKeyDialog.vue', import.meta.url)
 const sitesEditorCredentialsCardPath = new URL('../src/components/sites/SitesEditorCredentialsCard.vue', import.meta.url)
+const sitesCCSwitchComposablePath = new URL('../src/composables/useSitesCCSwitch.ts', import.meta.url)
+const sitesToolbarPath = new URL('../src/components/sites/SitesToolbar.vue', import.meta.url)
+const sitesCheckinPath = new URL('../src/composables/useSitesCheckin.ts', import.meta.url)
+const sitesEditorActionsPath = new URL('../src/composables/useSitesEditorActions.ts', import.meta.url)
+const sitesQueuePath = new URL('../src/composables/useSitesQueue.ts', import.meta.url)
+const sitesPageContentPath = new URL('../src/components/sites/SitesPageContent.vue', import.meta.url)
+const sitesTableCardPath = new URL('../src/components/sites/SitesTableCard.vue', import.meta.url)
+const apiSitesPath = new URL('../src/apiSites.ts', import.meta.url)
+const apiOverviewPath = new URL('../src/apiOverview.ts', import.meta.url)
+const apiSettingsPath = new URL('../src/apiSettings.ts', import.meta.url)
 
 test('sites view controller reports site group reload errors from the event listener', async () => {
   const source = await readFile(sitesViewControllerPath, 'utf8')
@@ -65,4 +75,55 @@ test('sites editor totp textarea uses centralized autocomplete helper', async ()
 
   assert.match(source, /:autocomplete="credentialAutocomplete\(field\.name, 'textarea'\)"/)
   assert.doesNotMatch(source, /autocomplete="off"/)
+})
+
+test('cc-switch ui is disabled while Go backend has no active implementation route', async () => {
+  const composable = await readFile(sitesCCSwitchComposablePath, 'utf8')
+  const toolbar = await readFile(sitesToolbarPath, 'utf8')
+
+  assert.match(composable, /const ccSwitchAvailable = false/)
+  assert.match(composable, /options\.toast\.info\(ccSwitchDisabledReason\)/)
+  assert.match(toolbar, /ccSwitchAvailable: boolean/)
+  assert.match(toolbar, /:disabled="!ccSwitchAvailable"/)
+})
+
+test('sites queue backend endpoints are exposed through the sites page', async () => {
+  const queue = await readFile(sitesQueuePath, 'utf8')
+  const page = await readFile(sitesPageContentPath, 'utf8')
+  const table = await readFile(sitesTableCardPath, 'utf8')
+
+  assert.match(queue, /getSiteQueue\(site\.id\)/)
+  assert.match(queue, /activateSiteQueueTask\(queueSite\.value\.id, task\.task_key\)/)
+  assert.match(page, /<SitesQueueDialog/)
+  assert.match(page, /@open-queue="view\.openQueue"/)
+  assert.match(table, /'open-queue': \[site: Site\]/)
+  assert.match(table, /<span>队列任务<\/span>/)
+})
+
+test('sites editor draft test uses backend draft endpoint without saving first', async () => {
+  const source = await readFile(sitesEditorActionsPath, 'utf8')
+
+  assert.match(source, /testSiteDraft\(\{\s+\.\.\.editorPayload\(\),\s+site_id: activeSite\.id,/)
+  assert.doesNotMatch(source, /const finalSaved = await updateSite\(activeSite\.id, editorPayload\(\)\)/)
+  assert.doesNotMatch(source, /测试前已保存当前表单/)
+})
+
+test('sites batch checkin uses backend batch endpoint', async () => {
+  const source = await readFile(sitesCheckinPath, 'utf8')
+
+  assert.match(source, /runBatch\(siteIds, onlyEnabled\)/)
+  assert.doesNotMatch(source, /for \(const site of targets\) \{\s+try \{\s+const result = await runSiteCheckin\(site\.id\)/)
+})
+
+test('unused frontend wrappers are not reintroduced', async () => {
+  const overviewApi = await readFile(apiOverviewPath, 'utf8')
+  const settingsApi = await readFile(apiSettingsPath, 'utf8')
+  const sitesApi = await readFile(apiSitesPath, 'utf8')
+
+  assert.doesNotMatch(overviewApi, /export function getFeatures/)
+  assert.doesNotMatch(settingsApi, /export function importRuntimeDatabase/)
+  assert.doesNotMatch(sitesApi, /export function importCCSwitchConfig/)
+  assert.doesNotMatch(sitesApi, /export function convertCCSwitchSql/)
+  assert.doesNotMatch(sitesApi, /export function importCCSwitchSql/)
+  assert.doesNotMatch(sitesApi, /export function exportCCSwitchConfig/)
 })

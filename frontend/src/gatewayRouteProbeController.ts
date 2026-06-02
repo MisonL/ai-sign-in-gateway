@@ -31,24 +31,22 @@ type GatewayRouteProbeNoticePlan =
 
 export type ProbeGatewayRouteBatchOptions = {
   routes: GatewayRoute[]
-  requestProbe: (routeId: number) => Promise<GatewayRouteProbeResult>
+  requestProbeBatch: (routeIds: number[]) => Promise<GatewayRouteProbeResult[]>
   applyProbeResult: (result: GatewayRouteProbeResult) => void
   startBatch: (routeIds: number[]) => void
   finishBatchRoute: (routeId: number, ok: boolean) => void
   finishBatch: (routeIds: number[]) => void
-  successCount: () => number
   now: () => string
   showPlanNotice: (plan: GatewayRouteProbeNoticePlan) => void
 }
 
 export async function probeGatewayRouteBatch({
   routes,
-  requestProbe,
+  requestProbeBatch,
   applyProbeResult,
   startBatch,
   finishBatchRoute,
   finishBatch,
-  successCount,
   now,
   showPlanNotice,
 }: ProbeGatewayRouteBatchOptions) {
@@ -62,31 +60,34 @@ export async function probeGatewayRouteBatch({
   startBatch(routeIds)
   let failedResults: GatewayRouteProbeResult[] = []
   try {
+    const results = await requestProbeBatch(routeIds)
+    const resultByRouteId = new Map(results.map((result) => [result.id, result]))
     for (const routeId of routeIds) {
-      let result: GatewayRouteProbeResult | null = null
+      const route = routes.find((item) => item.id === routeId)
+      let result: GatewayRouteProbeResult = resultByRouteId.get(routeId) ?? buildGatewayProbeFailureResult({
+        routeId,
+        route,
+        error: new Error('后端未返回该路由的探测结果'),
+        checkedAt: now(),
+      })
       try {
-        result = await requestProbe(routeId)
         applyProbeResult(result)
       } catch (err) {
-        const route = routes.find((item) => item.id === routeId)
         result = buildGatewayProbeFailureResult({
           routeId,
           route,
           error: err,
           checkedAt: now(),
         })
-      } finally {
-        if (result) {
-          const stepPlan = buildGatewayProbeStepPlan({
-            failedResults,
-            result,
-          })
-          failedResults = stepPlan.failedResults
-          finishBatchRoute(routeId, stepPlan.routeSucceeded)
-        }
       }
+      const stepPlan = buildGatewayProbeStepPlan({
+        failedResults,
+        result,
+      })
+      failedResults = stepPlan.failedResults
+      finishBatchRoute(routeId, stepPlan.routeSucceeded)
     }
-    showPlanNotice(buildGatewayProbeCompletionPlan(successCount(), failedResults))
+    showPlanNotice(buildGatewayProbeCompletionPlan(routeIds.length - failedResults.length, failedResults))
   } catch (err) {
     showPlanNotice(buildGatewaySingleProbeErrorPlan(err))
   } finally {
@@ -119,9 +120,8 @@ export type ProbeAllGatewayRoutesActionOptions =
   }
 
 export type CreateProbeAllGatewayRoutesActionOptions =
-  Omit<ProbeAllGatewayRoutesActionOptions, 'routes' | 'successCount'> & {
+  Omit<ProbeAllGatewayRoutesActionOptions, 'routes'> & {
     getRoutes: () => GatewayRoute[]
-    getSuccessCount: () => number
   }
 
 export type ProbeGatewayRouteActionOptions =
@@ -131,14 +131,12 @@ export type ProbeGatewayRouteActionOptions =
 
 export function createProbeAllGatewayRoutesAction({
   getRoutes,
-  getSuccessCount,
   ...options
 }: CreateProbeAllGatewayRoutesActionOptions) {
   return () =>
     probeAllGatewayRoutesAction({
       ...options,
       routes: getRoutes(),
-      successCount: getSuccessCount,
     })
 }
 

@@ -94,6 +94,16 @@ test('useGatewayRouteActionPageActions wires route actions to page dependencies'
         circuit_state: 'closed',
       }
     },
+    requestDeleteRoute: async (routeId) => {
+      events.push(`delete:${routeId}`)
+      return {
+        status: 'ok',
+        message: 'deleted',
+        deleted_route_id: routeId,
+        site_id: 10,
+        removed_api_key: true,
+      }
+    },
     reloadGatewayData: async () => {
       events.push('reload')
     },
@@ -107,6 +117,7 @@ test('useGatewayRouteActionPageActions wires route actions to page dependencies'
   await actions.handleDisableAllRoutes()
   await actions.handleEnableOnlyRoute(route({ id: 32 }))
   await actions.handleResetCircuit(route({ id: 33, circuit_state: 'open' }))
+  await actions.handleDeleteRoute(route({ id: 34 }))
 
   assert.deepEqual(events, [
     'toggle:31',
@@ -122,6 +133,10 @@ test('useGatewayRouteActionPageActions wires route actions to page dependencies'
     'reload',
     'reset:33',
     'notice:已重置该路由熔断状态。',
+    'reload',
+    'confirm:确认删除路由「route-34」吗？对应站点 API Key 会同步移除。',
+    'delete:34',
+    'notice:路由已删除。',
     'reload',
   ])
 })
@@ -143,6 +158,7 @@ test('route operations page controller delegates route action page wiring to the
   assert.match(shellBindingsControllerSource, /handleDisableAllRoutes: routeActions\.handleDisableAllRoutes/)
   assert.match(shellBindingsControllerSource, /handleEnableOnlyRoute: routeActions\.handleEnableOnlyRoute/)
   assert.match(shellBindingsControllerSource, /handleResetCircuit: routeActions\.handleResetCircuit/)
+  assert.match(shellBindingsControllerSource, /handleDeleteRoute: routeActions\.handleDeleteRoute/)
   assert.match(routeActionsControllerSource, /confirmWindow: gatewayPagePlatform\.confirmWindow/)
   assert.match(pagePlatformController, /confirmWindow: platformWindow/)
   assert.doesNotMatch(routeActionsControllerSource, /confirmWindow: window/)
@@ -150,6 +166,7 @@ test('route operations page controller delegates route action page wiring to the
   assert.match(routeActionsControllerSource, /requestDisableAll: gatewayPageRequests\.disableAllGatewayRoutes/)
   assert.match(routeActionsControllerSource, /requestEnableOnly: gatewayPageRequests\.enableOnlyGatewayRoute/)
   assert.match(routeActionsControllerSource, /requestReset: gatewayPageRequests\.resetGatewayRouteCircuit/)
+  assert.match(routeActionsControllerSource, /requestDeleteRoute: gatewayPageRequests\.deleteGatewayRoute/)
   assert.match(routeActionsControllerSource, /reloadGatewayData: runtimeActions\.reloadGatewayDataAfterAction/)
   assert.match(routeActionsControllerSource, /routeLabel: gatewayPageDisplayHelpers\.loadRouteLabel/)
   assert.doesNotMatch(source, /createConfirmGatewayRouteAction/)
@@ -157,6 +174,7 @@ test('route operations page controller delegates route action page wiring to the
   assert.doesNotMatch(source, /createDisableAllGatewayRoutesAction/)
   assert.doesNotMatch(source, /createEnableOnlyGatewayRouteAction/)
   assert.doesNotMatch(source, /createResetGatewayRouteCircuitAction/)
+  assert.doesNotMatch(source, /createDeleteGatewayRouteAction/)
 
   assert.match(operationsController, /import \{ useGatewayRouteActionPageActions \} from '\.\/gatewayRouteActionPageController\.ts'/)
   assert.match(operationsController, /const routeActions = useGatewayRouteActionPageActions\(options\)/)
@@ -165,4 +183,5 @@ test('route operations page controller delegates route action page wiring to the
   assert.match(controller, /createDisableAllGatewayRoutesAction/)
   assert.match(controller, /createEnableOnlyGatewayRouteAction/)
   assert.match(controller, /createResetGatewayRouteCircuitAction/)
+  assert.match(controller, /createDeleteGatewayRouteAction/)
 })

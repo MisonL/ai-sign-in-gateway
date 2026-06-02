@@ -41,6 +41,7 @@
     --page-gutter-x: 10px;
     --page-gutter-y: 10px;
     --content-gutter: 10px;
+    --control-height: 40px;
   }
 
   .app-sider.ant-layout-sider-collapsed .sider-collapse-button.ant-btn {

@@ -278,7 +278,7 @@ FRONTEND_PORT=9912 BACKEND_PORT=8001 ./run.sh
 - 用户名：`admin`
 - 密码：`admin123`
 
-> **⚠️ 必改**：登录后立即在 `设置 → 账号与密码` 修改。也可以在第一次启动前用 `DEFAULT_ADMIN_PASSWORD` 环境变量覆盖。
+> **必改**：登录后立即在 `设置 → 账号与密码` 修改。也可以在第一次启动前用 `DEFAULT_ADMIN_PASSWORD` 环境变量覆盖。
 
 ### 开发数据库位置
 

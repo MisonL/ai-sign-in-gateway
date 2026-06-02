@@ -107,6 +107,7 @@ export interface DuplicateSiteItem {
 }
 
 export interface DuplicateSiteGroup {
+  plugin_key: string
   base_url: string
   account: string
   password_present: boolean
@@ -121,25 +122,6 @@ export interface DuplicateSiteMergeResult {
   remaining_group_count: number
   kept_site_ids: number[]
   deleted_site_ids: number[]
-}
-
-export interface CCSwitchImportResult {
-  created: number
-  updated: number
-  deleted: number
-  skipped: number
-  imported_site_ids: number[]
-  messages: string[]
-}
-
-export interface CCSwitchSqlConvertResult {
-  payload: Record<string, unknown>
-  provider_count: number
-}
-
-export interface CCSwitchExportResult {
-  site_count: number
-  payload: Record<string, unknown>
 }
 
 export interface SiteHealth {

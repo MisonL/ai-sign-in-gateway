@@ -40,7 +40,7 @@ test('gateway add upstream dialog declares the api-supplier form UI contract', a
   assert.match(source, /v-model:value="localForm\.base_url"/)
   assert.match(source, /placeholder="https:\/\/example\.com 或 https:\/\/example\.com\/v1"/)
   assert.match(source, /v-model:value="localForm\.api_key"/)
-  assert.match(source, /placeholder="sk-…"/)
+  assert.match(source, /placeholder="sk-\.\.\."/)
   assert.match(source, /v-model:value="localGroupNames"/)
   assert.match(source, /mode="multiple"/)
   assert.match(source, /:options="groupOptions"/)

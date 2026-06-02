@@ -8,6 +8,8 @@ export type CCSwitchSectionOption = {
   value: string
 }
 
+export const ccSwitchUnavailableMessage = 'CC-Switch 导入导出功能尚未接入 Go 后端。'
+
 export function buildCCSwitchSectionOptions(rows: readonly CCSwitchPreviewRow[]): CCSwitchSectionOption[] {
   const seen = new Set<string>()
   return rows

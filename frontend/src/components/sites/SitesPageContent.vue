@@ -7,6 +7,7 @@ import SitesDuplicateDialog from './SitesDuplicateDialog.vue'
 import SitesEditorModal from './SitesEditorModal.vue'
 import SitesInviteDialog from './SitesInviteDialog.vue'
 import SitesMetricsGrid from './SitesMetricsGrid.vue'
+import SitesQueueDialog from './SitesQueueDialog.vue'
 import SitesTableCard from './SitesTableCard.vue'
 import SitesToolbar from './SitesToolbar.vue'
 import SitesTotpPreviewModal from './SitesTotpPreviewModal.vue'
@@ -30,6 +31,8 @@ defineProps<{
       :api-key-refresh-all-loading="view.apiKeyRefreshAllLoading"
       :api-key-refresh-all-label="view.apiKeyRefreshAllLabel"
       :cc-switch-export-loading="view.ccSwitchExportLoading"
+      :cc-switch-available="view.ccSwitchAvailable"
+      :cc-switch-disabled-reason="view.ccSwitchDisabledReason"
       @open-checkin-config="view.checkinConfigOpen = true"
       @open-checkin-logs="view.checkinLogsOpen = true"
       @checkin-all-included="view.handleCheckinAllIncluded"
@@ -105,6 +108,7 @@ defineProps<{
         @probe-balance="view.handleProbeSiteBalance"
         @refresh-api-keys="view.handleRefreshSiteApiKeys"
         @load-invite="view.loadInviteInfo"
+        @open-queue="view.openQueue"
         @delete-site="view.handleDelete"
       />
     </div>
@@ -220,6 +224,17 @@ defineProps<{
       @copy-link="view.copyInviteLink"
       @copy-code="view.copyInviteCode"
       @copy-bundle="view.copyInviteBundle"
+    />
+
+    <SitesQueueDialog
+      v-model:open="view.queueOpen"
+      :site-name="view.queueSiteName"
+      :tasks="view.queueTasks"
+      :loading="view.queueLoading"
+      :activating-task-key="view.queueActivatingTaskKey"
+      :row-key="view.queueTaskRowKey"
+      @refresh="view.refreshQueue"
+      @activate="view.activateQueueTask"
     />
 
     <SitesApiKeyDialog

@@ -6,6 +6,7 @@ import {
   ExportOutlined,
   KeyOutlined,
   MoreOutlined,
+  OrderedListOutlined,
   ReloadOutlined,
   ShareAltOutlined,
 } from '@ant-design/icons-vue'
@@ -63,6 +64,7 @@ const emit = defineEmits<{
   'probe-balance': [site: Site]
   'refresh-api-keys': [site: Site]
   'load-invite': [site: Site]
+  'open-queue': [site: Site]
   'delete-site': [site: Site]
 }>()
 
@@ -208,7 +210,7 @@ function asSite(record: unknown): Site {
                     <template #icon><MoreOutlined aria-hidden="true" /></template>
                   </a-button>
                   <template #overlay>
-                    <a-menu @click.stop class="site-actions-menu">
+                    <a-menu class="site-actions-menu">
                       <a-menu-item key="test" @click="emit('test', asSite(record))">
                         <ExperimentOutlined aria-hidden="true" />
                         <span>{{ isRelayOnlySitePayload(asSite(record)) ? '验证出口' : '测试连接' }}</span>
@@ -250,6 +252,10 @@ function asSite(record: unknown): Site {
                       >
                         <ShareAltOutlined aria-hidden="true" />
                         <span>{{ isInviteLoading(asSite(record).id) ? '邀请读取中' : '邀请信息' }}</span>
+                      </a-menu-item>
+                      <a-menu-item key="queue" @click="emit('open-queue', asSite(record))">
+                        <OrderedListOutlined aria-hidden="true" />
+                        <span>队列任务</span>
                       </a-menu-item>
                       <a-menu-item key="delete" danger @click="emit('delete-site', asSite(record))">
                         <DeleteOutlined aria-hidden="true" />

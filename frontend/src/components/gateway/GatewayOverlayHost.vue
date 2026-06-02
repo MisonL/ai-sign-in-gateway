@@ -3,12 +3,14 @@ import type { ColumnsType } from 'ant-design-vue/es/table'
 import type { GatewayErrorDetail, GatewayErrorDetailLine } from '../../gatewayActivityDisplayModel'
 import type { AddUpstreamForm } from '../../gatewayAddUpstreamModel'
 import type { GatewayPriorityPresetMode } from '../../gatewayPriorityModel'
-import type { GatewayLog, GatewayRoute, GatewayRouteDiagnosis, GatewaySettingsData } from '../../types'
+import type { GatewayLog, GatewayRoute, GatewayRouteDiagnosis, GatewayRouteGroup, GatewaySettingsData } from '../../types'
 import GatewayAddUpstreamDialog from './GatewayAddUpstreamDialog.vue'
 import GatewayLogsDrawer from './GatewayLogsDrawer.vue'
 import GatewayPriorityDialog from './GatewayPriorityDialog.vue'
 import GatewayRouteBalanceManualDialog from './GatewayRouteBalanceManualDialog.vue'
 import GatewayRouteDiagnosisDrawer from './GatewayRouteDiagnosisDrawer.vue'
+import GatewayRouteGroupAssignmentDialog from './GatewayRouteGroupAssignmentDialog.vue'
+import GatewayRouteGroupsDialog from './GatewayRouteGroupsDialog.vue'
 import GatewayRouteModelsDialog from './GatewayRouteModelsDialog.vue'
 import GatewaySettingsDialog from './GatewaySettingsDialog.vue'
 
@@ -26,6 +28,9 @@ const balanceProbeManualURL = defineModel<string>('balanceProbeManualURL', { req
 const settingsOpen = defineModel<boolean>('settingsOpen', { required: true })
 const addUpstreamOpen = defineModel<boolean>('addUpstreamOpen', { required: true })
 const addUpstreamGroupNames = defineModel<string[]>('addUpstreamGroupNames', { required: true })
+const routeGroupManagerOpen = defineModel<boolean>('routeGroupManagerOpen', { required: true })
+const routeGroupAssignmentOpen = defineModel<boolean>('routeGroupAssignmentOpen', { required: true })
+const routeGroupAssignmentIds = defineModel<number[]>('routeGroupAssignmentIds', { required: true })
 const routeModelsOpen = defineModel<boolean>('routeModelsOpen', { required: true })
 const routeModelsRequestUrls = defineModel<string>('routeModelsRequestUrls', { required: true })
 const routeModelsSupportedModels = defineModel<string[]>('routeModelsSupportedModels', { required: true })
@@ -54,6 +59,10 @@ defineProps<{
   addUpstreamForm: AddUpstreamForm
   groupOptions: SelectOption[]
   addUpstreamLoading: boolean
+  routeGroupManagerLoading: boolean
+  routeGroupAssignmentLoading: boolean
+  routeGroupAssignmentRoute: GatewayRoute | null
+  routeGroups: GatewayRouteGroup[]
   routeModelsRoute: GatewayRoute | null
   routeModelsSaving: boolean
   logColumns: ColumnsType<GatewayLog>
@@ -88,6 +97,11 @@ const emit = defineEmits<{
   (event: 'settings-save', form: GatewaySettingsData): void
   (event: 'add-upstream-submit', form: AddUpstreamForm, groupNames: string[]): void
   (event: 'add-upstream-reset'): void
+  (event: 'route-groups-refresh'): void
+  (event: 'route-group-create', payload: { name: string; apiKey: string }): void
+  (event: 'route-group-update', group: GatewayRouteGroup, payload: { name: string; apiKey: string }): void
+  (event: 'route-group-delete', group: GatewayRouteGroup): void
+  (event: 'route-group-assignment-save'): void
   (event: 'route-models-save'): void
   (event: 'open-log-error-detail', detail: GatewayErrorDetail): void
   (event: 'copy-error-detail', value: string): void
@@ -136,6 +150,26 @@ const emit = defineEmits<{
     :loading="addUpstreamLoading"
     @submit="(form, selectedGroupNames) => emit('add-upstream-submit', form, selectedGroupNames)"
     @reset="emit('add-upstream-reset')"
+  />
+
+  <GatewayRouteGroupsDialog
+    v-model:open="routeGroupManagerOpen"
+    :groups="routeGroups"
+    :loading="routeGroupManagerLoading"
+    @refresh="emit('route-groups-refresh')"
+    @create="emit('route-group-create', $event)"
+    @update="(group, payload) => emit('route-group-update', group, payload)"
+    @delete="emit('route-group-delete', $event)"
+  />
+
+  <GatewayRouteGroupAssignmentDialog
+    v-model:open="routeGroupAssignmentOpen"
+    v-model:group-ids="routeGroupAssignmentIds"
+    :route="routeGroupAssignmentRoute"
+    :groups="routeGroups"
+    :loading="routeGroupAssignmentLoading"
+    :load-route-label="loadRouteLabel"
+    @save="emit('route-group-assignment-save')"
   />
 
   <GatewayRouteModelsDialog

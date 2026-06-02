@@ -123,6 +123,7 @@ test('useGatewayRouteManagementPageBindings maps route management props, models,
     handleProbeAll: () => events.push('probe-all'),
     handleUpdateAllBalances: () => events.push('update-all-balances'),
     handleDisableAllRoutes: () => events.push('disable-all'),
+    openRouteGroupManager: () => events.push('manage-groups'),
     openAddUpstream: () => events.push('add-upstream'),
     openSettings: () => events.push('open-settings'),
     clearRouteTypeFilter: () => events.push('clear-route-types'),
@@ -136,10 +137,12 @@ test('useGatewayRouteManagementPageBindings maps route management props, models,
     handleProbeRoute: (targetRoute) => events.push(`probe:${targetRoute.id}`),
     handleProbeRouteBalance: (targetRoute) => events.push(`probe-balance:${targetRoute.id}`),
     openRouteModelsDialog: (targetRoute) => events.push(`configure-models:${targetRoute.id}`),
+    openRouteGroupAssignment: (targetRoute) => events.push(`assign-groups:${targetRoute.id}`),
     handleEnableOnlyRoute: (targetRoute) => events.push(`enable-only:${targetRoute.id}`),
     openPriorityDialog: (targetRoute) => events.push(`priority:${targetRoute.id}`),
     openRouteDiagnosis: (targetRoute) => events.push(`diagnose:${targetRoute.id}`),
     openRouteLogs: (targetRoute) => events.push(`history:${targetRoute.id}`),
+    handleDeleteRoute: (targetRoute) => events.push(`delete:${targetRoute.id}`),
   })
 
   assert.equal(routeManagementPageProps.value.routeSearch, routeSearch.value)
@@ -215,6 +218,7 @@ test('useGatewayRouteManagementPageBindings maps route management props, models,
   routeManagementPageHandlers['probe-all']()
   routeManagementPageHandlers['update-all-balances']()
   routeManagementPageHandlers['disable-all']()
+  routeManagementPageHandlers['manage-groups']()
   routeManagementPageHandlers['add-upstream']()
   routeManagementPageHandlers['open-settings']()
   routeManagementPageHandlers['clear-route-types']()
@@ -228,10 +232,12 @@ test('useGatewayRouteManagementPageBindings maps route management props, models,
   routeManagementPageHandlers.probe(route({ id: 15 }))
   routeManagementPageHandlers['probe-balance'](route({ id: 16 }))
   routeManagementPageHandlers['configure-models'](route({ id: 17 }))
+  routeManagementPageHandlers['assign-groups'](route({ id: 22 }))
   routeManagementPageHandlers['enable-only'](route({ id: 18 }))
   routeManagementPageHandlers.priority(route({ id: 19 }))
   routeManagementPageHandlers.diagnose(route({ id: 20 }))
   routeManagementPageHandlers.history(route({ id: 21 }))
+  routeManagementPageHandlers.delete(route({ id: 23 }))
 
   assert.equal(routeSearch.value, 'claude')
   assert.deepEqual(selectedGroups.value, ['ops'])
@@ -245,6 +251,7 @@ test('useGatewayRouteManagementPageBindings maps route management props, models,
     'probe-all',
     'update-all-balances',
     'disable-all',
+    'manage-groups',
     'add-upstream',
     'open-settings',
     'clear-route-types',
@@ -258,10 +265,12 @@ test('useGatewayRouteManagementPageBindings maps route management props, models,
     'probe:15',
     'probe-balance:16',
     'configure-models:17',
+    'assign-groups:22',
     'enable-only:18',
     'priority:19',
     'diagnose:20',
     'history:21',
+    'delete:23',
   ])
 })
 

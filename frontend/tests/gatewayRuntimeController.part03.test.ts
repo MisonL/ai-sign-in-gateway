@@ -65,6 +65,7 @@ test('loads initial gateway data through injected runtime dependencies', async (
     priorityRoutes: [] as string[],
     logs: [] as string[],
     groups: [] as string[],
+    routeGroups: [] as string[],
     usage: '',
     activeRequests: [] as string[],
     loading: false,
@@ -119,6 +120,11 @@ test('loads initial gateway data through injected runtime dependencies', async (
       calls.push('groups')
       return ['group']
     },
+    requestRouteGroups: async ({ signal }) => {
+      assert.equal(signal, controller.signal)
+      calls.push('route-groups')
+      return ['route-group']
+    },
     requestUsage: async ({ start, end, signal }) => {
       assert.equal(start, '2026-05-26T00:00')
       assert.equal(end, '2026-05-26T23:59')
@@ -156,6 +162,10 @@ test('loads initial gateway data through injected runtime dependencies', async (
       state.groups = groups
       calls.push('set-groups')
     },
+    setRouteGroups: (groups) => {
+      state.routeGroups = groups
+      calls.push('set-route-groups')
+    },
     setUsage: (usage) => {
       state.usage = usage
       calls.push('set-usage')
@@ -181,6 +191,7 @@ test('loads initial gateway data through injected runtime dependencies', async (
     'routes',
     'logs',
     'groups',
+    'route-groups',
     'usage',
     'active',
     'set-overview',
@@ -189,6 +200,7 @@ test('loads initial gateway data through injected runtime dependencies', async (
     'set-routes',
     'set-logs',
     'set-groups',
+    'set-route-groups',
     'set-usage',
     'set-active',
     'apply-active',
@@ -202,6 +214,7 @@ test('loads initial gateway data through injected runtime dependencies', async (
     priorityRoutes: ['PRIMARY'],
     logs: ['log'],
     groups: ['group'],
+    routeGroups: ['route-group'],
     usage: 'usage',
     activeRequests: ['active'],
     loading: false,

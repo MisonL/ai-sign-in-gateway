@@ -17,7 +17,7 @@ const isPasswordMismatch = computed(() =>
   <div class="card-form">
     <div class="card-scroll card-scroll--padded">
       <a-form layout="vertical">
-        <div class="account-meta">当前登录用户：<strong>{{ view.currentUsername || '…' }}</strong></div>
+        <div class="account-meta">当前登录用户：<strong>{{ view.currentUsername || '...' }}</strong></div>
         <a-row :gutter="16">
           <a-col :xs="24" :md="12">
             <a-form-item label="新用户名">

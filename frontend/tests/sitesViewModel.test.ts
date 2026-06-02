@@ -97,6 +97,12 @@ test('normalizes site display fields without mutating source input', () => {
   assert.equal(source.balance_unit, 'usd')
 })
 
+test('formats balance fallback with backend-compatible precision', () => {
+  const normalized = normalizeSite(site({ last_balance: 12.3456, balance_unit: 'usd' }))
+
+  assert.equal(normalized.balance_display, '$12.3456')
+})
+
 test('maps recommended plugins and api key route defaults', () => {
   assert.equal(detectRecommendedPluginKey('https://boxying.com/app'), 'yellowpeach-newapi')
   assert.equal(detectRecommendedPluginKey('https://demo.sub2api.example'), 'sub2api-platform')

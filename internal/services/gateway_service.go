@@ -388,6 +388,12 @@ type GatewayRouteGroupInput struct {
 	APIKey string
 }
 
+type GatewayRouteGroupUpdateInput struct {
+	Name      string
+	APIKey    string
+	APIKeySet bool
+}
+
 type DeleteGatewayRouteResult struct {
 	RouteID       uint
 	SiteID        uint
@@ -918,7 +924,7 @@ func CreateGatewayRouteGroup(db *gorm.DB, input GatewayRouteGroupInput) (models.
 	return group, nil
 }
 
-func UpdateGatewayRouteGroup(db *gorm.DB, groupID uint, input GatewayRouteGroupInput) (models.GatewayRouteGroup, error) {
+func UpdateGatewayRouteGroup(db *gorm.DB, groupID uint, input GatewayRouteGroupUpdateInput) (models.GatewayRouteGroup, error) {
 	if groupID == 0 {
 		return models.GatewayRouteGroup{}, errors.New("分组 ID 无效")
 	}
@@ -926,15 +932,19 @@ func UpdateGatewayRouteGroup(db *gorm.DB, groupID uint, input GatewayRouteGroupI
 	if name == "" {
 		return models.GatewayRouteGroup{}, errors.New("分组名称不能为空")
 	}
-	if err := ensureGatewayRouteGroupAPIKeyUnique(db, groupID, input.APIKey); err != nil {
-		return models.GatewayRouteGroup{}, err
+	if input.APIKeySet {
+		if err := ensureGatewayRouteGroupAPIKeyUnique(db, groupID, input.APIKey); err != nil {
+			return models.GatewayRouteGroup{}, err
+		}
 	}
 	var group models.GatewayRouteGroup
 	if err := db.First(&group, groupID).Error; err != nil {
 		return models.GatewayRouteGroup{}, err
 	}
 	group.Name = name
-	group.APIKey = strings.TrimSpace(input.APIKey)
+	if input.APIKeySet {
+		group.APIKey = strings.TrimSpace(input.APIKey)
+	}
 	if err := db.Save(&group).Error; err != nil {
 		return models.GatewayRouteGroup{}, err
 	}

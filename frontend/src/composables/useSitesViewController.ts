@@ -11,6 +11,7 @@ import { useSitesEditorDrawer } from './useSitesEditorDrawer'
 import { useSitesEditorState } from './useSitesEditorState'
 import { useSitesInvites } from './useSitesInvites'
 import { useSitesPageState } from './useSitesPageState'
+import { useSitesQueue } from './useSitesQueue'
 import { useSitesRouteSync } from './useSitesRouteSync'
 import { useSitesRuntimeChecks } from './useSitesRuntimeChecks'
 import { useSitesStorageAnalysis } from './useSitesStorageAnalysis'
@@ -106,6 +107,7 @@ export function useSitesViewController() {
   })
   const apiKeyDialog = useSitesApiKeyDialog({ sites, toast, loadData, syncRoutesAfterApiKeyUpdate })
   const runtime = useSitesRuntimeChecks({ sites, busy, toast, runSiteBatch })
+  const queue = useSitesQueue({ toast })
   const { schedule: scheduleSummaryRefresh } = useDebouncedTask(runtime.refreshTableSummaries)
   const ccSwitch = useSitesCCSwitch({
     fileInput: ccSwitchFileInput,
@@ -236,6 +238,7 @@ export function useSitesViewController() {
     ...apiKeyRefresh,
     ...apiKeyDialog,
     ...runtime,
+    ...queue,
     ...ccSwitch,
     ...duplicates,
     ...storage,

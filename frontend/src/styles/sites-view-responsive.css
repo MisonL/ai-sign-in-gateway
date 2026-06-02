@@ -39,7 +39,7 @@
 
 @media (max-width: 720px) {
   .sites-page.sites-page {
-    --control-height: 44px;
+    --control-height: 40px;
   }
 
   .sites-page .table-fill--management .ant-table-body {
@@ -82,20 +82,22 @@
   }
 
   .sites-page.sites-page .ant-switch {
-    min-width: 66px !important;
-    height: 44px !important;
-    line-height: 44px !important;
+    min-width: 64px !important;
+    height: 34px !important;
+    line-height: 34px !important;
+    border-radius: var(--radius-pill) !important;
   }
 
   .sites-page.sites-page .ant-switch .ant-switch-handle {
-    top: 12px !important;
+    top: 8px !important;
   }
 
   .sites-page.sites-page .ant-switch .ant-switch-inner,
   .sites-page.sites-page .ant-switch-inner-checked,
   .sites-page.sites-page .ant-switch-inner-unchecked {
-    min-height: 42px !important;
-    line-height: 42px !important;
+    min-height: 32px !important;
+    line-height: 32px !important;
+    font-size: 12px !important;
   }
 
   .sites-page.sites-page .sites-toolbar__segment .ant-btn,

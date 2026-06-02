@@ -134,7 +134,7 @@ export function useSitesStorageAnalysis(options: UseSitesStorageAnalysisOptions)
           result.message,
           ...summarizeStorageKeys(result),
           `回填字段：${appliedLabels}`,
-          `命中线索：${matchedPreview}${result.matched_keys.length > 8 ? ' …' : ''}`,
+          `命中线索：${matchedPreview}${result.matched_keys.length > 8 ? ' ...' : ''}`,
         ].join('\n'),
       }
       options.toast.success(appliedEntries.length ? `已回填 ${appliedEntries.length} 个字段。` : '分析完成，请查看结果。')

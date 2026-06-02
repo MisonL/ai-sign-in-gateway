@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises'
 import { reactive, ref } from 'vue'
 
 import { useGatewayPageBindings } from '../src/gatewayPageBindingsController.ts'
+import type { GatewayErrorDetail } from '../src/gatewayActivityDisplayModel.ts'
 import type { AddUpstreamForm } from '../src/gatewayAddUpstreamModel.ts'
 
 const gatewayViewPath = new URL('../src/views/GatewayView.vue', import.meta.url)
@@ -21,10 +22,22 @@ test('useGatewayPageBindings composes monitor, route management, and overlay bin
   const balanceManualDialog = { id: 'balance-manual-dialog' }
   const settingsDialog = { id: 'settings-dialog' }
   const addUpstreamDialog = { id: 'add-upstream-dialog' }
+  const routeGroupManagerDialog = { id: 'route-group-manager-dialog' }
+  const routeGroupAssignmentDialog = { id: 'route-group-assignment-dialog' }
   const routeModelsDialog = { id: 'route-models-dialog' }
   const logsDrawer = { id: 'logs-drawer' }
+  const errorDetailDrawer = { id: 'error-detail-drawer' }
   const routeLogsDrawer = { id: 'route-logs-drawer' }
   const routeDiagnosisDrawer = { id: 'route-diagnosis-drawer' }
+  const errorDetail: GatewayErrorDetail = {
+    title: '请求失败',
+    sourceLabel: '路由',
+    statusLabel: '失败',
+    success: false,
+    lines: [],
+    fields: [],
+    fullText: 'upstream error',
+  }
 
   const bindings = useGatewayPageBindings({
     gatewayRequestUrl: ref('http://127.0.0.1:8972/api/gateway'),
@@ -98,6 +111,7 @@ test('useGatewayPageBindings composes monitor, route management, and overlay bin
     handleProbeAll: () => events.push('probe-all'),
     handleUpdateAllBalances: () => events.push('update-all-balances'),
     handleDisableAllRoutes: () => events.push('disable-all'),
+    openRouteGroupManager: () => events.push('manage-groups'),
     openAddUpstream: () => events.push('add-upstream'),
     clearRouteTypeFilter: () => events.push('clear-route-types'),
     toggleRouteTypeFilter: (routeType) => events.push(`toggle-route-type:${routeType}`),
@@ -110,21 +124,28 @@ test('useGatewayPageBindings composes monitor, route management, and overlay bin
     handleProbeRoute: () => events.push('probe'),
     handleProbeRouteBalance: () => events.push('probe-balance'),
     openRouteModelsDialog: () => events.push('configure-models'),
+    openRouteGroupAssignment: () => events.push('assign-groups'),
     handleEnableOnlyRoute: () => events.push('enable-only'),
     openPriorityDialog: () => events.push('priority'),
     openRouteDiagnosis: () => events.push('diagnose'),
     openRouteLogs: () => events.push('history'),
+    handleDeleteRoute: () => events.push('delete'),
     priorityDialog,
     balanceManualDialog,
     settingsDialog,
     addUpstreamDialog,
+    routeGroupManagerDialog,
+    routeGroupAssignmentDialog,
+    routeGroups: ref([{ id: 101, name: '默认路由组', route_count: 1 }]),
     routeModelsDialog,
     logsDrawer,
+    errorDetailDrawer,
     routeLogsDrawer,
     routeDiagnosisDrawer,
     priorityColumns: [{ key: 'priority' }],
     routeRowKey: (record) => record.id,
     routePriorityLabel: () => 'P1',
+    siteGroupOptions: ref([{ label: '默认', value: 'default' }]),
     logColumns: [{ key: 'log' }],
     logs: ref([log]),
     routeLogs: ref([log]),
@@ -136,21 +157,33 @@ test('useGatewayPageBindings composes monitor, route management, and overlay bin
     logRequestURL: () => '/v1/responses',
     logRouteLabel: () => 'route-label',
     logRouteMeta: () => 'route-meta',
+    logTransferLines: () => [],
+    gatewayLogHasErrorDetail: () => false,
     logModelMeta: () => 'gpt-4o',
     logUserAgent: () => 'codex',
+    buildLogErrorDetail: () => errorDetail,
     handlePriorityMove: () => events.push('priority-move'),
     handlePriorityPreset: (mode) => events.push(`priority-preset:${mode}`),
     submitManualRouteBalanceProbe: () => events.push('balance-submit'),
+    refreshRouteGroups: () => events.push('route-groups-refresh'),
+    createRouteGroup: () => events.push('route-group-create'),
+    updateRouteGroup: () => events.push('route-group-update'),
+    deleteRouteGroup: () => events.push('route-group-delete'),
+    saveRouteGroupAssignment: () => events.push('route-group-assignment-save'),
     saveSettings: (settings) => events.push(`settings-save:${settings.gateway_api_key}`),
     submitAddUpstream: (form, groupNames) => events.push(`add-upstream-submit:${form.name}:${groupNames.join(',')}`),
     resetAddUpstreamForm: () => events.push('add-upstream-reset'),
     saveRouteModelsDialog: () => events.push('route-models-save'),
+    openGatewayErrorDetail: () => events.push('open-error-detail'),
+    copyGatewayErrorDetail: () => events.push('copy-error-detail'),
   })
 
   assert.equal(bindings.monitorPageProps.value.requestUrl, 'http://127.0.0.1:8972/api/gateway')
   assert.equal(bindings.routeManagementPageProps.value.routeCount, 1)
   assert.equal(bindings.routeManagementPageProps.value.tableY, 320)
   assert.equal(bindings.overlayPageProps.value.priorityDialog, priorityDialog)
+  assert.equal(bindings.overlayPageProps.value.routeGroupManagerDialog, routeGroupManagerDialog)
+  assert.equal(bindings.overlayPageProps.value.routeGroupAssignmentDialog, routeGroupAssignmentDialog)
   assert.equal(bindings.overlayPageProps.value.drawerTableY, 240)
 
   bindings.monitorPageHandlers.refresh()

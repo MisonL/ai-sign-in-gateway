@@ -30,8 +30,8 @@ export const consoleCollectorScript = `(() => {
   }
   const sanitizeConfig = (value) => {
     if (typeof value === 'string') {
-      if (/^data:image\\//i.test(value)) return value.slice(0, 96) + '…[omitted]'
-      if (value.length > 2000) return value.slice(0, 2000) + '…[truncated]'
+      if (/^data:image\\//i.test(value)) return value.slice(0, 96) + '...[omitted]'
+      if (value.length > 2000) return value.slice(0, 2000) + '...[truncated]'
       return value
     }
     if (Array.isArray(value)) return value.map(sanitizeConfig)
@@ -162,8 +162,8 @@ export function summarizeStorageKeys(payload: LocalStorageAnalyzeResult): string
     `页面：${payload.page_title || payload.page_url || '未知页面'}`,
     `已解析：${payload.parsed_items} 项`,
     `Cookie：${payload.cookie_header ? '已包含可读 Cookie' : '无可读 Cookie'}`,
-    `localStorage Key：${localPreview}${localKeys.length > 8 ? ' …' : ''}`,
-    `sessionStorage Key：${sessionKeys.length ? sessionKeys.slice(0, 8).join('，') : '无'}${sessionKeys.length > 8 ? ' …' : ''}`,
+    `localStorage Key：${localPreview}${localKeys.length > 8 ? ' ...' : ''}`,
+    `sessionStorage Key：${sessionKeys.length ? sessionKeys.slice(0, 8).join('，') : '无'}${sessionKeys.length > 8 ? ' ...' : ''}`,
   ]
 }
 

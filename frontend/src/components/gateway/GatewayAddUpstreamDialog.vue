@@ -114,7 +114,7 @@ const apiFormatOptions = [
       <a-form-item label="API Key" required>
         <a-input-password
           v-model:value="localForm.api_key"
-          placeholder="sk-…"
+          placeholder="sk-..."
           autocomplete="off"
           aria-label="上游 API Key"
         />

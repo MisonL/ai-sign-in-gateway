@@ -70,10 +70,12 @@ const emit = defineEmits<{
   (event: 'probe', route: GatewayRoute): void
   (event: 'probe-balance', route: GatewayRoute): void
   (event: 'configure-models', route: GatewayRoute): void
+  (event: 'assign-groups', route: GatewayRoute): void
   (event: 'enable-only', route: GatewayRoute): void
   (event: 'priority', route: GatewayRoute): void
   (event: 'diagnose', route: GatewayRoute): void
   (event: 'history', route: GatewayRoute): void
+  (event: 'delete', route: GatewayRoute): void
 }>()
 </script>
 
@@ -195,10 +197,12 @@ const emit = defineEmits<{
                 @probe="emit('probe', $event)"
                 @probe-balance="emit('probe-balance', $event)"
                 @configure-models="emit('configure-models', $event)"
+                @assign-groups="emit('assign-groups', $event)"
                 @enable-only="emit('enable-only', $event)"
                 @priority="emit('priority', $event)"
                 @diagnose="emit('diagnose', $event)"
                 @history="emit('history', $event)"
+                @delete="emit('delete', $event)"
               />
             </template>
           </template>

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import zhCN from 'ant-design-vue/es/locale/zh_CN'
+
 const theme = {
   token: {
     borderRadius: 8,
@@ -67,7 +69,7 @@ const theme = {
 </script>
 
 <template>
-  <a-config-provider :theme="theme">
+  <a-config-provider :theme="theme" :locale="zhCN">
     <router-view />
   </a-config-provider>
 </template>

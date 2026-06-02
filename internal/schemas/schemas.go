@@ -97,6 +97,11 @@ type SiteBase struct {
 type SiteCreate = SiteBase
 type SiteUpdate = SiteBase
 
+type SiteDraftTestRequest struct {
+	SiteBase
+	SiteID uint `json:"site_id"`
+}
+
 type SiteRegistrationBatchCreate struct {
 	SiteBase
 	EmailPattern string `json:"email_pattern"`
@@ -510,16 +515,20 @@ type McpTestResponse struct {
 }
 
 type GatewaySettingsResponse struct {
-	RouteStrategy               string `json:"route_strategy"`
-	FailureThreshold            int    `json:"failure_threshold"`
-	CooldownSeconds             int    `json:"cooldown_seconds"`
-	RequestTimeout              int    `json:"request_timeout"`
-	MaxAttempts                 int    `json:"max_attempts"`
-	FailureRetryMode            string `json:"failure_retry_mode"`
-	RouteConcurrencyLimit       int    `json:"route_concurrency_limit"`
-	ConcurrencyTransferStrategy string `json:"concurrency_transfer_strategy"`
-	ConcurrencyOverflowStrategy string `json:"concurrency_overflow_strategy"`
-	GatewayAPIKey               string `json:"gateway_api_key"`
+	RouteStrategy               string  `json:"route_strategy"`
+	FailureThreshold            int     `json:"failure_threshold"`
+	CooldownSeconds             int     `json:"cooldown_seconds"`
+	RequestTimeout              int     `json:"request_timeout"`
+	MaxAttempts                 int     `json:"max_attempts"`
+	FailureRetryMode            string  `json:"failure_retry_mode"`
+	RouteConcurrencyLimit       int     `json:"route_concurrency_limit"`
+	ConcurrencyTransferStrategy string  `json:"concurrency_transfer_strategy"`
+	ConcurrencyOverflowStrategy string  `json:"concurrency_overflow_strategy"`
+	SmartLatencyBias            float64 `json:"smart_latency_bias"`
+	SmartConcurrencyBias        float64 `json:"smart_concurrency_bias"`
+	SmartFailureBias            float64 `json:"smart_failure_bias"`
+	SmartPriorityBias           float64 `json:"smart_priority_bias"`
+	GatewayAPIKey               string  `json:"gateway_api_key"`
 }
 
 type GatewaySettingsUpdate = GatewaySettingsResponse

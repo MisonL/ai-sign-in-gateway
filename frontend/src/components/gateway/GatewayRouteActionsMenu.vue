@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import {
+  DeleteOutlined,
   HistoryOutlined,
   InfoCircleOutlined,
   MoreOutlined,
@@ -22,10 +23,12 @@ const emit = defineEmits<{
   (event: 'probe', route: GatewayRoute): void
   (event: 'probe-balance', route: GatewayRoute): void
   (event: 'configure-models', route: GatewayRoute): void
+  (event: 'assign-groups', route: GatewayRoute): void
   (event: 'enable-only', route: GatewayRoute): void
   (event: 'priority', route: GatewayRoute): void
   (event: 'diagnose', route: GatewayRoute): void
   (event: 'history', route: GatewayRoute): void
+  (event: 'delete', route: GatewayRoute): void
 }>()
 </script>
 
@@ -47,7 +50,7 @@ const emit = defineEmits<{
         </a-button>
       </a-tooltip>
       <template #overlay>
-        <a-menu @click.stop>
+        <a-menu>
           <a-menu-item
             key="reset-circuit"
             :disabled="route.circuit_state === 'closed'"
@@ -68,6 +71,10 @@ const emit = defineEmits<{
             <ToolOutlined aria-hidden="true" />
             <span>路由配置</span>
           </a-menu-item>
+          <a-menu-item key="assign-groups" @click="emit('assign-groups', route)">
+            <SettingOutlined aria-hidden="true" />
+            <span>分组</span>
+          </a-menu-item>
           <a-menu-divider />
           <a-menu-item key="enable-only" @click="emit('enable-only', route)">
             <SettingOutlined aria-hidden="true" />
@@ -84,6 +91,11 @@ const emit = defineEmits<{
           <a-menu-item key="history" @click="emit('history', route)">
             <HistoryOutlined aria-hidden="true" />
             <span>历史</span>
+          </a-menu-item>
+          <a-menu-divider />
+          <a-menu-item key="delete" danger @click="emit('delete', route)">
+            <DeleteOutlined aria-hidden="true" />
+            <span>删除</span>
           </a-menu-item>
         </a-menu>
       </template>

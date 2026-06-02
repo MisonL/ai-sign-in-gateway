@@ -73,6 +73,7 @@ export type GatewayRouteManagementPageBindingOptions<TRouteColumns> = {
   handleProbeAll: () => void
   handleUpdateAllBalances: () => void
   handleDisableAllRoutes: () => void
+  openRouteGroupManager: () => void
   openAddUpstream: () => void
   openSettings: () => void
   clearRouteTypeFilter: () => void
@@ -86,10 +87,12 @@ export type GatewayRouteManagementPageBindingOptions<TRouteColumns> = {
   handleProbeRoute: (route: GatewayRoute) => void
   handleProbeRouteBalance: (route: GatewayRoute) => void
   openRouteModelsDialog: (route: GatewayRoute) => void
+  openRouteGroupAssignment: (route: GatewayRoute) => void
   handleEnableOnlyRoute: (route: GatewayRoute) => void
   openPriorityDialog: (route: GatewayRoute) => void
   openRouteDiagnosis: (route: GatewayRoute) => void
   openRouteLogs: (route: GatewayRoute) => void
+  handleDeleteRoute: (route: GatewayRoute) => void
 }
 
 export function useGatewayRouteManagementPageBindings<TRouteColumns>({
@@ -142,6 +145,7 @@ export function useGatewayRouteManagementPageBindings<TRouteColumns>({
   handleProbeAll,
   handleUpdateAllBalances,
   handleDisableAllRoutes,
+  openRouteGroupManager,
   openAddUpstream,
   openSettings,
   clearRouteTypeFilter,
@@ -155,10 +159,12 @@ export function useGatewayRouteManagementPageBindings<TRouteColumns>({
   handleProbeRoute,
   handleProbeRouteBalance,
   openRouteModelsDialog,
+  openRouteGroupAssignment,
   handleEnableOnlyRoute,
   openPriorityDialog,
   openRouteDiagnosis,
   openRouteLogs,
+  handleDeleteRoute,
 }: GatewayRouteManagementPageBindingOptions<TRouteColumns>) {
   const routeManagementPageProps = computed(() => ({
     routeSearch: routeSearch.value,
@@ -226,6 +232,7 @@ export function useGatewayRouteManagementPageBindings<TRouteColumns>({
     'probe-all': handleProbeAll,
     'update-all-balances': handleUpdateAllBalances,
     'disable-all': handleDisableAllRoutes,
+    'manage-groups': openRouteGroupManager,
     'add-upstream': openAddUpstream,
     'open-settings': openSettings,
     'clear-route-types': clearRouteTypeFilter,
@@ -239,10 +246,12 @@ export function useGatewayRouteManagementPageBindings<TRouteColumns>({
     probe: handleProbeRoute,
     'probe-balance': handleProbeRouteBalance,
     'configure-models': openRouteModelsDialog,
+    'assign-groups': openRouteGroupAssignment,
     'enable-only': handleEnableOnlyRoute,
     priority: openPriorityDialog,
     diagnose: openRouteDiagnosis,
     history: openRouteLogs,
+    delete: handleDeleteRoute,
   }
 
   return {

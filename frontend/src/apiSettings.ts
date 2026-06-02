@@ -45,13 +45,6 @@ export function setRuntimeConfigDir(configDir: string): Promise<RuntimeConfigDir
   })
 }
 
-export function importRuntimeDatabase(databasePath: string): Promise<RuntimeDatabaseImportResult> {
-  return request('/settings/runtime/database', {
-    method: 'POST',
-    body: JSON.stringify({ database_path: databasePath }),
-  })
-}
-
 export function uploadRuntimeDatabase(file: File): Promise<RuntimeDatabaseImportResult> {
   const form = new FormData()
   form.append('database', file)

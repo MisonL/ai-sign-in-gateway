@@ -5,7 +5,9 @@ import type {
   GatewayLog,
   GatewayOverview,
   GatewayRoute,
+  GatewayRouteDeleteResult,
   GatewayRouteDiagnosis,
+  GatewayRouteGroup,
   GatewayRouteProbeResult,
   GatewayRouteUpdatePayload,
   GatewaySettingsData,
@@ -55,6 +57,50 @@ export function getGatewayRoutes(options?: { group?: string; includeDisabled?: b
   }
   const suffix = params.toString() ? `?${params.toString()}` : ''
   return request(`/gateway-admin/routes${suffix}`, { signal: options?.signal })
+}
+
+export function getGatewayRouteGroups(options: RequestOptions = {}): Promise<GatewayRouteGroup[]> {
+  return request('/gateway-admin/route-groups', { signal: options.signal })
+}
+
+export function createGatewayRouteGroup(payload: { name: string; api_key?: string }): Promise<GatewayRouteGroup> {
+  return request('/gateway-admin/route-groups', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: payload.name,
+      api_key: payload.api_key ?? '',
+    }),
+  })
+}
+
+export function updateGatewayRouteGroup(id: number, payload: { name: string; api_key?: string; clear_api_key?: boolean }): Promise<GatewayRouteGroup> {
+  return request(`/gateway-admin/route-groups/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      name: payload.name,
+      ...(payload.api_key !== undefined ? { api_key: payload.api_key } : {}),
+      ...(payload.clear_api_key ? { clear_api_key: true } : {}),
+    }),
+  })
+}
+
+export function deleteGatewayRouteGroup(id: number): Promise<{ status: string; message: string }> {
+  return request(`/gateway-admin/route-groups/${id}`, {
+    method: 'DELETE',
+  })
+}
+
+export function updateGatewayRouteGroups(id: number, groupIds: number[]): Promise<GatewayRoute> {
+  return request(`/gateway-admin/routes/${id}/groups`, {
+    method: 'PUT',
+    body: JSON.stringify({ group_ids: groupIds }),
+  })
+}
+
+export function deleteGatewayRoute(id: number): Promise<GatewayRouteDeleteResult> {
+  return request(`/gateway-admin/routes/${id}`, {
+    method: 'DELETE',
+  })
 }
 
 export function toggleGatewayRoute(id: number): Promise<{ id: number; is_enabled: boolean; is_enabled_manual?: boolean; circuit_state: string }> {

@@ -1038,14 +1038,24 @@ func (a *App) UpdateGatewayRouteGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var payload struct {
-		Name   string `json:"name"`
-		APIKey string `json:"api_key"`
+		Name        string  `json:"name"`
+		APIKey      *string `json:"api_key"`
+		ClearAPIKey bool    `json:"clear_api_key"`
 	}
 	if err := httpx.Decode(r, &payload); err != nil {
 		writeError(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	group, err := services.UpdateGatewayRouteGroup(a.DB, uint(groupID), services.GatewayRouteGroupInput{Name: payload.Name, APIKey: payload.APIKey})
+	input := services.GatewayRouteGroupUpdateInput{Name: payload.Name}
+	if payload.APIKey != nil {
+		input.APIKey = strings.TrimSpace(*payload.APIKey)
+		input.APIKeySet = true
+	}
+	if payload.ClearAPIKey {
+		input.APIKey = ""
+		input.APIKeySet = true
+	}
+	group, err := services.UpdateGatewayRouteGroup(a.DB, uint(groupID), input)
 	if err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -1131,7 +1141,6 @@ func gatewayRouteGroupResponse(group models.GatewayRouteGroup, routeCount int) m
 	return map[string]any{
 		"id":          group.ID,
 		"name":        group.Name,
-		"api_key":     group.APIKey,
 		"has_api_key": strings.TrimSpace(group.APIKey) != "",
 		"route_count": routeCount,
 		"created_at":  group.CreatedAt,
@@ -1281,7 +1290,7 @@ func (a *App) gatewayActiveRequestResponse(items []services.GatewayActiveRequest
 			"key_fingerprint":       item.KeyFingerprint,
 			"group_name":            item.GroupName,
 			"target_path":           item.TargetPath,
-			"request_url":           item.RequestURL,
+			"request_url":           services.RedactGatewayURL(item.RequestURL),
 			"method":                item.Method,
 			"route_strategy":        item.RouteStrategy,
 			"attempt_index":         item.AttemptIndex,

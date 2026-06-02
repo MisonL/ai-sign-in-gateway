@@ -63,6 +63,7 @@ type RefreshGatewayRealtimeDataOptions<
   TInputRoute,
   TOutputRoute,
   TLog,
+  TRouteGroup,
   TController extends AbortControllerLike = AbortController,
 > = {
   now: number
@@ -78,12 +79,14 @@ type RefreshGatewayRealtimeDataOptions<
   requestOverview: (options: { signal: TController['signal'] }) => Promise<TOverview>
   requestRoutes: (options: { includeDisabled: boolean; signal: TController['signal'] }) => Promise<TInputRoute[]>
   requestLogs: (limit: number, options: { signal: TController['signal'] }) => Promise<TLog[]>
+  requestRouteGroups: (options: { signal: TController['signal'] }) => Promise<TRouteGroup[]>
   currentLogs: () => TLog[]
   normalizeRoute: (route: TInputRoute) => TOutputRoute
   setOverview: (overview: TOverview) => void
   setRoutes: (routes: TOutputRoute[]) => void
   setPriorityRoutes: (routes: TOutputRoute[]) => void
   setLogs: (logs: TLog[]) => void
+  setRouteGroups: (groups: TRouteGroup[]) => void
   refreshActiveRequests: (silent: true) => Promise<void>
   isAbortError: (error: unknown) => boolean
 }
@@ -216,6 +219,7 @@ export async function refreshGatewayRealtimeData<
   TInputRoute,
   TOutputRoute,
   TLog,
+  TRouteGroup,
   TController extends AbortControllerLike = AbortController,
 >({
   now,
@@ -231,15 +235,17 @@ export async function refreshGatewayRealtimeData<
   requestOverview,
   requestRoutes,
   requestLogs,
+  requestRouteGroups,
   currentLogs,
   normalizeRoute,
   setOverview,
   setRoutes,
   setPriorityRoutes,
   setLogs,
+  setRouteGroups,
   refreshActiveRequests,
   isAbortError,
-}: RefreshGatewayRealtimeDataOptions<TOverview, TInputRoute, TOutputRoute, TLog, TController>) {
+}: RefreshGatewayRealtimeDataOptions<TOverview, TInputRoute, TOutputRoute, TLog, TRouteGroup, TController>) {
   if (!startAutoRefresh({ now, visible })) {
     return
   }
@@ -249,11 +255,22 @@ export async function refreshGatewayRealtimeData<
       isMonitor,
       logsDrawerOpen,
     })
+    const overviewRequest = requestOverview({ signal: controller.signal })
+    const routesRequest = requestRoutes({ includeDisabled, signal: controller.signal })
+    const logsRequest = refreshPlan.loadLogs ? requestLogs(80, { signal: controller.signal }) : Promise.resolve(currentLogs())
+    const routeGroupRequest = requestRouteGroups({ signal: controller.signal }).then(
+      (groups) => ({ ok: true as const, groups }),
+      (error: unknown) => ({ ok: false as const, error }),
+    )
     const [overviewData, routeData, logData] = await Promise.all([
-      requestOverview({ signal: controller.signal }),
-      requestRoutes({ includeDisabled, signal: controller.signal }),
-      refreshPlan.loadLogs ? requestLogs(80, { signal: controller.signal }) : Promise.resolve(currentLogs()),
+      overviewRequest,
+      routesRequest,
+      logsRequest,
     ])
+    const routeGroupResult = await routeGroupRequest
+    if (!routeGroupResult.ok && isAbortError(routeGroupResult.error)) {
+      throw routeGroupResult.error
+    }
     const applyPlan = buildGatewayRealtimeRefreshApplyPlan({
       mounted: mounted(),
       aborted: controller.signal.aborted,
@@ -271,6 +288,9 @@ export async function refreshGatewayRealtimeData<
       setPriorityRoutes(applyPlan.normalizedRoutes)
     }
     setLogs(logData)
+    if (routeGroupResult.ok) {
+      setRouteGroups(routeGroupResult.groups)
+    }
     if (applyPlan.refreshActiveRequests) {
       await refreshActiveRequests(true)
     }

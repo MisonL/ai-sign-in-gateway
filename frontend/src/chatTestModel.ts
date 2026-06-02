@@ -144,7 +144,7 @@ export function createChatAssistantMessage(mode: ChatMode): ChatMessage {
   return {
     id: newID('assistant'),
     role: 'assistant',
-    content: mode === 'image' ? '正在生成图片…' : '正在思考…',
+    content: mode === 'image' ? '正在生成图片...' : '正在思考...',
     createdAt: new Date().toISOString(),
     status: 'sending',
     mode,

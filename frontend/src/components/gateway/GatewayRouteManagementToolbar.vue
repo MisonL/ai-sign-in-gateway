@@ -28,6 +28,7 @@ const emit = defineEmits<{
   (event: 'probe-all'): void
   (event: 'update-all-balances'): void
   (event: 'disable-all'): void
+  (event: 'manage-groups'): void
   (event: 'add-upstream'): void
   (event: 'open-settings'): void
 }>()
@@ -81,6 +82,7 @@ const emit = defineEmits<{
         @action="emit('update-all-balances')"
       />
       <a-button danger :disabled="!routeCount" @click="emit('disable-all')">禁用全部</a-button>
+      <a-button @click="emit('manage-groups')">路由分组</a-button>
       <a-button type="primary" @click="emit('add-upstream')">
         <template #icon>
           <PlusOutlined aria-hidden="true" />

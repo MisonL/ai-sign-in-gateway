@@ -173,7 +173,7 @@ const emit = defineEmits<{
             <div class="api-key-dialog-field__label">API Key</div>
             <a-input-password
               v-model:value="manualKey"
-              placeholder="sk-…"
+              placeholder="sk-..."
               autocomplete="new-password"
               aria-label="自定义 API Key"
               @press-enter="emit('addManualKey')"

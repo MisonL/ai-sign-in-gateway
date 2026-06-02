@@ -74,14 +74,14 @@ test('probeGatewayRouteBatch probes routes, applies successes, advances progress
 
   await probeGatewayRouteBatch({
     routes,
-    requestProbe: async (routeId) => {
-      events.push(`request:${routeId}`)
-      return {
+    requestProbeBatch: async (routeIds) => {
+      events.push(`request-batch:${routeIds.join(',')}`)
+      return routeIds.map((routeId) => ({
         id: routeId,
         ok: true,
         latency_ms: 100 + routeId,
         message: '',
-      } as GatewayRouteProbeResult
+      } as GatewayRouteProbeResult))
     },
     applyProbeResult: (probeResult) => {
       events.push(`apply:${probeResult.id}`)
@@ -95,7 +95,6 @@ test('probeGatewayRouteBatch probes routes, applies successes, advances progress
     finishBatch: (routeIds) => {
       events.push(`finish:${routeIds.join(',')}`)
     },
-    successCount: () => 2,
     now: () => '2026-05-26T10:00:00.000Z',
     showPlanNotice: (plan) => {
       events.push(`notice:${plan.notice.message}`)
@@ -104,10 +103,9 @@ test('probeGatewayRouteBatch probes routes, applies successes, advances progress
 
   assert.deepEqual(events, [
     'start:21,22',
-    'request:21',
+    'request-batch:21,22',
     'apply:21',
     'finish-route:21:true',
-    'request:22',
     'apply:22',
     'finish-route:22:true',
     'notice:路由探测完成，2 条全部可用。',
@@ -124,17 +122,16 @@ test('probeGatewayRouteBatch converts per-route failures into failed results and
 
   await probeGatewayRouteBatch({
     routes,
-    requestProbe: async (routeId) => {
-      events.push(`request:${routeId}`)
-      if (routeId === 31) {
-        throw new Error('upstream 401')
-      }
-      return {
-        id: routeId,
-        ok: true,
-        latency_ms: 88,
-        message: '',
-      } as GatewayRouteProbeResult
+    requestProbeBatch: async (routeIds) => {
+      events.push(`request-batch:${routeIds.join(',')}`)
+      return routeIds
+        .filter((routeId) => routeId !== 31)
+        .map((routeId) => ({
+          id: routeId,
+          ok: true,
+          latency_ms: 88,
+          message: '',
+        } as GatewayRouteProbeResult))
     },
     applyProbeResult: (probeResult) => {
       events.push(`apply:${probeResult.id}`)
@@ -148,7 +145,6 @@ test('probeGatewayRouteBatch converts per-route failures into failed results and
     finishBatch: (routeIds) => {
       events.push(`finish:${routeIds.join(',')}`)
     },
-    successCount: () => 1,
     now: () => '2026-05-26T10:00:00.000Z',
     showPlanNotice: (plan) => {
       events.push(`notice:${plan.notice.message}`)
@@ -157,9 +153,9 @@ test('probeGatewayRouteBatch converts per-route failures into failed results and
 
   assert.deepEqual(events, [
     'start:31,32',
-    'request:31',
+    'request-batch:31,32',
+    'apply:31',
     'finish-route:31:false',
-    'request:32',
     'apply:32',
     'finish-route:32:true',
     'notice:路由探测完成，成功 1 条，失败 1 条：主站 / Key A / Key A',
@@ -172,9 +168,9 @@ test('probeGatewayRouteBatch reports empty route selections without starting a b
 
   await probeGatewayRouteBatch({
     routes: [],
-    requestProbe: async () => {
+    requestProbeBatch: async () => {
       events.push('request')
-      return { id: 1, ok: true } as GatewayRouteProbeResult
+      return [{ id: 1, ok: true } as GatewayRouteProbeResult]
     },
     applyProbeResult: () => {
       events.push('apply')
@@ -188,7 +184,6 @@ test('probeGatewayRouteBatch reports empty route selections without starting a b
     finishBatch: () => {
       events.push('finish')
     },
-    successCount: () => 0,
     now: () => '2026-05-26T10:00:00.000Z',
     showPlanNotice: (plan) => {
       events.push(`notice:${plan.notice.message}`)
@@ -207,14 +202,14 @@ test('probeAllGatewayRoutesAction assembles batch probe dependencies without cha
 
   await probeAllGatewayRoutesAction({
     routes,
-    requestProbe: async (routeId) => {
-      events.push(`request:${routeId}`)
-      return {
+    requestProbeBatch: async (routeIds) => {
+      events.push(`request-batch:${routeIds.join(',')}`)
+      return routeIds.map((routeId) => ({
         id: routeId,
         ok: true,
         latency_ms: routeId,
         message: '',
-      } as GatewayRouteProbeResult
+      } as GatewayRouteProbeResult))
     },
     applyProbeResult: (result) => {
       events.push(`apply:${result.id}`)
@@ -230,7 +225,6 @@ test('probeAllGatewayRoutesAction assembles batch probe dependencies without cha
         events.push(`finish:${routeIds.join(',')}`)
       },
     },
-    successCount: () => 2,
     now: () => '2026-05-26T10:00:00.000Z',
     showPlanNotice: (plan) => {
       events.push(`notice:${plan.notice.message}`)
@@ -239,10 +233,9 @@ test('probeAllGatewayRoutesAction assembles batch probe dependencies without cha
 
   assert.deepEqual(events, [
     'start:41,42',
-    'request:41',
+    'request-batch:41,42',
     'apply:41',
     'finish-route:41:true',
-    'request:42',
     'apply:42',
     'finish-route:42:true',
     'notice:路由探测完成，2 条全部可用。',

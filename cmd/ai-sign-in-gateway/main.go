@@ -248,6 +248,7 @@ func run() error {
 
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
+		go handlers.RunCheckinSchedulerLoop(ctx, &handlers.App{DB: db, Cfg: cfg})
 		go services.RunDatabaseBackupLoop(ctx, cfg.SQLitePath())
 		go services.RunLogCleanupLoop(ctx, cfg.SQLitePath())
 		log.Printf("%s 前端正在监听 %s", appName, frontendURL)
@@ -300,6 +301,7 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	go handlers.RunCheckinSchedulerLoop(ctx, &handlers.App{DB: db, Cfg: cfg})
 	go services.RunDatabaseBackupLoop(ctx, cfg.SQLitePath())
 	go services.RunLogCleanupLoop(ctx, cfg.SQLitePath())
 	go func() {

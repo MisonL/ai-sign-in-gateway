@@ -6,6 +6,7 @@ import {
   ccSwitchFileButtonLabel,
   ccSwitchImportOkText,
   ccSwitchImportPlaceholder,
+  ccSwitchUnavailableMessage,
   filterCCSwitchPreviewRows,
   readCCSwitchPreviewError,
   readCCSwitchPreviewPayload,
@@ -83,4 +84,8 @@ test('formats cc-switch import controls by mode', () => {
   assert.equal(ccSwitchFileButtonLabel('sql'), '选择 SQL 文件')
   assert.equal(ccSwitchImportOkText('json'), '开始替换')
   assert.equal(ccSwitchImportOkText('sql'), '解析并替换')
+})
+
+test('documents cc-switch unavailable state while Go handlers are not registered', () => {
+  assert.equal(ccSwitchUnavailableMessage, 'CC-Switch 导入导出功能尚未接入 Go 后端。')
 })

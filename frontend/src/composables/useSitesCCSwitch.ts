@@ -1,15 +1,10 @@
 import { computed, ref, watch, type Ref } from 'vue'
 import {
-  convertCCSwitchSql,
-  exportCCSwitchConfig,
-  importCCSwitchConfig,
-  importCCSwitchSql,
-} from '../api'
-import {
   buildCCSwitchSectionOptions,
   ccSwitchFileButtonLabel as readCCSwitchFileButtonLabel,
   ccSwitchImportOkText as readCCSwitchImportOkText,
   ccSwitchImportPlaceholder as readCCSwitchImportPlaceholder,
+  ccSwitchUnavailableMessage,
   filterCCSwitchPreviewRows,
   readCCSwitchPreviewError,
   readCCSwitchPreviewPayload,
@@ -45,6 +40,8 @@ export function useSitesCCSwitch(options: UseSitesCCSwitchOptions) {
   const ccSwitchPreviewSearch = ref('')
   const ccSwitchResolvedPayload = ref<Record<string, unknown> | null>(null)
   const ccSwitchResolveError = ref('')
+  const ccSwitchAvailable = false
+  const ccSwitchDisabledReason = ccSwitchUnavailableMessage
 
   const ccSwitchPreviewPayload = computed<Record<string, unknown> | null>(() =>
     readCCSwitchPreviewPayload(ccSwitchImportMode.value, ccSwitchImportText.value, ccSwitchResolvedPayload.value),
@@ -75,6 +72,10 @@ export function useSitesCCSwitch(options: UseSitesCCSwitchOptions) {
   }
 
   function openCCSwitchFilePicker() {
+    if (!ccSwitchAvailable) {
+      options.toast.info(ccSwitchDisabledReason)
+      return
+    }
     options.fileInput.value?.click()
   }
 
@@ -84,6 +85,10 @@ export function useSitesCCSwitch(options: UseSitesCCSwitchOptions) {
   }
 
   function openCCSwitchConfig(tab: 'import' | 'export' = 'import') {
+    if (!ccSwitchAvailable) {
+      options.toast.info(ccSwitchDisabledReason)
+      return
+    }
     ccSwitchConfigTab.value = tab
     ccSwitchConfigOpen.value = true
     if (tab === 'export' && !ccSwitchExportText.value.trim() && !ccSwitchExportLoading.value) {
@@ -92,6 +97,10 @@ export function useSitesCCSwitch(options: UseSitesCCSwitchOptions) {
   }
 
   async function handleCCSwitchFileChange(event: Event) {
+    if (!ccSwitchAvailable) {
+      options.toast.info(ccSwitchDisabledReason)
+      return
+    }
     const input = event.target as HTMLInputElement
     const file = input.files?.[0]
     if (!file) {
@@ -107,6 +116,10 @@ export function useSitesCCSwitch(options: UseSitesCCSwitchOptions) {
   }
 
   async function resolveCCSwitchSqlPreview() {
+    if (!ccSwitchAvailable) {
+      options.toast.info(ccSwitchDisabledReason)
+      return false
+    }
     const sqlText = ccSwitchImportText.value.trim()
     if (!sqlText) {
       resetCCSwitchSqlPreview()
@@ -117,10 +130,9 @@ export function useSitesCCSwitch(options: UseSitesCCSwitchOptions) {
     ccSwitchSqlPreviewLoading.value = true
     ccSwitchResolveError.value = ''
     try {
-      const result = await convertCCSwitchSql(sqlText)
-      ccSwitchResolvedPayload.value = result.payload
-      options.toast.success(`SQL 解析完成：识别 ${result.provider_count} 条供应商。`)
-      return true
+      ccSwitchResolveError.value = ccSwitchDisabledReason
+      options.toast.info(ccSwitchDisabledReason)
+      return false
     } catch (err) {
       resetCCSwitchSqlPreview()
       ccSwitchResolveError.value = err instanceof Error ? err.message : 'SQL 解析失败'
@@ -132,6 +144,10 @@ export function useSitesCCSwitch(options: UseSitesCCSwitchOptions) {
   }
 
   async function submitCCSwitchImport() {
+    if (!ccSwitchAvailable) {
+      options.toast.info(ccSwitchDisabledReason)
+      return
+    }
     let payload: Record<string, unknown> | null = null
     if (ccSwitchImportMode.value === 'json') {
       payload = ccSwitchPreviewPayload.value
@@ -152,20 +168,7 @@ export function useSitesCCSwitch(options: UseSitesCCSwitchOptions) {
 
     ccSwitchImportLoading.value = true
     try {
-      const result = ccSwitchImportMode.value === 'sql'
-        ? await importCCSwitchSql(ccSwitchImportText.value, { sectionKeys: ccSwitchSelectedSections.value })
-        : await importCCSwitchConfig(payload as Record<string, unknown>, { sectionKeys: ccSwitchSelectedSections.value })
-      ccSwitchConfigOpen.value = false
-      await options.loadData(result.imported_site_ids[0] ?? options.selectedId.value)
-      options.scheduleSummaryRefresh()
-      options.toast.success(`导入完成：新增 ${result.created}，更新 ${result.updated}，删除 ${result.deleted}，跳过 ${result.skipped}。`)
-      if (result.messages.length) {
-        options.testFeedback.value = {
-          type: 'success',
-          title: '供应商导入结果',
-          message: result.messages.join('\n'),
-        }
-      }
+      options.toast.info(ccSwitchDisabledReason)
     } catch (err) {
       options.toast.error(err instanceof Error ? err.message : '供应商导入失败')
     } finally {
@@ -189,11 +192,13 @@ export function useSitesCCSwitch(options: UseSitesCCSwitchOptions) {
   }
 
   async function handleCCSwitchExport() {
+    if (!ccSwitchAvailable) {
+      options.toast.info(ccSwitchDisabledReason)
+      return
+    }
     ccSwitchExportLoading.value = true
     try {
-      const result = await exportCCSwitchConfig()
-      ccSwitchExportText.value = JSON.stringify(result.payload, null, 2)
-      options.toast.success(`已生成 ${result.site_count} 条供应商配置。`)
+      options.toast.info(ccSwitchDisabledReason)
     } catch (err) {
       options.toast.error(err instanceof Error ? err.message : '供应商导出失败')
     } finally {
@@ -231,6 +236,8 @@ export function useSitesCCSwitch(options: UseSitesCCSwitchOptions) {
     ccSwitchImportMode,
     ccSwitchImportText,
     ccSwitchExportText,
+    ccSwitchAvailable,
+    ccSwitchDisabledReason,
     ccSwitchSelectedSections,
     ccSwitchPreviewSearch,
     ccSwitchPreviewRows,

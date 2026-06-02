@@ -13,6 +13,8 @@ import { getGatewayOverview, getMe, isAbortError, logout } from './api'
 import { onGatewayOverviewChanged } from './gatewayOverviewEvents'
 import type { AdminUser, GatewayOverview } from './types'
 
+const mobileNavigationQuery = '(max-width: 900px)'
+
 const enabledFeatureKeys = new Set([
   'overview',
   'sites',
@@ -40,6 +42,8 @@ export function useShellLayoutController() {
   let kpiTimer: number | null = null
   let stopGatewayOverviewListener: (() => void) | null = null
   let mounted = false
+  let mobileQuery: MediaQueryList | null = null
+  let stopMobileQueryListener: (() => void) | null = null
   let adminController: AbortController | null = null
   let kpiController: AbortController | null = null
   let kpiLoading = false
@@ -132,6 +136,13 @@ export function useShellLayoutController() {
 
   onMounted(async () => {
     mounted = true
+    mobileQuery = window.matchMedia(mobileNavigationQuery)
+    collapsed.value = mobileQuery.matches
+    const handleMobileQueryChange = (event: MediaQueryListEvent) => {
+      collapsed.value = event.matches
+    }
+    mobileQuery.addEventListener('change', handleMobileQueryChange)
+    stopMobileQueryListener = () => mobileQuery?.removeEventListener('change', handleMobileQueryChange)
     await loadAdmin()
     if (!mounted) return
     await loadGatewayKpi()
@@ -142,6 +153,9 @@ export function useShellLayoutController() {
 
   onBeforeUnmount(() => {
     mounted = false
+    stopMobileQueryListener?.()
+    stopMobileQueryListener = null
+    mobileQuery = null
     stopGatewayOverviewListener?.()
     stopGatewayOverviewListener = null
     adminController?.abort()

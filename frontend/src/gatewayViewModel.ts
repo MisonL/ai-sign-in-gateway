@@ -10,7 +10,15 @@ import {
   routeTypeLabel,
 } from './gatewayRouteDisplayModel.ts'
 import { gatewayRouteStrategyOptions, type GatewayIssueState } from './gatewayViewConfig.ts'
-import type { GatewayLog, GatewayOverview, GatewayRoute, GatewayStrategyStat, GatewayUsage, SiteGroup } from './types.ts'
+import type {
+  GatewayLog,
+  GatewayOverview,
+  GatewayRoute,
+  GatewayRouteGroup,
+  GatewayStrategyStat,
+  GatewayUsage,
+  SiteGroup,
+} from './types.ts'
 import { formatNumber, includesSearch } from './viewUtils.ts'
 
 export { buildRouteActivityFeed } from './gatewayActivityFeedModel.ts'
@@ -114,17 +122,27 @@ export function buildUsageSummaryCards(gatewayUsage: GatewayUsage | null) {
 }
 
 export function buildGatewayGroupOptions(
-  siteGroups: SiteGroup[],
+  routeGroups: GatewayRouteGroup[],
   routes: GatewayRoute[],
   selectedGroups: string[],
-  addUpstreamGroupNames: string[],
 ) {
   const labels = new Set<string>()
-  siteGroups.forEach((group) => labels.add(group.name))
+  routeGroups.forEach((group) => labels.add(group.name))
   routes.forEach((route) => {
     parseGroupNames(route.group_name).forEach((groupName) => labels.add(groupName))
   })
   selectedGroups.forEach((groupName) => labels.add(groupName))
+  return [...labels]
+    .sort((a, b) => a.localeCompare(b, 'zh-CN'))
+    .map((groupName) => ({ label: groupName, value: groupName }))
+}
+
+export function buildSiteGroupOptions(
+  siteGroups: SiteGroup[],
+  addUpstreamGroupNames: string[],
+) {
+  const labels = new Set<string>()
+  siteGroups.forEach((group) => labels.add(group.name))
   addUpstreamGroupNames.forEach((groupName) => labels.add(groupName))
   return [...labels]
     .sort((a, b) => a.localeCompare(b, 'zh-CN'))

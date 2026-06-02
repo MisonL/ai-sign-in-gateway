@@ -17,6 +17,8 @@ defineProps<{
   apiKeyRefreshAllLoading: boolean
   apiKeyRefreshAllLabel: string
   ccSwitchExportLoading: boolean
+  ccSwitchAvailable: boolean
+  ccSwitchDisabledReason: string
 }>()
 
 const emit = defineEmits<{
@@ -80,10 +82,29 @@ const emit = defineEmits<{
         </template>
         {{ apiKeyRefreshAllLabel }}
       </a-button>
-      <a-button class="sites-toolbar__ghost-btn" :loading="ccSwitchExportLoading" @click="emit('export-cc-switch')">
-        导出供应商
-      </a-button>
-      <a-button class="sites-toolbar__ghost-btn" @click="emit('import-cc-switch')">导入供应商</a-button>
+      <a-tooltip :title="ccSwitchAvailable ? '' : ccSwitchDisabledReason">
+        <span>
+          <a-button
+            class="sites-toolbar__ghost-btn"
+            :loading="ccSwitchExportLoading"
+            :disabled="!ccSwitchAvailable"
+            @click="emit('export-cc-switch')"
+          >
+            导出供应商
+          </a-button>
+        </span>
+      </a-tooltip>
+      <a-tooltip :title="ccSwitchAvailable ? '' : ccSwitchDisabledReason">
+        <span>
+          <a-button
+            class="sites-toolbar__ghost-btn"
+            :disabled="!ccSwitchAvailable"
+            @click="emit('import-cc-switch')"
+          >
+            导入供应商
+          </a-button>
+        </span>
+      </a-tooltip>
       <a-button type="primary" class="sites-toolbar__create-btn" @click="emit('create-site')">
         <template #icon>
           <PlusOutlined aria-hidden="true" />

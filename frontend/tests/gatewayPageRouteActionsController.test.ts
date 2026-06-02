@@ -26,6 +26,7 @@ test('gateway page route actions controller owns route operation wiring', async 
   assert.match(routeActionsController, /export function useGatewayPageRouteActions\(/)
   assert.match(routeActionsController, /useGatewayRouteManagementOperationsPageActions\(\{/)
   assert.match(routeActionsController, /routes: state\.routes/)
+  assert.match(routeActionsController, /requestProbeBatch: gatewayPageRequests\.probeGatewayRoutes/)
   assert.match(routeActionsController, /requestProbe: gatewayPageRequests\.probeGatewayRoute/)
   assert.match(routeActionsController, /requestBalance: gatewayPageRequests\.probeGatewayRouteBalance/)
   assert.match(routeActionsController, /refreshRouteSummaries: refreshActions\.refreshRouteSummaries/)

@@ -36,6 +36,7 @@ function site(overrides: Partial<Site>): Site {
 
 function duplicateGroup(overrides: Partial<DuplicateSiteGroup>): DuplicateSiteGroup {
   return {
+    plugin_key: 'yellowpeach-newapi',
     base_url: 'https://example.com',
     account: 'user@example.com',
     password_present: true,
@@ -107,7 +108,7 @@ test('filters duplicate groups and formats table helpers', () => {
   ]
 
   assert.deepEqual(filterDuplicateGroups(groups, 'legacy').map((group) => group.account), ['beta@example.com'])
-  assert.equal(duplicateGroupRowKey(groups[0]), 'https://alpha.example:user@example.com:9')
+  assert.equal(duplicateGroupRowKey(groups[0]), 'yellowpeach-newapi:https://alpha.example:user@example.com:9')
   assert.equal(duplicateSuggestedSiteName(groups[0]), 'Primary')
   assert.equal(duplicateSuggestedSiteName(groups[1]), '-')
 })

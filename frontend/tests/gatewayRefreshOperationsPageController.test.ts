@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises'
 import { ref } from 'vue'
 
 import { useGatewayRefreshOperationsPageActions } from '../src/gatewayRefreshOperationsPageController.ts'
-import type { GatewayRoute, SiteGroup, SiteSummary } from '../src/types.ts'
+import type { GatewayRoute, GatewayRouteGroup, SiteGroup, SiteSummary } from '../src/types.ts'
 
 const gatewayViewPath = new URL('../src/views/GatewayView.vue', import.meta.url)
 const gatewayPageControllerPath = new URL('../src/gatewayPageController.ts', import.meta.url)
@@ -69,10 +69,19 @@ function siteSummary(siteId: number): SiteSummary {
   }
 }
 
+function routeGroup(name: string, id = 1): GatewayRouteGroup {
+  return {
+    id,
+    name,
+    route_count: 1,
+  }
+}
+
 test('useGatewayRefreshOperationsPageActions wires catalog and manual refresh actions', async () => {
   const events: string[] = []
   const routes = ref([route({ id: 11, site_id: 101 })])
   const siteGroups = ref<SiteGroup[]>([])
+  const routeGroups = ref<GatewayRouteGroup[]>([])
 
   const actions = useGatewayRefreshOperationsPageActions({
     routes,
@@ -98,6 +107,11 @@ test('useGatewayRefreshOperationsPageActions wires catalog and manual refresh ac
       events.push('site-groups')
       return [{ name: '生产', count: 1 }]
     },
+    routeGroups,
+    requestRouteGroups: async () => {
+      events.push('route-groups')
+      return [routeGroup('默认路由组')]
+    },
     loadGatewayData: async () => {
       events.push('load')
     },
@@ -114,10 +128,12 @@ test('useGatewayRefreshOperationsPageActions wires catalog and manual refresh ac
   await new Promise<void>((resolve) => setTimeout(resolve, 0))
 
   assert.deepEqual(siteGroups.value, [{ name: '生产', count: 1 }])
+  assert.deepEqual(routeGroups.value.map((item) => item.name), ['默认路由组'])
   assert.deepEqual(events, [
     'summaries:101',
     'routes:1:10',
     'site-groups',
+    'route-groups',
     'load',
     'probe:11:true',
     'summaries:101',

@@ -14,12 +14,16 @@ const gatewayPageRuntimeActionsControllerPath = new URL(
 
 const requestNames = [
   'createSite',
+  'createGatewayRouteGroup',
+  'deleteGatewayRoute',
+  'deleteGatewayRouteGroup',
   'diagnoseGatewayRoute',
   'disableAllGatewayRoutes',
   'enableOnlyGatewayRoute',
   'getGatewayActiveRequests',
   'getGatewayLogs',
   'getGatewayOverview',
+  'getGatewayRouteGroups',
   'getGatewayRouteLogs',
   'getGatewayRoutes',
   'getGatewaySettings',
@@ -33,6 +37,8 @@ const requestNames = [
   'resetGatewayRouteCircuit',
   'syncGatewayRoutes',
   'toggleGatewayRoute',
+  'updateGatewayRouteGroup',
+  'updateGatewayRouteGroups',
   'updateGatewayRouteType',
   'updateGatewaySettings',
 ] as const

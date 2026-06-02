@@ -105,7 +105,21 @@ func (a *App) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) RunSchedulerNow(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "message": "Go 调度器接入中，已收到执行请求。"})
+	settings, err := a.checkinBatchSettings()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	runs, err := a.runCheckinBatch(manualCheckinContext(r.Context()), nil, settings.OnlyEnabledSites, "manual", settings)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	successCount, failedCount := checkinRunStatusCounts(runs)
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":  "ok",
+		"message": fmt.Sprintf("已执行一次签到：成功 %d，失败 %d。", successCount, failedCount),
+	})
 }
 
 func (a *App) OpenRuntimeURL(w http.ResponseWriter, r *http.Request) {

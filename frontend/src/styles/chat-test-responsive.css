@@ -28,7 +28,7 @@
 
 @media (max-width: 900px) {
   .chat-workbench {
-    --control-height: 44px;
+    --control-height: 40px;
 
     grid-template-columns: 1fr;
     height: auto;

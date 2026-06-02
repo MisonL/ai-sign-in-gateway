@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 
 import { useGatewaySiteGroupsPageActions } from '../src/gatewaySiteGroupsPageController.ts'
-import type { SiteGroup } from '../src/types.ts'
+import type { GatewayRouteGroup, SiteGroup } from '../src/types.ts'
 
 const gatewayViewPath = new URL('../src/views/GatewayView.vue', import.meta.url)
 const gatewayPageControllerPath = new URL('../src/gatewayPageController.ts', import.meta.url)
@@ -25,11 +25,23 @@ function group(name: string): SiteGroup {
   }
 }
 
+function routeGroup(name: string, id = 1): GatewayRouteGroup {
+  return {
+    id,
+    name,
+    route_count: 1,
+  }
+}
+
 test('useGatewaySiteGroupsPageActions wires site group refresh to the page ref', async () => {
   const events: string[] = []
   let count = 0
+  let routeGroupCount = 0
   const siteGroups = {
     value: [group('旧分组')],
+  }
+  const routeGroups = {
+    value: [routeGroup('旧路由分组')],
   }
 
   const { handleSiteGroupsChanged } = useGatewaySiteGroupsPageActions({
@@ -39,6 +51,12 @@ test('useGatewaySiteGroupsPageActions wires site group refresh to the page ref',
       events.push(`request:${count}`)
       return [group(`新分组 ${count}`)]
     },
+    routeGroups,
+    requestRouteGroups: async () => {
+      routeGroupCount += 1
+      events.push(`request-route:${routeGroupCount}`)
+      return [routeGroup(`新路由分组 ${routeGroupCount}`, routeGroupCount)]
+    },
   })
 
   await handleSiteGroupsChanged()
@@ -46,9 +64,12 @@ test('useGatewaySiteGroupsPageActions wires site group refresh to the page ref',
 
   assert.deepEqual(events, [
     'request:1',
+    'request-route:1',
     'request:2',
+    'request-route:2',
   ])
   assert.deepEqual(siteGroups.value.map((item) => item.name), ['新分组 2'])
+  assert.deepEqual(routeGroups.value.map((item) => item.name), ['新路由分组 2'])
 })
 
 test('GatewayView delegates site group page wiring to the page controller', async () => {

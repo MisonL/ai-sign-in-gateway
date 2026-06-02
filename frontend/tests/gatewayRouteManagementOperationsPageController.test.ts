@@ -103,7 +103,6 @@ test('useGatewayRouteManagementOperationsPageActions wires route probe and route
     routes,
     overview: ref<GatewayOverview | null>(null),
     probeLoading: ref(false),
-    probeAllProgress: ref(null),
     balanceProbeAllProgress: ref(null),
     balanceProbeManualRoute: ref(null),
     balanceProbeManualURL: ref(''),
@@ -121,6 +120,10 @@ test('useGatewayRouteManagementOperationsPageActions wires route probe and route
       finishBatch: () => undefined,
       trackRoute: () => undefined,
       untrackRoute: () => undefined,
+    },
+    requestProbeBatch: async (routeIds) => {
+      events.push(`probe-batch:${routeIds.join(',')}`)
+      return routeIds.map((routeId) => probeResult(routeId))
     },
     requestProbe: async (routeId) => {
       events.push(`probe:${routeId}`)

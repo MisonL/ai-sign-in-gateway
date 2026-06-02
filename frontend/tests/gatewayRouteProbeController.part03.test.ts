@@ -68,17 +68,16 @@ function route(overrides: Partial<GatewayRoute>): GatewayRoute {
 test('createProbeAllGatewayRoutesAction reads latest batch probe dependencies when invoked', async () => {
   const events: string[] = []
   let routes = [route({ id: 44 })]
-  let successCount = 1
   const action = createProbeAllGatewayRoutesAction({
     getRoutes: () => routes,
-    requestProbe: async (routeId) => {
-      events.push(`request:${routeId}`)
-      return {
+    requestProbeBatch: async (routeIds) => {
+      events.push(`request-batch:${routeIds.join(',')}`)
+      return routeIds.map((routeId) => ({
         id: routeId,
         ok: true,
         latency_ms: routeId,
         message: '',
-      } as GatewayRouteProbeResult
+      } as GatewayRouteProbeResult))
     },
     applyProbeResult: (result) => {
       events.push(`apply:${result.id}`)
@@ -94,7 +93,6 @@ test('createProbeAllGatewayRoutesAction reads latest batch probe dependencies wh
         events.push(`finish:${routeIds.join(',')}`)
       },
     },
-    getSuccessCount: () => successCount,
     now: () => '2026-05-26T10:00:00.000Z',
     showPlanNotice: (plan) => {
       events.push(`notice:${plan.notice.message}`)
@@ -102,15 +100,13 @@ test('createProbeAllGatewayRoutesAction reads latest batch probe dependencies wh
   })
 
   routes = [route({ id: 45 }), route({ id: 46 })]
-  successCount = 2
   await action()
 
   assert.deepEqual(events, [
     'start:45,46',
-    'request:45',
+    'request-batch:45,46',
     'apply:45',
     'finish-route:45:true',
-    'request:46',
     'apply:46',
     'finish-route:46:true',
     'notice:路由探测完成，2 条全部可用。',

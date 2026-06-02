@@ -1,9 +1,6 @@
 import { request, type RequestOptions } from './apiCore'
 import type {
   BalanceProbeResult,
-  CCSwitchExportResult,
-  CCSwitchImportResult,
-  CCSwitchSqlConvertResult,
   CheckinRun,
   CheckinSite,
   DuplicateSiteGroup,
@@ -73,51 +70,6 @@ export function refreshSiteApiKeys(payload: { site_ids?: number[]; only_enabled?
 export function refreshOneSiteApiKeys(id: number): Promise<SiteApiKeyRefreshResult> {
   return request(`/sites/${id}/api-keys/refresh`, {
     method: 'POST',
-  })
-}
-
-export function importCCSwitchConfig(
-  payload: Record<string, unknown>,
-  options: { sectionKeys?: string[] } = {},
-): Promise<CCSwitchImportResult> {
-  return request('/sites/cc-switch/import', {
-    method: 'POST',
-    body: JSON.stringify({
-      payload,
-      section_keys: options.sectionKeys ?? [],
-    }),
-  })
-}
-
-export function convertCCSwitchSql(sqlText: string): Promise<CCSwitchSqlConvertResult> {
-  return request('/sites/cc-switch/sql/convert', {
-    method: 'POST',
-    body: JSON.stringify({
-      sql_text: sqlText,
-    }),
-  })
-}
-
-export function importCCSwitchSql(
-  sqlText: string,
-  options: { sectionKeys?: string[] } = {},
-): Promise<CCSwitchImportResult> {
-  return request('/sites/cc-switch/sql/import', {
-    method: 'POST',
-    body: JSON.stringify({
-      sql_text: sqlText,
-      section_keys: options.sectionKeys ?? [],
-    }),
-  })
-}
-
-export function exportCCSwitchConfig(options: { site_ids?: number[]; only_enabled?: boolean } = {}): Promise<CCSwitchExportResult> {
-  return request('/sites/cc-switch/export', {
-    method: 'POST',
-    body: JSON.stringify({
-      site_ids: options.site_ids ?? [],
-      only_enabled: options.only_enabled ?? false,
-    }),
   })
 }
 

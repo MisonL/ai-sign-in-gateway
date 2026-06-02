@@ -4,6 +4,7 @@ import {
   deleteSite,
   probeSiteBalance,
   testSite,
+  testSiteDraft,
   toggleSite,
   updateSite,
 } from '../api'
@@ -136,7 +137,10 @@ export function useSitesEditorActions(options: UseSitesEditorActionsOptions) {
   }
 
   async function handleDrawerSiteTest(activeSite: Site) {
-    const result = await testSite(activeSite.id)
+    const result = await testSiteDraft({
+      ...editorPayload(),
+      site_id: activeSite.id,
+    })
     Object.assign(options.editor, mergeSiteHealthEditorPayload(options.editor, result))
     const balanceText = formatBalance(result.balance, result.balance_unit)
     const packageText = result.package_display ? `\n当前套餐：${result.package_display}` : ''
@@ -145,12 +149,8 @@ export function useSitesEditorActions(options: UseSitesEditorActionsOptions) {
       title: result.logged_in ? '站内授权测试成功' : '站内授权测试失败',
       message: `${result.message}${balanceText ? `\n当前余额：${balanceText}` : ''}${packageText}${result.account_name ? `\n当前账号：${result.account_name}` : ''}`,
     }
-    const finalSaved = await updateSite(activeSite.id, editorPayload())
-    upsertSite(finalSaved)
-    options.assignEditor(finalSaved)
     options.lastSavedEditorSnapshot.value = JSON.stringify(options.editor)
-    options.saveFeedback.value = result.logged_in ? '测试通过，最新站点信息已自动保存。' : '测试完成，当前表单和回填信息已保存。'
-    await options.reloadDataWithCheckinExtras(finalSaved.id, { preserveEditor: true })
+    options.saveFeedback.value = result.logged_in ? '草稿测试通过，回填信息已写入当前表单。' : '草稿测试完成，回填信息已写入当前表单。'
     if (!result.logged_in) {
       options.toast.error(result.message)
       return
@@ -182,15 +182,7 @@ export function useSitesEditorActions(options: UseSitesEditorActionsOptions) {
     let activeSite = targetSite
     const drawerTest = options.drawerOpen.value && options.editingId.value === targetSite.id
     try {
-      if (drawerTest) {
-        await options.ensureStorageAnalysisFinished()
-        const saved = await persistEditor({ keepDrawerOpen: true, showToast: false })
-        if (!saved) {
-          return
-        }
-        activeSite = saved
-        options.saveFeedback.value = '测试前已保存当前表单。'
-      }
+      if (drawerTest) await options.ensureStorageAnalysisFinished()
 
       const relayOnlyTarget =
         options.isRelayOnlySitePayload(activeSite) || (drawerTest && options.isRelayOnlyEditor.value)

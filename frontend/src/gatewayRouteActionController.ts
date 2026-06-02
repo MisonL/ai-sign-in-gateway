@@ -14,6 +14,10 @@ import {
   toggleGatewayRouteEnabled,
   type ToggleGatewayRouteEnabledOptions,
 } from './gatewayRouteToggleController.ts'
+import {
+  deleteGatewayRouteAction as deleteGatewayRouteWithConfirmation,
+  type DeleteGatewayRouteOptions,
+} from './gatewayRouteGroupsController.ts'
 import type { GatewayRoute } from './types.ts'
 
 const DISABLE_ALL_ROUTES_CONFIRM_MESSAGE = '确认禁用全部路由？禁用后网关将没有可用路由，直到重新启用。'
@@ -26,8 +30,10 @@ type GatewayRouteConfirmWindow = {
 
 export type ToggleGatewayRouteActionOptions = ToggleGatewayRouteEnabledOptions
 export type ResetGatewayRouteCircuitActionOptions = ResetGatewayRouteCircuitStateOptions
+export type DeleteGatewayRouteActionOptions = DeleteGatewayRouteOptions
 export type ToggleGatewayRouteRuntimeActionOptions = Omit<ToggleGatewayRouteActionOptions, 'route'>
 export type ResetGatewayRouteCircuitRuntimeActionOptions = Omit<ResetGatewayRouteCircuitActionOptions, 'route'>
+export type DeleteGatewayRouteRuntimeActionOptions = Omit<DeleteGatewayRouteActionOptions, 'route'>
 
 export type ConfirmGatewayRouteActionOptions = {
   confirmWindow: GatewayRouteConfirmWindow
@@ -84,6 +90,14 @@ export function createResetGatewayRouteCircuitAction(options: ResetGatewayRouteC
     })
 }
 
+export function createDeleteGatewayRouteAction(options: DeleteGatewayRouteRuntimeActionOptions) {
+  return (route: GatewayRoute) =>
+    deleteGatewayRouteAction({
+      ...options,
+      route,
+    })
+}
+
 export async function toggleGatewayRouteAction(options: ToggleGatewayRouteActionOptions) {
   await toggleGatewayRouteEnabled(options)
 }
@@ -111,4 +125,8 @@ export async function enableOnlyGatewayRouteAction({
 
 export async function resetGatewayRouteCircuitAction(options: ResetGatewayRouteCircuitActionOptions) {
   await resetGatewayRouteCircuitState(options)
+}
+
+export async function deleteGatewayRouteAction(options: DeleteGatewayRouteActionOptions) {
+  await deleteGatewayRouteWithConfirmation(options)
 }

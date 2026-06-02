@@ -11,6 +11,7 @@ import type {
   GatewayLog,
   GatewayOverview,
   GatewayRoute,
+  GatewayRouteGroup,
 } from './types.ts'
 
 export type AbortControllerLike = {
@@ -53,6 +54,7 @@ export type GatewayRealtimePageOptions<
   overview: Ref<GatewayOverview | null>
   routes: Ref<GatewayRoute[]>
   priorityRoutes: Ref<GatewayRoute[]>
+  routeGroups: Ref<GatewayRouteGroup[]>
   logs: Ref<GatewayLog[]>
   logsDrawer: {
     open: Ref<boolean>
@@ -63,7 +65,7 @@ export type GatewayRealtimePageOptions<
     open: Ref<boolean>
   }
   loadActiveRequests: (options: Parameters<typeof createLoadGatewayActiveRequestsRuntimeAction<GatewayActiveRequest, TController>>[0] extends { loadActiveRequests: (options: infer TOptions) => Promise<void> } ? TOptions : never) => Promise<void>
-  refreshRealtimeData: (options: Parameters<Parameters<typeof createRefreshGatewayRealtimeDataRuntimeAction<GatewayOverview, GatewayRoute, GatewayRoute, GatewayLog, TController>>[0]['refreshRealtimeData']>[0]) => Promise<void>
+  refreshRealtimeData: (options: Parameters<Parameters<typeof createRefreshGatewayRealtimeDataRuntimeAction<GatewayOverview, GatewayRoute, GatewayRoute, GatewayLog, GatewayRouteGroup, TController>>[0]['refreshRealtimeData']>[0]) => Promise<void>
   buildActiveRequestsRefreshPlan: (options: {
     now: number
     visible: boolean
@@ -88,6 +90,7 @@ export type GatewayRealtimePageOptions<
   requestOverview: (options: { signal: TController['signal'] }) => Promise<GatewayOverview>
   requestRoutes: (options: { includeDisabled: boolean; signal: TController['signal'] }) => Promise<GatewayRoute[]>
   requestLogs: (limit: number, options: { signal: TController['signal'] }) => Promise<GatewayLog[]>
+  requestRouteGroups: (options: { signal: TController['signal'] }) => Promise<GatewayRouteGroup[]>
   normalizeRoute: (route: GatewayRoute) => GatewayRoute
   now: () => number
   isVisible: () => boolean
@@ -101,6 +104,7 @@ export function useGatewayRealtimePageActions<TController extends AbortControlle
   overview,
   routes,
   priorityRoutes,
+  routeGroups,
   logs,
   logsDrawer,
   includeDisabled,
@@ -121,6 +125,7 @@ export function useGatewayRealtimePageActions<TController extends AbortControlle
   requestOverview,
   requestRoutes,
   requestLogs,
+  requestRouteGroups,
   normalizeRoute,
   now,
   isVisible,
@@ -153,6 +158,7 @@ export function useGatewayRealtimePageActions<TController extends AbortControlle
     GatewayRoute,
     GatewayRoute,
     GatewayLog,
+    GatewayRouteGroup,
     TController
   >({
     refreshRealtimeData: refreshRealtimeDataRuntime,
@@ -169,6 +175,7 @@ export function useGatewayRealtimePageActions<TController extends AbortControlle
     requestOverview,
     requestRoutes,
     requestLogs,
+    requestRouteGroups,
     currentLogs: () => logs.value,
     normalizeRoute,
     setOverview: (overviewData) => {
@@ -181,6 +188,9 @@ export function useGatewayRealtimePageActions<TController extends AbortControlle
       priorityRoutes.value = normalizedRoutes
     },
     setLogs: (logData) => logsDrawer.setLogs(logData),
+    setRouteGroups: (groups) => {
+      routeGroups.value = groups
+    },
     refreshActiveRequests,
     isAbortError,
   })

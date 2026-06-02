@@ -1,7 +1,7 @@
 @media (max-width: 720px) {
   .gateway-route-page.gateway-route-page,
   .gateway-monitor-page.gateway-monitor-page {
-    --control-height: 44px;
+    --control-height: 40px;
   }
 
   .gateway-route-page .page-stack {

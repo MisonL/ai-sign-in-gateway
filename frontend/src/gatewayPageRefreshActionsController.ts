@@ -29,6 +29,8 @@ export function useGatewayPageRefreshActions({
     showPlanNotice,
     siteGroups: state.siteGroups,
     requestSiteGroups: gatewayPageRequests.getSiteGroups,
+    routeGroups: state.routeGroups,
+    requestRouteGroups: gatewayPageRequests.getGatewayRouteGroups,
     loadGatewayData: () => runtimeActions.loadData(),
     probeRouteBalances: (routeIds, options) => getRouteActions().probeRouteBalances(routeIds, options),
   })

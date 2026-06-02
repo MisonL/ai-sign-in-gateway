@@ -51,6 +51,7 @@ export function filterDuplicateGroups(groups: readonly DuplicateSiteGroup[], key
     includesSearch(
       [
         group.base_url,
+        group.plugin_key,
         group.account,
         group.sites.map((site) => site.name).join(' '),
         group.sites.map((site) => site.plugin_key).join(' '),
@@ -62,7 +63,7 @@ export function filterDuplicateGroups(groups: readonly DuplicateSiteGroup[], key
 }
 
 export function duplicateGroupRowKey(group: DuplicateSiteGroup): string {
-  return `${group.base_url}:${group.account}:${group.suggested_keep_id}`
+  return `${group.plugin_key}:${group.base_url}:${group.account}:${group.suggested_keep_id}`
 }
 
 export function duplicateSuggestedSiteName(group: DuplicateSiteGroup): string {
