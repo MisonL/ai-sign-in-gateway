@@ -17,7 +17,7 @@ type GatewayBalanceProbeResult = {
 }
 
 export type SyncGatewayRoutesWithBalancesOptions = {
-  routes: GatewayRoute[]
+  getRoutes: () => GatewayRoute[]
   requestSync: () => Promise<GatewaySyncResult>
   reloadGatewayData: () => Promise<void>
   probeRouteBalances: (routeIds: number[], options: { silent: true }) => Promise<GatewayBalanceProbeResult>
@@ -25,32 +25,14 @@ export type SyncGatewayRoutesWithBalancesOptions = {
   showPlanNotice: (plan: GatewaySyncNoticePlan) => void
 }
 
-export type SyncGatewayRoutesWithBalancesActionOptions =
-  Omit<SyncGatewayRoutesWithBalancesOptions, 'routes'> & {
-    getRoutes: () => GatewayRoute[]
-  }
+export type SyncGatewayRoutesWithBalancesActionOptions = SyncGatewayRoutesWithBalancesOptions
 
-export function createSyncGatewayRoutesWithBalancesAction({
-  getRoutes,
-  requestSync,
-  reloadGatewayData,
-  probeRouteBalances,
-  setLoading,
-  showPlanNotice,
-}: SyncGatewayRoutesWithBalancesActionOptions) {
-  return () =>
-    syncGatewayRoutesWithBalances({
-      routes: getRoutes(),
-      requestSync,
-      reloadGatewayData,
-      probeRouteBalances,
-      setLoading,
-      showPlanNotice,
-    })
+export function createSyncGatewayRoutesWithBalancesAction(options: SyncGatewayRoutesWithBalancesActionOptions) {
+  return () => syncGatewayRoutesWithBalances(options)
 }
 
 export async function syncGatewayRoutesWithBalances({
-  routes,
+  getRoutes,
   requestSync,
   reloadGatewayData,
   probeRouteBalances,
@@ -61,6 +43,7 @@ export async function syncGatewayRoutesWithBalances({
   try {
     const result = await requestSync()
     await reloadGatewayData()
+    const routes = getRoutes()
     const balances = await probeRouteBalances(routes.map((route) => route.id), { silent: true })
     showPlanNotice(buildGatewaySyncSuccessPlan({
       routeCount: result.route_count,

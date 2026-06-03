@@ -187,6 +187,8 @@ export function useGatewayRuntimeState() {
   const usageLoading = ref(false)
   const autoRefreshing = ref(false)
   const activeRequestsRefreshing = ref(false)
+  const lastAutoRefreshError = ref<string | null>(null)
+  const lastAutoRefreshErrorAt = ref<number | null>(null)
   let lastAutoRefreshAt = 0
   let lastActiveRequestRefreshAt = 0
 
@@ -230,17 +232,25 @@ export function useGatewayRuntimeState() {
     activeRequestsRefreshing.value = false
   }
 
+  function setAutoRefreshError(message: string | null, occurredAt: number | null) {
+    lastAutoRefreshError.value = message
+    lastAutoRefreshErrorAt.value = message ? occurredAt : null
+  }
+
   return {
     loading,
     usageLoading,
     autoRefreshing,
     activeRequestsRefreshing,
+    lastAutoRefreshError,
+    lastAutoRefreshErrorAt,
     setLoading,
     setUsageLoading,
     startAutoRefresh,
     finishAutoRefresh,
     startActiveRequestsRefresh,
     finishActiveRequestsRefresh,
+    setAutoRefreshError,
   }
 }
 

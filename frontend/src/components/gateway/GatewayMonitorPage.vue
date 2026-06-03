@@ -41,6 +41,7 @@ defineProps<{
   maskedApiKey: string
   hasApiKey: boolean
   loading: boolean
+  autoRefreshError: string | null
   metricCards: GatewayMetricCard[]
   usageRange: GatewayUsageRange
   usageSummaryCards: GatewayUsageSummaryCard[]
@@ -91,6 +92,14 @@ const emit = defineEmits<{
     @refresh="emit('refresh')"
     @open-settings="emit('open-settings')"
     @open-logs="emit('open-logs')"
+  />
+
+  <a-alert
+    v-if="autoRefreshError"
+    class="gateway-auto-refresh-alert"
+    type="warning"
+    show-icon
+    :message="autoRefreshError"
   />
 
   <GatewayMonitorDashboard

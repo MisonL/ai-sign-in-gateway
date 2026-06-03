@@ -44,6 +44,7 @@ type RefreshGatewayRealtimeDataOptions<
   setPriorityRoutes: (routes: TOutputRoute[]) => void
   setLogs: (logs: TLog[]) => void
   setRouteGroups: (groups: TRouteGroup[]) => void
+  setAutoRefreshError: (message: string | null, occurredAt: number | null) => void
   refreshActiveRequests: (silent: true) => Promise<void>
   isAbortError: (error: unknown) => boolean
 }
@@ -99,6 +100,7 @@ export function createRefreshGatewayRealtimeDataRuntimeAction<
   setPriorityRoutes,
   setLogs,
   setRouteGroups,
+  setAutoRefreshError,
   refreshActiveRequests,
   isAbortError,
 }: CreateRefreshGatewayRealtimeDataRuntimeActionOptions<TOverview, TInputRoute, TOutputRoute, TLog, TRouteGroup, TController>) {
@@ -125,6 +127,7 @@ export function createRefreshGatewayRealtimeDataRuntimeAction<
       setPriorityRoutes,
       setLogs,
       setRouteGroups,
+      setAutoRefreshError,
       refreshActiveRequests,
       isAbortError,
     })

@@ -18,6 +18,7 @@ test('gateway monitor page declares the toolbar and dashboard composition contra
   assert.match(source, /codexTooltip: string/)
   assert.match(source, /maskedApiKey: string/)
   assert.match(source, /hasApiKey: boolean/)
+  assert.match(source, /autoRefreshError: string \| null/)
   assert.match(source, /metricCards: GatewayMetricCard\[\]/)
   assert.match(source, /usageRange: GatewayUsageRange/)
   assert.match(source, /routeActivityFeed: GatewayActivityFeedItem\[\]/)
@@ -28,6 +29,7 @@ test('gateway monitor page declares the toolbar and dashboard composition contra
   assert.match(source, /event: 'update:start'/)
   assert.match(source, /event: 'copy-activity-url'/)
   assert.match(source, /<GatewayMonitorToolbar/)
+  assert.match(source, /class="gateway-auto-refresh-alert"/)
   assert.match(source, /<GatewayMonitorDashboard/)
 })
 

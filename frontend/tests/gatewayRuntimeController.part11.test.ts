@@ -135,6 +135,9 @@ test('refreshes realtime gateway data through injected runtime dependencies', as
       state.routeGroups = groups
       calls.push('set-route-groups')
     },
+    setAutoRefreshError: (message, occurredAt) => {
+      calls.push(`set-refresh-error:${message ?? ''}:${occurredAt ?? ''}`)
+    },
     refreshActiveRequests: async (silent) => {
       assert.equal(silent, true)
       calls.push('refresh-active')
@@ -153,6 +156,7 @@ test('refreshes realtime gateway data through injected runtime dependencies', as
     'set-priority-routes',
     'set-logs',
     'set-route-groups',
+    'set-refresh-error::',
     'refresh-active',
     'clear',
     'finish',
@@ -207,6 +211,7 @@ test('refreshGatewayRealtimeData skips requests when runtime throttling rejects 
     setPriorityRoutes: () => {},
     setLogs: () => {},
     setRouteGroups: () => {},
+    setAutoRefreshError: () => {},
     refreshActiveRequests: async () => {},
     isAbortError: () => false,
   })
@@ -249,6 +254,9 @@ test('refreshGatewayRealtimeData preserves stale, mounted-out, and priority-edit
     },
     setRouteGroups: () => {
       calls.push('set-route-groups')
+    },
+    setAutoRefreshError: (message: string | null, occurredAt: number | null) => {
+      calls.push(`set-refresh-error:${message ?? ''}:${occurredAt ?? ''}`)
     },
     refreshActiveRequests: async () => {
       calls.push('refresh-active')
@@ -296,6 +304,73 @@ test('refreshGatewayRealtimeData preserves stale, mounted-out, and priority-edit
     'set-routes',
     'set-logs',
     'set-route-groups',
+    'set-refresh-error::',
+    'finish',
+  ])
+})
+
+test('refreshGatewayRealtimeData records non-abort refresh failures without notifying', async () => {
+  const controller = new AbortController()
+  const calls: string[] = []
+
+  await refreshGatewayRealtimeData({
+    now: 9876,
+    visible: true,
+    isMonitor: true,
+    logsDrawerOpen: false,
+    includeDisabled: false,
+    mounted: () => true,
+    priorityDialogOpen: () => false,
+    startAutoRefresh: () => {
+      calls.push('start')
+      return true
+    },
+    finishAutoRefresh: () => {
+      calls.push('finish')
+    },
+    controllerSlot: {
+      replace: () => controller,
+      clearIfCurrent: () => {
+        calls.push('clear')
+        return true
+      },
+    },
+    requestOverview: async () => {
+      throw new Error('overview failed')
+    },
+    requestRoutes: async () => ['route'],
+    requestLogs: async () => ['log'],
+    requestRouteGroups: async () => ['group'],
+    currentLogs: () => [],
+    normalizeRoute: (route: string) => route,
+    setOverview: () => {
+      calls.push('set-overview')
+    },
+    setRoutes: () => {
+      calls.push('set-routes')
+    },
+    setPriorityRoutes: () => {
+      calls.push('set-priority-routes')
+    },
+    setLogs: () => {
+      calls.push('set-logs')
+    },
+    setRouteGroups: () => {
+      calls.push('set-route-groups')
+    },
+    setAutoRefreshError: (message, occurredAt) => {
+      calls.push(`set-refresh-error:${message}:${occurredAt}`)
+    },
+    refreshActiveRequests: async () => {
+      calls.push('refresh-active')
+    },
+    isAbortError: () => false,
+  })
+
+  assert.deepEqual(calls, [
+    'start',
+    'set-refresh-error:overview failed:9876',
+    'clear',
     'finish',
   ])
 })

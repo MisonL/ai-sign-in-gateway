@@ -87,6 +87,7 @@ type RefreshGatewayRealtimeDataOptions<
   setPriorityRoutes: (routes: TOutputRoute[]) => void
   setLogs: (logs: TLog[]) => void
   setRouteGroups: (groups: TRouteGroup[]) => void
+  setAutoRefreshError: (message: string | null, occurredAt: number | null) => void
   refreshActiveRequests: (silent: true) => Promise<void>
   isAbortError: (error: unknown) => boolean
 }
@@ -243,6 +244,7 @@ export async function refreshGatewayRealtimeData<
   setPriorityRoutes,
   setLogs,
   setRouteGroups,
+  setAutoRefreshError,
   refreshActiveRequests,
   isAbortError,
 }: RefreshGatewayRealtimeDataOptions<TOverview, TInputRoute, TOutputRoute, TLog, TRouteGroup, TController>) {
@@ -291,12 +293,14 @@ export async function refreshGatewayRealtimeData<
     if (routeGroupResult.ok) {
       setRouteGroups(routeGroupResult.groups)
     }
+    setAutoRefreshError(null, null)
     if (applyPlan.refreshActiveRequests) {
       await refreshActiveRequests(true)
     }
   } catch (err) {
     if (!isAbortError(err)) {
-      // 自动刷新静默失败，避免请求波动时持续打扰。
+      const message = err instanceof Error ? err.message : '网关自动刷新失败'
+      setAutoRefreshError(message, now)
     }
   } finally {
     controllerSlot.clearIfCurrent(controller)

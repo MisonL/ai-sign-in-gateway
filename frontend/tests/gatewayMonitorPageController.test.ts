@@ -23,6 +23,7 @@ test('useGatewayMonitorPageBindings maps monitor props and events from page stat
   const codexGatewayTooltip = ref('Codex tooltip')
   const maskedGatewayApiKey = ref('sk-...test')
   const loading = ref(true)
+  const autoRefreshError = ref<string | null>('自动刷新失败：network failed')
   const metricCards = ref([{ title: '总额度', value: '$1', tone: 'primary' }])
   const usageSummaryCards = ref([{ title: '请求', value: '1', tone: 'info' }])
   const gatewayUsage = ref({ request_count: 1 })
@@ -47,6 +48,7 @@ test('useGatewayMonitorPageBindings maps monitor props and events from page stat
     maskedGatewayApiKey,
     settingsForm,
     loading,
+    autoRefreshError,
     metricCards,
     usageRange,
     usageSummaryCards,
@@ -80,6 +82,7 @@ test('useGatewayMonitorPageBindings maps monitor props and events from page stat
   assert.equal(monitorPageProps.value.maskedApiKey, 'sk-...test')
   assert.equal(monitorPageProps.value.hasApiKey, true)
   assert.equal(monitorPageProps.value.loading, true)
+  assert.equal(monitorPageProps.value.autoRefreshError, '自动刷新失败：network failed')
   assert.deepEqual(monitorPageProps.value.metricCards, metricCards.value)
   assert.equal(monitorPageProps.value.usageRange, usageRange)
   assert.deepEqual(monitorPageProps.value.usageSummaryCards, usageSummaryCards.value)
@@ -103,11 +106,13 @@ test('useGatewayMonitorPageBindings maps monitor props and events from page stat
   settingsForm.gateway_api_key = ''
   activeRequests.value = [{ id: 'active-1' }]
   loading.value = false
+  autoRefreshError.value = null
 
   assert.equal(monitorPageProps.value.requestUrl, 'http://127.0.0.1:8972/api/gateway-next')
   assert.equal(monitorPageProps.value.hasApiKey, false)
   assert.equal(monitorPageProps.value.activeRequestCount, 1)
   assert.equal(monitorPageProps.value.loading, false)
+  assert.equal(monitorPageProps.value.autoRefreshError, null)
 
   monitorPageHandlers['copy-request-url']()
   monitorPageHandlers['copy-api-key']()

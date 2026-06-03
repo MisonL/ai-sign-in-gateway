@@ -84,4 +84,5 @@ test('validates batch registration email patterns and exposes console collector'
   assert.equal(isValidEmailPattern('plain@example.com'), false)
   assert.equal(consoleCollectorScript.includes('localStorage'), true)
   assert.equal(consoleCollectorScript.includes('tokenPayloads'), true)
+  assert.equal(consoleCollectorScript.includes('console.log'), false)
 })

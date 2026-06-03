@@ -76,6 +76,7 @@ export type GatewayRealtimePageOptions<
   finishActiveRequestsRefresh: () => void
   startAutoRefresh: (options: { now: number; visible: boolean }) => boolean
   finishAutoRefresh: () => void
+  setAutoRefreshError: (message: string | null, occurredAt: number | null) => void
   handleVisibilityRefresh: (options: {
     visible: boolean
     isMonitor: boolean
@@ -116,6 +117,7 @@ export function useGatewayRealtimePageActions<TController extends AbortControlle
   finishActiveRequestsRefresh,
   startAutoRefresh,
   finishAutoRefresh,
+  setAutoRefreshError,
   handleVisibilityRefresh,
   mounted,
   activeRequestsControllerSlot,
@@ -191,6 +193,7 @@ export function useGatewayRealtimePageActions<TController extends AbortControlle
     setRouteGroups: (groups) => {
       routeGroups.value = groups
     },
+    setAutoRefreshError,
     refreshActiveRequests,
     isAbortError,
   })

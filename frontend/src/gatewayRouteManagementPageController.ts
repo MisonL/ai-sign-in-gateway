@@ -35,6 +35,7 @@ export type GatewayRouteManagementPageBindingOptions<TRouteColumns> = {
   maskedGatewayApiKey: ReadonlyRef<string>
   settingsForm: GatewaySettingsFormLike
   loading: ReadonlyRef<boolean>
+  autoRefreshError: ReadonlyRef<string | null>
   probeLoading: ReadonlyRef<boolean>
   balanceProbeAllLoading: ReadonlyRef<boolean>
   probeAllProgress: ReadonlyRef<RouteBatchProgress | null>
@@ -107,6 +108,7 @@ export function useGatewayRouteManagementPageBindings<TRouteColumns>({
   maskedGatewayApiKey,
   settingsForm,
   loading,
+  autoRefreshError,
   probeLoading,
   balanceProbeAllLoading,
   probeAllProgress,
@@ -178,6 +180,7 @@ export function useGatewayRouteManagementPageBindings<TRouteColumns>({
     maskedApiKey: maskedGatewayApiKey.value,
     hasApiKey: Boolean(settingsForm.gateway_api_key),
     loading: loading.value,
+    autoRefreshError: autoRefreshError.value,
     probeLoading: probeLoading.value,
     balanceProbeAllLoading: balanceProbeAllLoading.value,
     probeAllProgress: probeAllProgress.value,

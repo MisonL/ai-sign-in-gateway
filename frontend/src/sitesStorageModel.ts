@@ -74,7 +74,6 @@ export const consoleCollectorScript = `(() => {
       navigator.clipboard.writeText(text)
     }
   } catch {}
-  console.log(text)
   return text
 })()`
 

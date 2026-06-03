@@ -22,15 +22,6 @@ type BackendRoute = {
   path: string
 }
 
-const frontendApiFiles = [
-  'frontend/src/apiAuth.ts',
-  'frontend/src/apiGateway.ts',
-  'frontend/src/apiOverview.ts',
-  'frontend/src/apiSettings.ts',
-  'frontend/src/apiSites.ts',
-  'frontend/src/apiTools.ts',
-]
-
 const backendModuleRoutes = [
   { file: 'internal/handlers/auth.go', prefix: '/auth/admin-users' },
   { file: 'internal/handlers/sites.go', prefix: '/sites' },
@@ -55,6 +46,14 @@ const allowedBackendOnlyRoutes = new Set([
 
 function repoPath(path: string): string {
   return join(repoRoot, path)
+}
+
+function frontendApiFiles(): string[] {
+  const srcDir = repoPath('frontend/src')
+  return readdirSync(srcDir)
+    .filter((entry) => entry.startsWith('api') && entry.endsWith('.ts') && entry !== 'apiCore.ts')
+    .map((entry) => `frontend/src/${entry}`)
+    .sort()
 }
 
 function lineNumber(source: string, index: number): number {
@@ -167,7 +166,7 @@ function combinePaths(prefix: string, child: string): string {
 async function frontendRequests(): Promise<FrontendRequest[]> {
   const requests: FrontendRequest[] = []
   const callPattern = /\b(request(?:Form|Download)?)(?:<[^>]+>)?\s*\(/g
-  for (const file of frontendApiFiles) {
+  for (const file of frontendApiFiles()) {
     const source = await readFile(repoPath(file), 'utf8')
     let match: RegExpExecArray | null
     while ((match = callPattern.exec(source))) {
@@ -321,4 +320,25 @@ test('route group update keeps existing API key unless the caller changes it', a
   assert.doesNotMatch(updateSource, /api_key:\s*payload\.api_key\s*\?\?\s*''/)
   assert.match(updateSource, /\.\.\.\(payload\.api_key !== undefined \? \{ api_key: payload\.api_key \} : \{\}\)/)
   assert.match(updateSource, /\.\.\.\(payload\.clear_api_key \? \{ clear_api_key: true \} : \{\}\)/)
+})
+
+test('route group create omits blank API key payloads', async () => {
+  const source = await readFile(repoPath('frontend/src/apiGateway.ts'), 'utf8')
+  const createSource = source.slice(
+    source.indexOf('export function createGatewayRouteGroup'),
+    source.indexOf('export function updateGatewayRouteGroup'),
+  )
+
+  assert.match(createSource, /const apiKey = payload\.api_key\?\.trim\(\)/)
+  assert.doesNotMatch(createSource, /api_key:\s*payload\.api_key\s*\?\?\s*''/)
+  assert.match(createSource, /\.\.\.\(apiKey \? \{ api_key: apiKey \} : \{\}\)/)
+})
+
+test('priority reorder payload type requires move index', async () => {
+  const source = await readFile(repoPath('frontend/src/apiGateway.ts'), 'utf8')
+
+  assert.match(source, /export type GatewayRoutePriorityReorderPayload\s*=/)
+  assert.match(source, /\|\s*\{\s*route_id:\s*number;\s*mode:\s*'move';\s*index:\s*number\s*\}/)
+  assert.match(source, /\|\s*\{\s*mode:\s*'package'\s*\|\s*'balance';\s*route_id\?:\s*number;\s*index\?:\s*never\s*\}/)
+  assert.doesNotMatch(source, /mode:\s*'move'\s*\|\s*'package'\s*\|\s*'balance'[\s\S]{0,80}index\?:\s*number/)
 })

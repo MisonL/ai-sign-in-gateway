@@ -37,6 +37,7 @@ export function useGatewayPageShellBindings({
     ...accessState,
     settingsForm: state.settingsDialog.form,
     loading: state.loading,
+    autoRefreshError: state.gatewayRuntime.lastAutoRefreshError,
     metricCards: displayState.metricCards,
     usageRange: state.usageRange,
     usageSummaryCards: displayState.usageSummaryCards,

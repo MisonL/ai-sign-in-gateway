@@ -123,10 +123,6 @@ export function useChatTestController() {
       return
     }
     const requestMode: ChatMode = model.mode === 'image' ? 'image' : 'chat'
-    if (requestMode !== 'image' && imageControls.referenceImages.value.length) {
-      toast.error('当前模型不支持图片输入，请移除参考图或切换到图片生成模型。')
-      return
-    }
     const refs = imageControls.referenceImages.value.map((item) => ({ ...item }))
     const sessionID = await createOrReportSession(content || '图片会话')
     if (!sessionID) return

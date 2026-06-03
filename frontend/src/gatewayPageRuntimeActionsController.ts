@@ -77,6 +77,7 @@ export function useGatewayPageRuntimeActions({
     finishActiveRequestsRefresh: state.gatewayRuntime.finishActiveRequestsRefresh,
     startAutoRefreshRuntime: state.gatewayRuntime.startAutoRefresh,
     finishAutoRefresh: state.gatewayRuntime.finishAutoRefresh,
+    setAutoRefreshError: state.gatewayRuntime.setAutoRefreshError,
     handleVisibilityRefresh: state.gatewayRuntime.handleVisibilityRefresh,
     activeRequestsControllerSlot: state.gatewayRuntime.activeRequestsControllerSlot,
     autoRefreshControllerSlot: state.gatewayRuntime.autoRefreshControllerSlot,

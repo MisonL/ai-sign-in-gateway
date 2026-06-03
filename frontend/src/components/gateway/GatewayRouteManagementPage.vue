@@ -30,6 +30,7 @@ defineProps<{
   maskedApiKey: string
   hasApiKey: boolean
   loading: boolean
+  autoRefreshError: string | null
   probeLoading: boolean
   balanceProbeAllLoading: boolean
   probeAllProgress: RouteBatchProgress | null
@@ -120,6 +121,14 @@ const emit = defineEmits<{
     @manage-groups="emit('manage-groups')"
     @add-upstream="emit('add-upstream')"
     @open-settings="emit('open-settings')"
+  />
+
+  <a-alert
+    v-if="autoRefreshError"
+    class="gateway-auto-refresh-alert"
+    type="warning"
+    show-icon
+    :message="autoRefreshError"
   />
 
   <div class="gateway-fill">

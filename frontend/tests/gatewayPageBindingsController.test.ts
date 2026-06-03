@@ -45,6 +45,7 @@ test('useGatewayPageBindings composes monitor, route management, and overlay bin
     maskedGatewayApiKey: ref('sk-...test'),
     settingsForm,
     loading: ref(false),
+    autoRefreshError: ref('自动刷新失败：network failed'),
     metricCards: ref([{ title: '请求', value: '10' }]),
     usageRange,
     usageSummaryCards: ref([{ title: '消耗', value: '$1' }]),
@@ -179,7 +180,9 @@ test('useGatewayPageBindings composes monitor, route management, and overlay bin
   })
 
   assert.equal(bindings.monitorPageProps.value.requestUrl, 'http://127.0.0.1:8972/api/gateway')
+  assert.equal(bindings.monitorPageProps.value.autoRefreshError, '自动刷新失败：network failed')
   assert.equal(bindings.routeManagementPageProps.value.routeCount, 1)
+  assert.equal(bindings.routeManagementPageProps.value.autoRefreshError, '自动刷新失败：network failed')
   assert.equal(bindings.routeManagementPageProps.value.tableY, 320)
   assert.equal(bindings.overlayPageProps.value.priorityDialog, priorityDialog)
   assert.equal(bindings.overlayPageProps.value.routeGroupManagerDialog, routeGroupManagerDialog)

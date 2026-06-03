@@ -64,7 +64,7 @@ test('syncGatewayRoutesWithBalances syncs routes, reloads data, probes balances,
   const probedIds: number[][] = []
 
   await syncGatewayRoutesWithBalances({
-    routes,
+    getRoutes: () => routes,
     requestSync: async () => {
       events.push('sync')
       return { route_count: 2 }
@@ -96,11 +96,41 @@ test('syncGatewayRoutesWithBalances syncs routes, reloads data, probes balances,
   ])
 })
 
+test('syncGatewayRoutesWithBalances uses fresh routes after reload', async () => {
+  const events: string[] = []
+  let routes = [route(11)]
+  const probedIds: number[][] = []
+
+  await syncGatewayRoutesWithBalances({
+    getRoutes: () => routes,
+    requestSync: async () => {
+      events.push('sync')
+      return { route_count: 2 }
+    },
+    reloadGatewayData: async () => {
+      events.push('reload')
+      routes = [route(11), route(12)] // Simulate new route added during sync
+    },
+    probeRouteBalances: async (routeIds, options) => {
+      probedIds.push(routeIds)
+      events.push(`probe:${options.silent}`)
+      return { success: 2 }
+    },
+    setLoading: () => {},
+    showPlanNotice: (plan) => {
+      events.push(`notice:${plan.notice.message}`)
+    },
+  })
+
+  assert.deepEqual(probedIds, [[11, 12]], 'Should use the updated routes list after reload')
+  assert.ok(events.includes('notice:已同步 2 条网关路由，余额读取成功 2 条。'))
+})
+
 test('syncGatewayRoutesWithBalances reports sync errors without reload or balance probes', async () => {
   const events: string[] = []
 
   await syncGatewayRoutesWithBalances({
-    routes: [route(13)],
+    getRoutes: () => [route(13)],
     requestSync: async () => {
       events.push('sync')
       throw new Error('同步超时')
@@ -132,7 +162,7 @@ test('syncGatewayRoutesWithBalances preserves the existing reload failure notice
   const notices: string[] = []
 
   await syncGatewayRoutesWithBalances({
-    routes: [route(14)],
+    getRoutes: () => [route(14)],
     requestSync: async () => ({ route_count: 1 }),
     reloadGatewayData: async () => {
       throw new Error('reload failed')

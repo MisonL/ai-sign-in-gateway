@@ -74,7 +74,7 @@ const isPasswordMismatch = computed(() =>
           </a-space>
         </div>
         <small class="account-hint">
-          修改成功后会自动续签登录凭据，老 token 仍有效；建议下次登录使用新账号密码。
+          修改成功后会自动续签当前登录凭据；修改用户名后旧登录凭据会失效。
         </small>
 
         <template v-if="view.canManageAdminUsers">
@@ -83,20 +83,24 @@ const isPasswordMismatch = computed(() =>
             <div class="admin-users-create">
               <a-input
                 v-model:value="view.adminUserCreateForm.username"
+                aria-label="新管理员用户名"
                 placeholder="新管理员用户名"
                 autocomplete="off"
               />
               <a-input-password
                 v-model:value="view.adminUserCreateForm.password"
+                aria-label="新管理员初始密码"
                 placeholder="初始密码"
                 autocomplete="new-password"
               />
               <a-select
                 v-model:value="view.adminUserCreateForm.role"
+                aria-label="新管理员角色"
                 :options="view.roleOptions"
               />
               <a-switch
                 v-model:checked="view.adminUserCreateForm.is_enabled"
+                aria-label="新管理员启用状态"
                 checked-children="启用"
                 un-checked-children="停用"
               />
@@ -117,18 +121,30 @@ const isPasswordMismatch = computed(() =>
             >
               <a-table-column title="用户名" key="username" :width="180">
                 <template #default="{ record }">
-                  <a-input v-model:value="view.asAdminUser(record).username" autocomplete="off" />
+                  <a-input
+                    v-model:value="view.asAdminUser(record).username"
+                    :aria-label="`${view.asAdminUser(record).username || '管理员'}用户名`"
+                    autocomplete="off"
+                    :disabled="view.asAdminUser(record).id === view.currentAdmin?.id"
+                  />
                 </template>
               </a-table-column>
               <a-table-column title="角色" key="role" :width="150">
                 <template #default="{ record }">
-                  <a-select v-model:value="view.asAdminUser(record).role" :options="view.roleOptions" style="width: 100%" />
+                  <a-select
+                    v-model:value="view.asAdminUser(record).role"
+                    :aria-label="`${view.asAdminUser(record).username || '管理员'}角色`"
+                    :options="view.roleOptions"
+                    :disabled="view.asAdminUser(record).id === view.currentAdmin?.id"
+                    style="width: 100%"
+                  />
                 </template>
               </a-table-column>
               <a-table-column title="状态" key="is_enabled" :width="120">
                 <template #default="{ record }">
                   <a-switch
                     v-model:checked="view.asAdminUser(record).is_enabled"
+                    :aria-label="`${view.asAdminUser(record).username || '管理员'}启用状态`"
                     checked-children="启用"
                     un-checked-children="停用"
                     :disabled="view.asAdminUser(record).id === view.currentAdmin?.id"
@@ -139,8 +155,10 @@ const isPasswordMismatch = computed(() =>
                 <template #default="{ record }">
                   <a-input-password
                     v-model:value="view.adminUserPasswordEdits[view.asAdminUser(record).id]"
+                    :aria-label="`${view.asAdminUser(record).username || '管理员'}新密码`"
                     placeholder="留空不修改"
                     autocomplete="new-password"
+                    :disabled="view.asAdminUser(record).id === view.currentAdmin?.id"
                   />
                 </template>
               </a-table-column>

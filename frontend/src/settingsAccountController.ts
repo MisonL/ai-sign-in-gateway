@@ -149,7 +149,17 @@ export function useSettingsAccountController({ toast }: { toast: SettingsToast }
       toast.error('用户名不能为空。')
       return
     }
+    if (user.id === currentAdmin.value?.id && username !== currentUsername.value) {
+      toast.error('请使用上方账号表单修改当前登录用户名。')
+      user.username = currentUsername.value
+      return
+    }
     const newPassword = (adminUserPasswordEdits[user.id] || '').trim()
+    if (user.id === currentAdmin.value?.id && newPassword) {
+      toast.error('请使用上方账号表单修改当前登录密码。')
+      adminUserPasswordEdits[user.id] = ''
+      return
+    }
     if (newPassword && newPassword.length < 6) {
       toast.error('新密码至少 6 位。')
       return
@@ -163,7 +173,11 @@ export function useSettingsAccountController({ toast }: { toast: SettingsToast }
         new_password: newPassword || undefined,
       })
       adminUserPasswordEdits[user.id] = ''
-      await loadAdminUsers(false)
+      if (user.id === currentAdmin.value?.id) {
+        await loadCurrentAccount()
+      } else {
+        await loadAdminUsers(false)
+      }
       toast.success('管理员已更新。')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '更新管理员失败')

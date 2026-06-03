@@ -37,6 +37,7 @@ test('useGatewayRouteManagementPageBindings maps route management props, models,
     gateway_api_key: 'key-test',
   })
   const loading = ref(false)
+  const autoRefreshError = ref<string | null>('自动刷新失败：timeout')
   const probeLoading = ref(true)
   const balanceProbeAllLoading = ref(false)
   const probeAllProgress = ref<RouteBatchProgress | null>({
@@ -85,6 +86,7 @@ test('useGatewayRouteManagementPageBindings maps route management props, models,
     maskedGatewayApiKey,
     settingsForm,
     loading,
+    autoRefreshError,
     probeLoading,
     balanceProbeAllLoading,
     probeAllProgress,
@@ -156,6 +158,7 @@ test('useGatewayRouteManagementPageBindings maps route management props, models,
   assert.equal(routeManagementPageProps.value.maskedApiKey, 'sk-...test')
   assert.equal(routeManagementPageProps.value.hasApiKey, true)
   assert.equal(routeManagementPageProps.value.loading, false)
+  assert.equal(routeManagementPageProps.value.autoRefreshError, '自动刷新失败：timeout')
   assert.equal(routeManagementPageProps.value.probeLoading, true)
   assert.equal(routeManagementPageProps.value.balanceProbeAllLoading, false)
   assert.equal(routeManagementPageProps.value.probeAllProgress, probeAllProgress.value)
@@ -197,6 +200,7 @@ test('useGatewayRouteManagementPageBindings maps route management props, models,
   includeDisabled.value = true
   settingsForm.gateway_api_key = ''
   pageTableY.value = 520
+  autoRefreshError.value = null
 
   assert.equal(routeManagementPageProps.value.routeSearch, 'openai')
   assert.deepEqual(routeManagementPageProps.value.selectedGroups, ['vip'])
@@ -206,6 +210,7 @@ test('useGatewayRouteManagementPageBindings maps route management props, models,
   assert.equal(routeManagementPageProps.value.routeCount, 1)
   assert.equal(routeManagementPageProps.value.hasApiKey, false)
   assert.equal(routeManagementPageProps.value.tableY, 520)
+  assert.equal(routeManagementPageProps.value.autoRefreshError, null)
 
   routeManagementPageHandlers['update:routeSearch']('claude')
   routeManagementPageHandlers['update:selectedGroups'](['ops'])

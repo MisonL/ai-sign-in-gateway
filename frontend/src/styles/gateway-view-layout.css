@@ -60,6 +60,10 @@
   overflow: hidden;
 }
 
+.gateway-auto-refresh-alert {
+  width: 100%;
+}
+
 .gateway-overview-shell {
   display: flex;
   flex: 1 1 auto;

@@ -3,7 +3,7 @@ import {
   createOpenGatewayPriorityDialogAction,
   createPresetGatewayPriorityRoutesAction,
 } from './gatewayPriorityController.ts'
-import type { GatewayPriorityPresetMode } from './gatewayPriorityModel.ts'
+import type { GatewayRoutePriorityReorderPayload } from './apiGateway.ts'
 import type { GatewayRoute } from './types.ts'
 
 type RefLike<T> = {
@@ -19,18 +19,12 @@ type GatewayPriorityNoticePlan = {
   notice: GatewayPriorityNotice
 }
 
-type GatewayPriorityReorderPayload = {
-  route_id?: number
-  mode: 'move' | GatewayPriorityPresetMode
-  index?: number
-}
-
 type GatewayPriorityPageActionOptions = {
   routes: RefLike<GatewayRoute[]>
   priorityRoute: RefLike<GatewayRoute | null>
   priorityInsertIndex: RefLike<number | null | undefined>
   requestRoutes: (options: { includeDisabled: true }) => Promise<GatewayRoute[]>
-  requestReorder: (payload: GatewayPriorityReorderPayload) => Promise<GatewayRoute[]>
+  requestReorder: (payload: GatewayRoutePriorityReorderPayload) => Promise<GatewayRoute[]>
   normalizeRoute: (route: GatewayRoute) => GatewayRoute
   openPriorityDialog: (route: GatewayRoute, currentRoutes: GatewayRoute[]) => void
   setPriorityDialogLoading: (loading: boolean) => void

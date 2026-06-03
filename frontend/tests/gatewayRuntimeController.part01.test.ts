@@ -60,15 +60,21 @@ test('updates gateway runtime loading flags explicitly', () => {
 
   runtime.setLoading(true)
   runtime.setUsageLoading(true)
+  runtime.setAutoRefreshError('refresh failed', 1234)
 
   assert.equal(runtime.loading.value, true)
   assert.equal(runtime.usageLoading.value, true)
+  assert.equal(runtime.lastAutoRefreshError.value, 'refresh failed')
+  assert.equal(runtime.lastAutoRefreshErrorAt.value, 1234)
 
   runtime.setLoading(false)
   runtime.setUsageLoading(false)
+  runtime.setAutoRefreshError(null, null)
 
   assert.equal(runtime.loading.value, false)
   assert.equal(runtime.usageLoading.value, false)
+  assert.equal(runtime.lastAutoRefreshError.value, null)
+  assert.equal(runtime.lastAutoRefreshErrorAt.value, null)
 })
 
 test('starts auto refresh only when visible, idle, and outside throttle window', () => {

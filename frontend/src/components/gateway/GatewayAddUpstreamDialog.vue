@@ -32,8 +32,10 @@ watch(
   { deep: true },
 )
 
-watch(groupNames, (value) => {
-  localGroupNames.value = [...value]
+watch(open, (value) => {
+  if (value) {
+    localGroupNames.value = [...groupNames.value]
+  }
 })
 
 function handleSubmit() {

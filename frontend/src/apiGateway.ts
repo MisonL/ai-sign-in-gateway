@@ -64,11 +64,12 @@ export function getGatewayRouteGroups(options: RequestOptions = {}): Promise<Gat
 }
 
 export function createGatewayRouteGroup(payload: { name: string; api_key?: string }): Promise<GatewayRouteGroup> {
+  const apiKey = payload.api_key?.trim()
   return request('/gateway-admin/route-groups', {
     method: 'POST',
     body: JSON.stringify({
       name: payload.name,
-      api_key: payload.api_key ?? '',
+      ...(apiKey ? { api_key: apiKey } : {}),
     }),
   })
 }
@@ -137,11 +138,11 @@ export function updateGatewayRouteType(
   })
 }
 
-export function reorderGatewayRoutePriorities(payload: {
-  route_id?: number
-  mode: 'move' | 'package' | 'balance'
-  index?: number
-}): Promise<GatewayRoute[]> {
+export type GatewayRoutePriorityReorderPayload =
+  | { route_id: number; mode: 'move'; index: number }
+  | { mode: 'package' | 'balance'; route_id?: number; index?: never }
+
+export function reorderGatewayRoutePriorities(payload: GatewayRoutePriorityReorderPayload): Promise<GatewayRoute[]> {
   return request('/gateway-admin/routes/priorities/reorder', {
     method: 'POST',
     body: JSON.stringify(payload),

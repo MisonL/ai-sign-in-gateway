@@ -32,6 +32,7 @@ export type GatewayMonitorPageBindingOptions<
   maskedGatewayApiKey: ReadonlyRef<string>
   settingsForm: GatewayMonitorSettingsFormLike
   loading: ReadonlyRef<boolean>
+  autoRefreshError: ReadonlyRef<string | null>
   metricCards: ReadonlyRef<TMetricCards>
   usageRange: GatewayMonitorUsageRangeLike
   usageSummaryCards: ReadonlyRef<TUsageSummaryCards>
@@ -81,6 +82,7 @@ export function useGatewayMonitorPageBindings<
   maskedGatewayApiKey,
   settingsForm,
   loading,
+  autoRefreshError,
   metricCards,
   usageRange,
   usageSummaryCards,
@@ -129,6 +131,7 @@ export function useGatewayMonitorPageBindings<
     maskedApiKey: maskedGatewayApiKey.value,
     hasApiKey: Boolean(settingsForm.gateway_api_key),
     loading: loading.value,
+    autoRefreshError: autoRefreshError.value,
     metricCards: metricCards.value,
     usageRange,
     usageSummaryCards: usageSummaryCards.value,
