@@ -1308,11 +1308,18 @@ func (a *App) DeleteGatewayRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":           "ok",
-		"message":          "路由已删除，对应站点 API Key 已移除。",
+		"message":          deleteGatewayRouteMessage(result.RemovedAPIKey),
 		"deleted_route_id": result.RouteID,
 		"site_id":          result.SiteID,
 		"removed_api_key":  result.RemovedAPIKey,
 	})
+}
+
+func deleteGatewayRouteMessage(removedAPIKey bool) string {
+	if removedAPIKey {
+		return "路由已删除，对应站点 API Key 已移除。"
+	}
+	return "路由已删除，对应站点 API Key 已保留。"
 }
 
 func gatewayRouteGroupResponse(group models.GatewayRouteGroup, routeCount int) map[string]any {

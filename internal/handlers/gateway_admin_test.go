@@ -881,6 +881,9 @@ func TestDeleteGatewayRouteRemovesMatchingSiteAPIKeyAndGroupMembership(t *testin
 	if response["removed_api_key"] != true {
 		t.Fatalf("removed_api_key = %v", response["removed_api_key"])
 	}
+	if response["message"] != "路由已删除，对应站点 API Key 已移除。" {
+		t.Fatalf("message = %v", response["message"])
+	}
 
 	var deleted models.GatewayRouteState
 	if err := db.First(&deleted, route.ID).Error; !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -978,6 +981,9 @@ func TestDeleteGatewayRouteKeepsAPIKeySharedByAnotherRoute(t *testing.T) {
 	}
 	if response["removed_api_key"] != false {
 		t.Fatalf("removed_api_key = %v", response["removed_api_key"])
+	}
+	if response["message"] != "路由已删除，对应站点 API Key 已保留。" {
+		t.Fatalf("message = %v", response["message"])
 	}
 	var storedSite models.Site
 	if err := db.First(&storedSite, site.ID).Error; err != nil {
