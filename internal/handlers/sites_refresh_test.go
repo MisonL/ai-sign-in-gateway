@@ -15,6 +15,7 @@ import (
 
 	"ai-sign-in-gateway/internal/models"
 	"ai-sign-in-gateway/internal/plugins"
+	"ai-sign-in-gateway/internal/schemas"
 	"ai-sign-in-gateway/internal/services"
 	"github.com/glebarez/sqlite"
 	"github.com/go-chi/chi/v5"
@@ -833,6 +834,65 @@ func TestToggleSiteOffDeletesGatewayRoutes(t *testing.T) {
 	}
 	if routeCount != 0 {
 		t.Fatalf("route count after disable = %d", routeCount)
+	}
+}
+
+func TestSiteDraftPayloadPreservesExistingSiteContextWithoutSavingDraft(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:sites-draft-existing-context?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(models.All()...); err != nil {
+		t.Fatalf("auto migrate: %v", err)
+	}
+	site := models.Site{
+		Name:         "stored-site",
+		BaseURL:      "https://stored.example",
+		PluginKey:    "http-relay-station",
+		IsEnabled:    true,
+		Credentials:  models.JSONMap{"api_key": "stored-key", "account": "stored-account"},
+		PluginConfig: models.JSONMap{"balance_unit": "USD"},
+	}
+	if err := db.Create(&site).Error; err != nil {
+		t.Fatalf("create site: %v", err)
+	}
+
+	app := &App{DB: db, PluginManager: plugins.NewManager()}
+	rec := httptest.NewRecorder()
+	draft, ok := app.siteFromDraftPayload(rec, schemas.SiteDraftTestRequest{
+		SiteBase: schemas.SiteBase{
+			BaseURL:      "https://draft.example",
+			PluginKey:    "yellowpeach-newapi",
+			Credentials:  models.JSONMap{"api_key": "draft-key"},
+			PluginConfig: models.JSONMap{"request_base_url": "https://draft.example/v1", "supported_models": []string{"draft-model"}},
+		},
+		SiteID: site.ID,
+	})
+	if !ok {
+		t.Fatalf("siteFromDraftPayload returned false, response = %d %s", rec.Code, rec.Body.String())
+	}
+	if draft.ID != site.ID || draft.Name != "stored-site" || !draft.IsEnabled {
+		t.Fatalf("draft context = id:%d name:%q enabled:%v", draft.ID, draft.Name, draft.IsEnabled)
+	}
+	if draft.BaseURL != "https://draft.example" || draft.PluginKey != "yellowpeach-newapi" {
+		t.Fatalf("draft base/plugin = %q/%q", draft.BaseURL, draft.PluginKey)
+	}
+	if got := jsonMapString(draft.Credentials, "api_key"); got != "draft-key" {
+		t.Fatalf("draft api_key = %q", got)
+	}
+	if _, ok := draft.PluginConfig["supported_models"]; ok {
+		t.Fatalf("draft plugin_config leaked supported_models: %v", draft.PluginConfig)
+	}
+
+	var stored models.Site
+	if err := db.First(&stored, site.ID).Error; err != nil {
+		t.Fatalf("reload site: %v", err)
+	}
+	if stored.BaseURL != "https://stored.example" || stored.PluginKey != "http-relay-station" {
+		t.Fatalf("stored base/plugin mutated = %q/%q", stored.BaseURL, stored.PluginKey)
+	}
+	if got := jsonMapString(stored.Credentials, "api_key"); got != "stored-key" {
+		t.Fatalf("stored api_key mutated = %q", got)
 	}
 }
 

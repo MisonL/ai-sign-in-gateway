@@ -30,6 +30,9 @@ func Apply(db *gorm.DB) error {
 	if err := ensureGatewayRouteGroupTables(db); err != nil {
 		return err
 	}
+	if err := normalizeGatewayRouteTypes(db); err != nil {
+		return err
+	}
 	if err := features.AutoMigrate(db); err != nil {
 		return err
 	}
@@ -136,6 +139,19 @@ func backfillGatewayRoutePath(db *gorm.DB) error {
 	}
 	if err := db.Exec("UPDATE gateway_route_states SET route_path = 'responses' WHERE route_path = '' AND route_type = 'codex'").Error; err != nil {
 		return err
+	}
+	return nil
+}
+
+func normalizeGatewayRouteTypes(db *gorm.DB) error {
+	if !db.Migrator().HasColumn("gateway_route_states", "route_type") {
+		return nil
+	}
+	if err := db.Exec("UPDATE gateway_route_states SET route_type = 'gpt' WHERE route_type IN ('gpt_chat', 'gptchat', 'gpt-chat')").Error; err != nil {
+		return err
+	}
+	if db.Migrator().HasColumn("gateway_route_states", "route_path") {
+		return db.Exec("UPDATE gateway_route_states SET route_path = 'chat/completions' WHERE route_path = '' AND route_type = 'gpt'").Error
 	}
 	return nil
 }

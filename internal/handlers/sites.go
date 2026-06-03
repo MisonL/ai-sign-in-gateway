@@ -1425,7 +1425,30 @@ func (a *App) TestSiteDraft(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	a.siteHealth(w, r.Context(), models.Site{BaseURL: payload.BaseURL, PluginKey: payload.PluginKey, Credentials: payload.Credentials, PluginConfig: payload.PluginConfig})
+	site, ok := a.siteFromDraftPayload(w, payload)
+	if !ok {
+		return
+	}
+	a.siteHealth(w, r.Context(), site)
+}
+
+func (a *App) siteFromDraftPayload(w http.ResponseWriter, payload schemas.SiteDraftTestRequest) (models.Site, bool) {
+	site := models.Site{}
+	if payload.SiteID != 0 {
+		if err := a.DB.First(&site, payload.SiteID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				writeError(w, http.StatusNotFound, "站点不存在")
+				return site, false
+			}
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return site, false
+		}
+	}
+	site.BaseURL = payload.BaseURL
+	site.PluginKey = payload.PluginKey
+	site.Credentials = nonNilJSON(payload.Credentials)
+	site.PluginConfig = stripSiteSupportedModels(payload.PluginConfig)
+	return site, true
 }
 
 func (a *App) ProbeSiteBalance(w http.ResponseWriter, r *http.Request) {
