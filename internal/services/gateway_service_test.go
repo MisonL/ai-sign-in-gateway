@@ -275,6 +275,48 @@ func TestUpdateRouteFailureOpensImmediatelyForUpstreamConcurrencyLimit(t *testin
 	}
 }
 
+func TestUpdateRouteFailureObservationDoesNotIncrementFailureCounters(t *testing.T) {
+	db := newGatewayTestDB(t)
+	createGatewaySite(t, db, "observed", "https://observed.example", "observed-key")
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+
+	var state models.GatewayRouteState
+	if err := db.First(&state).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&state).Updates(map[string]any{
+		"consecutive_failures": 2,
+		"failure_count":        3,
+		"request_count":        5,
+		"circuit_state":        "closed",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&state, state.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	status := http.StatusBadGateway
+	UpdateRouteFailureObservation(db, &state, "secondary base failed", 12.5, &status)
+
+	if state.ConsecutiveFailures != 2 || state.FailureCount != 3 || state.RequestCount != 5 {
+		t.Fatalf("counters changed: consecutive=%d failure=%d request=%d", state.ConsecutiveFailures, state.FailureCount, state.RequestCount)
+	}
+	if state.CircuitState != "closed" {
+		t.Fatalf("circuit state = %q", state.CircuitState)
+	}
+	if state.LastStatusCode == nil || *state.LastStatusCode != http.StatusBadGateway {
+		t.Fatalf("last status code = %v", state.LastStatusCode)
+	}
+	if state.LastError == nil || *state.LastError != "secondary base failed" {
+		t.Fatalf("last error = %v", state.LastError)
+	}
+	if state.LastLatencyMS == nil || *state.LastLatencyMS != 12.5 {
+		t.Fatalf("last latency = %v", state.LastLatencyMS)
+	}
+}
+
 func TestGatewaySkipsRouteAfterUpstream429Limit(t *testing.T) {
 	ResetGatewayCountersForTest()
 
@@ -973,6 +1015,81 @@ func TestGatewayFallsBackAcrossRequestBaseURLsBeforeNextRoute(t *testing.T) {
 	}
 	if state.LastRequestBaseURL != second.URL {
 		t.Fatalf("LastRequestBaseURL = %q", state.LastRequestBaseURL)
+	}
+}
+
+func TestGatewayCountsOneConsecutiveFailureAcrossRequestBaseURLs(t *testing.T) {
+	ResetGatewayCountersForTest()
+
+	firstCalls := 0
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstCalls++
+		http.Error(w, "first failed", http.StatusBadGateway)
+	}))
+	defer first.Close()
+
+	secondCalls := 0
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondCalls++
+		http.Error(w, "second failed", http.StatusBadGateway)
+	}))
+	defer second.Close()
+
+	db := newGatewayTestDB(t)
+	site := models.Site{
+		Name:      "failed-bases",
+		BaseURL:   first.URL,
+		PluginKey: "api-supplier",
+		IsEnabled: true,
+		Credentials: models.JSONMap{
+			"api_key": "route-key",
+		},
+		PluginConfig: models.JSONMap{
+			"api_request_urls": []any{first.URL, second.URL},
+		},
+	}
+	if err := db.Create(&site).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/v1/models", nil)
+	_, err := ProxyGatewayRequest(req.Context(), db, req, "models", "", "", GatewayPolicy{
+		RouteStrategy:    "round_robin",
+		RequestTimeout:   5,
+		MaxAttempts:      1,
+		FailureThreshold: 3,
+		FailureRetryMode: "all",
+	})
+	if err == nil {
+		t.Fatal("expected all request bases to fail")
+	}
+	if firstCalls != 1 || secondCalls != 1 {
+		t.Fatalf("base calls = %d/%d, want 1/1", firstCalls, secondCalls)
+	}
+
+	var state models.GatewayRouteState
+	if err := db.Where("site_id = ?", site.ID).First(&state).Error; err != nil {
+		t.Fatal(err)
+	}
+	if state.ConsecutiveFailures != 1 {
+		t.Fatalf("consecutive failures = %d, want 1", state.ConsecutiveFailures)
+	}
+	if state.FailureCount != 1 || state.RequestCount != 1 {
+		t.Fatalf("failure/request counts = %d/%d, want 1/1", state.FailureCount, state.RequestCount)
+	}
+	if state.CircuitState == "open" {
+		t.Fatalf("circuit state opened after one logical request: %q", state.CircuitState)
+	}
+
+	var logCount int64
+	if err := db.Model(&models.GatewayRequestLog{}).Where("site_id = ?", site.ID).Count(&logCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if logCount != 2 {
+		t.Fatalf("log count = %d, want 2", logCount)
 	}
 }
 
@@ -4238,6 +4355,28 @@ func TestGatewaySub2APIModelProbeListsAllHealthySupportedModels(t *testing.T) {
 	}
 }
 
+func TestRedactGatewayURLCoversQuerySecretAliases(t *testing.T) {
+	redacted := RedactGatewayURL("https://upstream.example/v1/chat?debug=1&apikey=raw-key&api_key=raw-key-2&access_token=raw-token&client-secret=raw-secret&model=gpt")
+
+	for _, secret := range []string{"raw-key", "raw-key-2", "raw-token", "raw-secret"} {
+		if strings.Contains(redacted, secret) {
+			t.Fatalf("redacted url leaked %s: %s", secret, redacted)
+		}
+	}
+	for _, expected := range []string{
+		"debug=1",
+		"model=gpt",
+		"apikey=%5Bredacted%5D",
+		"api_key=%5Bredacted%5D",
+		"access_token=%5Bredacted%5D",
+		"client-secret=%5Bredacted%5D",
+	} {
+		if !strings.Contains(redacted, expected) {
+			t.Fatalf("redacted url missing %s: %s", expected, redacted)
+		}
+	}
+}
+
 func TestGatewaySub2APIModelProbeExcludesRoutesWithoutUsableKey(t *testing.T) {
 	ResetGatewayCountersForTest()
 
@@ -4549,6 +4688,69 @@ func TestGatewayActiveRequestsKeepRecentElapsedTime(t *testing.T) {
 	}
 }
 
+func TestGatewayRecentActiveRequestsPrunedOnInsert(t *testing.T) {
+	now := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
+	expiredAt := now.Add(-gatewayRecentActivityTTL - time.Second)
+	currentAt := now.Add(-time.Second)
+	items := map[string]GatewayActiveRequest{
+		"expired": {ID: "expired", FinishedAt: &expiredAt, Recent: true},
+		"current": {ID: "current", FinishedAt: &currentAt, Recent: true},
+	}
+
+	pruneGatewayRecentActiveRequestItems(items, now)
+
+	if _, ok := items["expired"]; ok {
+		t.Fatal("expired recent request was not pruned on insert")
+	}
+	if _, ok := items["current"]; !ok {
+		t.Fatal("current recent request was pruned")
+	}
+}
+
+func TestGatewayRecentActiveRequestsStayBounded(t *testing.T) {
+	base := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
+	items := map[string]GatewayActiveRequest{}
+	for index := 0; index <= gatewayRecentActivityMaxItems; index++ {
+		finishedAt := base.Add(time.Duration(index) * time.Millisecond)
+		token := fmt.Sprintf("recent-%03d", index)
+		items[token] = GatewayActiveRequest{ID: token, FinishedAt: &finishedAt, Recent: true}
+	}
+
+	trimGatewayRecentActiveRequestItems(items)
+
+	if count := len(items); count != gatewayRecentActivityMaxItems {
+		t.Fatalf("recent request count = %d, want %d", count, gatewayRecentActivityMaxItems)
+	}
+	if _, ok := items["recent-000"]; ok {
+		t.Fatal("oldest recent request was not trimmed")
+	}
+	if _, ok := items[fmt.Sprintf("recent-%03d", gatewayRecentActivityMaxItems)]; !ok {
+		t.Fatal("newest recent request was not retained after trimming")
+	}
+}
+
+func TestGatewayRecentActiveRequestsTrimUsesMapKeys(t *testing.T) {
+	base := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
+	items := map[string]GatewayActiveRequest{}
+	for index := 0; index <= gatewayRecentActivityMaxItems; index++ {
+		finishedAt := base.Add(time.Duration(index) * time.Millisecond)
+		token := fmt.Sprintf("recent-token-%03d", index)
+		items[token] = GatewayActiveRequest{ID: fmt.Sprintf("request-id-%03d", index), FinishedAt: &finishedAt, Recent: true}
+	}
+
+	trimGatewayRecentActiveRequestItems(items)
+
+	if count := len(items); count != gatewayRecentActivityMaxItems {
+		t.Fatalf("recent request count = %d, want %d", count, gatewayRecentActivityMaxItems)
+	}
+	if _, ok := items["recent-token-000"]; ok {
+		t.Fatal("oldest recent request token was not trimmed")
+	}
+	if _, ok := items[fmt.Sprintf("recent-token-%03d", gatewayRecentActivityMaxItems)]; !ok {
+		t.Fatal("newest recent request token was not retained")
+	}
+}
+
 func TestGatewayConcurrencyPeakStatsTrackAllTimeAndToday(t *testing.T) {
 	db := newGatewayTestDB(t)
 
@@ -4732,5 +4934,40 @@ func TestGatewayConcurrencyLimitIsTransferThresholdNotHardLimit(t *testing.T) {
 	close(release)
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestGatewayRouteAPIKeyValueInUseReturnsLookupErrors(t *testing.T) {
+	db := newGatewayTestDB(t)
+	site := models.Site{
+		Name:      "lookup-error",
+		BaseURL:   "https://lookup-error.example",
+		PluginKey: "api-supplier",
+		IsEnabled: true,
+		Credentials: models.JSONMap{
+			"api_keys": []any{
+				map[string]any{"name": "shared", "key": "shared-secret", "status": "active"},
+			},
+		},
+	}
+	state := models.GatewayRouteState{
+		SiteID:         1,
+		ID:             1,
+		KeyFingerprint: fingerprint("shared-secret"),
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	inUse, err := gatewayRouteAPIKeyValueInUse(db, site, state)
+	if err == nil {
+		t.Fatal("expected lookup error")
+	}
+	if inUse {
+		t.Fatal("api key reported in use when lookup failed")
 	}
 }
