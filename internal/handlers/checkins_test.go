@@ -8,11 +8,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"ai-sign-in-gateway/internal/models"
 	"ai-sign-in-gateway/internal/plugins"
+	"ai-sign-in-gateway/internal/schemas"
 	"github.com/glebarez/sqlite"
 	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm"
@@ -61,6 +63,34 @@ func TestCheckinRunsHonorsLimitQuery(t *testing.T) {
 	}
 	if got, _ := payload[0]["message"].(string); got != "run-2" {
 		t.Fatalf("first run message = %q", got)
+	}
+}
+
+func TestCheckinLimiterDoesNotAcquireCanceledContext(t *testing.T) {
+	limiter := newCheckinLimiter()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if limiter.Acquire(ctx, "site:1") {
+		t.Fatal("canceled context acquired a limiter slot")
+	}
+	if limiter.globalCount != 0 || limiter.siteActive["site:1"] != 0 {
+		t.Fatalf("limiter counters changed: global=%d site=%d", limiter.globalCount, limiter.siteActive["site:1"])
+	}
+}
+
+func TestCheckinLimiterNormalizesInvalidLimits(t *testing.T) {
+	limiter := newCheckinLimiter()
+	limiter.UpdateLimits(checkinExecutionSettings{SiteConcurrency: 0, GlobalConcurrency: -1})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if !limiter.Acquire(ctx, "site:1") {
+		t.Fatal("limiter did not acquire after invalid limit normalization")
+	}
+	limiter.Release("site:1")
+	if limiter.globalCount != 0 || limiter.siteActive["site:1"] != 0 {
+		t.Fatalf("limiter counters after release: global=%d site=%d", limiter.globalCount, limiter.siteActive["site:1"])
 	}
 }
 
@@ -317,6 +347,75 @@ func TestRelayOnlySiteCannotParticipateInCheckin(t *testing.T) {
 	}
 }
 
+func TestSub2APIPlatformCanDisableCheckin(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:checkin-sub2api-disabled?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(models.All()...); err != nil {
+		t.Fatalf("auto migrate: %v", err)
+	}
+	disabledSite := models.Site{
+		Name:      "disabled",
+		BaseURL:   "https://sub2api.example",
+		PluginKey: "sub2api-platform",
+		IsEnabled: true,
+		PluginConfig: models.JSONMap{
+			"disable_checkin":    "true",
+			"include_in_checkin": true,
+		},
+	}
+	enabledSite := checkinBatchTestSite("enabled", "https://enabled.example", true)
+	if err := db.Create(&disabledSite).Error; err != nil {
+		t.Fatalf("create disabled site: %v", err)
+	}
+	if err := db.Create(&enabledSite).Error; err != nil {
+		t.Fatalf("create enabled site: %v", err)
+	}
+
+	app := &App{DB: db, PluginManager: plugins.NewManager()}
+	listReq := httptest.NewRequest(http.MethodGet, "/checkins/sites", nil)
+	listRec := httptest.NewRecorder()
+	app.CheckinSites(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status = %d, body = %s", listRec.Code, listRec.Body.String())
+	}
+	var sites []map[string]any
+	if err := json.Unmarshal(listRec.Body.Bytes(), &sites); err != nil {
+		t.Fatalf("decode list response: %v", err)
+	}
+	byName := map[string]map[string]any{}
+	for _, item := range sites {
+		byName[fmt.Sprint(item["name"])] = item
+	}
+	if got, _ := byName["disabled"]["can_checkin"].(bool); got {
+		t.Fatalf("disabled can_checkin = %v", got)
+	}
+	if got, _ := byName["disabled"]["include_in_checkin"].(bool); got {
+		t.Fatalf("disabled include_in_checkin = %v", got)
+	}
+	if got, _ := byName["disabled"]["reason"].(string); !strings.Contains(got, "关闭签到") {
+		t.Fatalf("disabled reason = %q", got)
+	}
+
+	batchReq := httptest.NewRequest(http.MethodPost, "/checkins/batch", bytes.NewReader([]byte(`{"only_enabled":true}`)))
+	batchRec := httptest.NewRecorder()
+	app.RunBatchCheckin(batchRec, batchReq)
+	if batchRec.Code != http.StatusOK {
+		t.Fatalf("batch status = %d, body = %s", batchRec.Code, batchRec.Body.String())
+	}
+	var runs []map[string]any
+	if err := json.Unmarshal(batchRec.Body.Bytes(), &runs); err != nil {
+		t.Fatalf("decode batch response: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("batch runs len = %d, body = %s", len(runs), batchRec.Body.String())
+	}
+	if got, _ := runs[0]["site_id"].(float64); uint(got) != enabledSite.ID {
+		t.Fatalf("batch site_id = %v", runs[0]["site_id"])
+	}
+}
+
 func TestRunBatchCheckinRejectsMalformedJSON(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/checkins/batch", bytes.NewReader([]byte(`{"site_ids":[`)))
 	rec := httptest.NewRecorder()
@@ -331,6 +430,105 @@ func TestRunBatchCheckinRejectsMalformedJSON(t *testing.T) {
 	}
 	if detail, ok := payload["detail"].(string); !ok || detail == "" {
 		t.Fatalf("错误详情为空：%s", rec.Body.String())
+	}
+}
+
+func TestRunBatchCheckinUsesSettingsDefaultWhenOnlyEnabledIsOmitted(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"message": "signed",
+		})
+	}))
+	defer server.Close()
+
+	db, err := gorm.Open(sqlite.Open("file:checkin-default-only-enabled?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(models.All()...); err != nil {
+		t.Fatalf("auto migrate: %v", err)
+	}
+	if err := db.Create(&models.SystemSetting{ID: 1, RequestTimeout: 5, OnlyEnabledSites: true}).Error; err != nil {
+		t.Fatalf("create settings: %v", err)
+	}
+	sites := []models.Site{
+		checkinBatchTestSite("enabled", server.URL, true),
+		checkinBatchTestSite("disabled", server.URL, false),
+	}
+	if err := db.Create(&sites).Error; err != nil {
+		t.Fatalf("create sites: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/checkins/batch", bytes.NewReader([]byte(`{}`)))
+	rec := httptest.NewRecorder()
+	(&App{DB: db, PluginManager: plugins.NewManager()}).RunBatchCheckin(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var payload []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(payload) != 1 {
+		t.Fatalf("payload = %s", rec.Body.String())
+	}
+	if got, _ := payload[0]["site_id"].(float64); uint(got) != sites[0].ID {
+		t.Fatalf("site_id = %v, want %d", payload[0]["site_id"], sites[0].ID)
+	}
+	if requestCount != 1 {
+		t.Fatalf("request count = %d", requestCount)
+	}
+}
+
+func TestRunBatchCheckinCanOverrideSettingsDefaultToIncludeDisabledSites(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"message": "signed",
+		})
+	}))
+	defer server.Close()
+
+	db, err := gorm.Open(sqlite.Open("file:checkin-override-only-enabled?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(models.All()...); err != nil {
+		t.Fatalf("auto migrate: %v", err)
+	}
+	if err := db.Create(&models.SystemSetting{ID: 1, RequestTimeout: 5, OnlyEnabledSites: true}).Error; err != nil {
+		t.Fatalf("create settings: %v", err)
+	}
+	sites := []models.Site{
+		checkinBatchTestSite("enabled", server.URL, true),
+		checkinBatchTestSite("disabled", server.URL, false),
+	}
+	if err := db.Create(&sites).Error; err != nil {
+		t.Fatalf("create sites: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/checkins/batch", bytes.NewReader([]byte(`{"only_enabled":false}`)))
+	rec := httptest.NewRecorder()
+	(&App{DB: db, PluginManager: plugins.NewManager()}).RunBatchCheckin(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var payload []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(payload) != 2 {
+		t.Fatalf("payload = %s", rec.Body.String())
+	}
+	if requestCount != 2 {
+		t.Fatalf("request count = %d", requestCount)
 	}
 }
 
@@ -419,6 +617,142 @@ func TestRunBatchCheckinCompletesAfterRequestContextCanceled(t *testing.T) {
 	}
 	if requestCount != 2 {
 		t.Fatalf("request count = %d, want checkin and status requests", requestCount)
+	}
+}
+
+func TestCheckinLimiterIsSharedAcrossAppInstances(t *testing.T) {
+	firstEntered := make(chan struct{}, 1)
+	releaseFirst := make(chan struct{})
+	secondEntered := make(chan struct{}, 1)
+	var requestCount int
+	var requestMu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path != "/checkin" {
+			http.NotFound(w, r)
+			return
+		}
+		requestMu.Lock()
+		requestCount++
+		current := requestCount
+		requestMu.Unlock()
+		if current == 1 {
+			firstEntered <- struct{}{}
+			<-releaseFirst
+		} else {
+			secondEntered <- struct{}{}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"message": "signed",
+		})
+	}))
+	defer server.Close()
+
+	db, err := gorm.Open(sqlite.Open("file:checkin-shared-limiter?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(models.All()...); err != nil {
+		t.Fatalf("auto migrate: %v", err)
+	}
+	settings := models.SystemSetting{
+		ID:                       1,
+		RequestTimeout:           5,
+		CheckinConcurrency:       1,
+		CheckinGlobalConcurrency: 2,
+		CheckinIntervalSeconds:   0,
+		RetryCount:               0,
+	}
+	sites := []models.Site{
+		{
+			Name:      "first",
+			BaseURL:   server.URL,
+			PluginKey: "http-relay-station",
+			IsEnabled: true,
+			PluginConfig: models.JSONMap{
+				"auth_mode":            "none",
+				"checkin_path":         "/checkin",
+				"checkin_method":       "POST",
+				"checkin_success_path": "success",
+				"checkin_message_path": "message",
+			},
+		},
+		{
+			Name:      "second",
+			BaseURL:   server.URL + "/",
+			PluginKey: "http-relay-station",
+			IsEnabled: true,
+			PluginConfig: models.JSONMap{
+				"auth_mode":            "none",
+				"checkin_path":         "/checkin",
+				"checkin_method":       "POST",
+				"checkin_success_path": "success",
+				"checkin_message_path": "message",
+			},
+		},
+	}
+	if err := db.Create(&sites).Error; err != nil {
+		t.Fatalf("create sites: %v", err)
+	}
+	appA := &App{DB: db, PluginManager: plugins.NewManager()}
+	appB := &App{DB: db, PluginManager: plugins.NewManager()}
+	doneA := make(chan []schemas.CheckinRunResponse, 1)
+	doneB := make(chan []schemas.CheckinRunResponse, 1)
+
+	go func() {
+		doneA <- appA.executeCheckinTargets(context.Background(), []models.Site{sites[0]}, "manual", settings)
+	}()
+	select {
+	case <-firstEntered:
+	case <-time.After(time.Second):
+		t.Fatal("first checkin did not reach upstream")
+	}
+	go func() {
+		doneB <- appB.executeCheckinTargets(context.Background(), []models.Site{sites[1]}, "scheduled", settings)
+	}()
+	select {
+	case <-secondEntered:
+		t.Fatal("second checkin bypassed shared site concurrency limit")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseFirst)
+	select {
+	case runs := <-doneA:
+		if len(runs) != 1 || runs[0].Status != "success" {
+			t.Fatalf("first runs = %+v", runs)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first checkin did not finish")
+	}
+	select {
+	case <-secondEntered:
+	case <-time.After(time.Second):
+		t.Fatal("second checkin did not start after first released slot")
+	}
+	select {
+	case runs := <-doneB:
+		if len(runs) != 1 || runs[0].Status != "success" {
+			t.Fatalf("second runs = %+v", runs)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second checkin did not finish")
+	}
+}
+
+func checkinBatchTestSite(name, baseURL string, enabled bool) models.Site {
+	return models.Site{
+		Name:      name,
+		BaseURL:   baseURL,
+		PluginKey: "http-relay-station",
+		IsEnabled: enabled,
+		PluginConfig: models.JSONMap{
+			"auth_mode":            "none",
+			"checkin_path":         "/checkin",
+			"checkin_method":       "POST",
+			"checkin_success_path": "success",
+			"checkin_message_path": "message",
+		},
 	}
 }
 

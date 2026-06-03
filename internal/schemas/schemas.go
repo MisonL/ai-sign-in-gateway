@@ -216,7 +216,7 @@ type CheckinRunResponse struct {
 
 type BatchCheckinRequest struct {
 	SiteIDs     []uint `json:"site_ids"`
-	OnlyEnabled bool   `json:"only_enabled"`
+	OnlyEnabled *bool  `json:"only_enabled"`
 }
 
 type OverviewAttentionSite struct {

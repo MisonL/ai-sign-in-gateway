@@ -82,7 +82,11 @@ func (a *App) RunBatchCheckin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	out, err := a.runCheckinBatch(manualCheckinContext(r.Context()), payload.SiteIDs, payload.OnlyEnabled, "manual", settings)
+	onlyEnabled := settings.OnlyEnabledSites
+	if payload.OnlyEnabled != nil {
+		onlyEnabled = *payload.OnlyEnabled
+	}
+	out, err := a.runCheckinBatch(manualCheckinContext(r.Context()), payload.SiteIDs, onlyEnabled, "manual", settings)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -91,6 +95,10 @@ func (a *App) RunBatchCheckin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) runCheckinBatch(ctx context.Context, siteIDs []uint, onlyEnabled bool, triggerType string, settings models.SystemSetting) ([]schemas.CheckinRunResponse, error) {
+	return a.runCheckinBatchAt(ctx, siteIDs, onlyEnabled, triggerType, settings, time.Time{})
+}
+
+func (a *App) runCheckinBatchAt(ctx context.Context, siteIDs []uint, onlyEnabled bool, triggerType string, settings models.SystemSetting, runAt time.Time) ([]schemas.CheckinRunResponse, error) {
 	query := a.DB.Model(&models.Site{})
 	if len(siteIDs) > 0 {
 		query = query.Where("id IN ?", siteIDs)
@@ -112,17 +120,21 @@ func (a *App) runCheckinBatch(ctx context.Context, siteIDs []uint, onlyEnabled b
 		}
 		targets = append(targets, site)
 	}
-	return a.executeCheckinTargets(ctx, targets, triggerType, settings), nil
+	return a.executeCheckinTargetsAt(ctx, targets, triggerType, settings, runAt), nil
 }
 
 func (a *App) executeCheckinTargets(ctx context.Context, sites []models.Site, triggerType string, settings models.SystemSetting) []schemas.CheckinRunResponse {
+	return a.executeCheckinTargetsAt(ctx, sites, triggerType, settings, time.Time{})
+}
+
+func (a *App) executeCheckinTargetsAt(ctx context.Context, sites []models.Site, triggerType string, settings models.SystemSetting, runAt time.Time) []schemas.CheckinRunResponse {
 	out := make([]schemas.CheckinRunResponse, len(sites))
 	if len(sites) == 0 {
 		return out
 	}
 	limits := normalizeCheckinExecutionSettings(settings)
-	globalSlots := make(chan struct{}, limits.GlobalConcurrency)
-	siteSlots := checkinSiteSlots(sites, limits.SiteConcurrency)
+	limiter := checkinLimiterForDB(a.DB)
+	limiter.UpdateLimits(limits)
 	var wg sync.WaitGroup
 	for index, site := range sites {
 		if index > 0 && limits.Interval > 0 {
@@ -136,20 +148,12 @@ func (a *App) executeCheckinTargets(ctx context.Context, sites []models.Site, tr
 		wg.Add(1)
 		go func(index int, site models.Site) {
 			defer wg.Done()
-			slotKey := normalizeDuplicateBaseURL(site.BaseURL)
-			if slotKey == "" {
-				slotKey = "site:" + strconv.FormatUint(uint64(site.ID), 10)
-			}
-			siteSlot := siteSlots[slotKey]
-			if !acquireCheckinSlot(ctx, siteSlot) {
+			slotKey := checkinSlotKey(site)
+			if !limiter.Acquire(ctx, slotKey) {
 				return
 			}
-			defer releaseCheckinSlot(siteSlot)
-			if !acquireCheckinSlot(ctx, globalSlots) {
-				return
-			}
-			defer releaseCheckinSlot(globalSlots)
-			out[index] = checkinRunResponse(a.executeSiteCheckinWithRetry(ctx, site, triggerType, limits.RetryCount, settings.RequestTimeout))
+			defer limiter.Release(slotKey)
+			out[index] = checkinRunResponse(a.executeSiteCheckinWithRetryAt(ctx, site, triggerType, limits.RetryCount, settings.RequestTimeout, runAt))
 		}(index, site)
 	}
 	wg.Wait()
@@ -205,31 +209,12 @@ func manualCheckinContext(parent context.Context) context.Context {
 	return context.WithoutCancel(parent)
 }
 
-func checkinSiteSlots(sites []models.Site, limit int) map[string]chan struct{} {
-	slots := make(map[string]chan struct{}, len(sites))
-	for _, site := range sites {
-		key := normalizeDuplicateBaseURL(site.BaseURL)
-		if key == "" {
-			key = "site:" + strconv.FormatUint(uint64(site.ID), 10)
-		}
-		if _, ok := slots[key]; !ok {
-			slots[key] = make(chan struct{}, limit)
-		}
+func checkinSlotKey(site models.Site) string {
+	key := normalizeDuplicateBaseURL(site.BaseURL)
+	if key != "" {
+		return key
 	}
-	return slots
-}
-
-func acquireCheckinSlot(ctx context.Context, slot chan struct{}) bool {
-	select {
-	case slot <- struct{}{}:
-		return true
-	case <-ctx.Done():
-		return false
-	}
-}
-
-func releaseCheckinSlot(slot chan struct{}) {
-	<-slot
+	return "site:" + strconv.FormatUint(uint64(site.ID), 10)
 }
 
 func sleepWithContext(ctx context.Context, duration time.Duration) bool {
@@ -255,10 +240,14 @@ func filterEmptyCheckinResponses(items []schemas.CheckinRunResponse) []schemas.C
 }
 
 func (a *App) executeSiteCheckinWithRetry(ctx context.Context, site models.Site, triggerType string, retryCount int, timeoutSeconds int) models.CheckinRun {
+	return a.executeSiteCheckinWithRetryAt(ctx, site, triggerType, retryCount, timeoutSeconds, time.Time{})
+}
+
+func (a *App) executeSiteCheckinWithRetryAt(ctx context.Context, site models.Site, triggerType string, retryCount int, timeoutSeconds int, runAt time.Time) models.CheckinRun {
 	attempts := retryCount + 1
 	var run models.CheckinRun
 	for attempt := 1; attempt <= attempts; attempt++ {
-		run = a.executeSiteCheckin(ctx, site, triggerType, timeoutSeconds)
+		run = a.executeSiteCheckinAt(ctx, site, triggerType, timeoutSeconds, runAt)
 		if strings.EqualFold(strings.TrimSpace(run.Status), "success") || ctx.Err() != nil {
 			return run
 		}
@@ -345,7 +334,11 @@ func (a *App) SiteCheckin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) executeSiteCheckin(ctx context.Context, site models.Site, triggerType string, timeoutSeconds int) models.CheckinRun {
-	now := time.Now().UTC()
+	return a.executeSiteCheckinAt(ctx, site, triggerType, timeoutSeconds, time.Time{})
+}
+
+func (a *App) executeSiteCheckinAt(ctx context.Context, site models.Site, triggerType string, timeoutSeconds int, runAt time.Time) models.CheckinRun {
+	now := checkinRunTimestamp(runAt)
 	run := models.CheckinRun{SiteID: &site.ID, TriggerType: triggerType, Status: "running", Message: "签到执行中。", StartedAt: now}
 	_ = a.DB.Create(&run).Error
 	manager := a.PluginManager
@@ -376,6 +369,13 @@ func (a *App) executeSiteCheckin(ctx context.Context, site models.Site, triggerT
 	finishRun(a.DB, &run, status, result.Message, balance, result.ResponseExcerpt)
 	updateSiteAfterCheckin(a.DB, &site, status, result.Message, balance, now)
 	return run
+}
+
+func checkinRunTimestamp(runAt time.Time) time.Time {
+	if runAt.IsZero() {
+		return time.Now().UTC()
+	}
+	return runAt.UTC()
 }
 
 func finishRun(db *gorm.DB, run *models.CheckinRun, status, message string, balance *float64, excerpt *string) {

@@ -29,6 +29,7 @@ func (a *App) Overview(w http.ResponseWriter, r *http.Request) {
 	var sites []models.Site
 	a.DB.
 		Where("is_enabled = ? OR last_status = ? OR last_status = ?", false, "failed", "error").
+		Order("CASE WHEN last_status IN ('failed', 'error') THEN 0 WHEN is_enabled = false THEN 1 ELSE 2 END").
 		Order("updated_at desc").
 		Limit(6).
 		Find(&sites)

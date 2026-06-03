@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"ai-sign-in-gateway/internal/models"
 	"github.com/glebarez/sqlite"
@@ -74,6 +75,44 @@ func TestOverviewIncludesDisabledSitesInAttentionList(t *testing.T) {
 	}
 	if item.LastMessage == nil || *item.LastMessage == "" {
 		t.Fatalf("attention message = %v", item.LastMessage)
+	}
+}
+
+func TestOverviewPrioritizesFailedSitesBeforeDisabledSites(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:overview-failed-attention-priority?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(models.All()...); err != nil {
+		t.Fatalf("auto migrate: %v", err)
+	}
+	status := "failed"
+	old := time.Date(2026, 1, 2, 3, 0, 0, 0, time.UTC)
+	recent := old.Add(time.Hour)
+	sites := []models.Site{
+		{Name: "disabled", BaseURL: "https://disabled.example", PluginKey: "http-relay-station", IsEnabled: false, UpdatedAt: recent},
+		{Name: "failed", BaseURL: "https://failed.example", PluginKey: "http-relay-station", IsEnabled: true, LastStatus: &status, UpdatedAt: old},
+	}
+	if err := db.Create(&sites).Error; err != nil {
+		t.Fatalf("create sites: %v", err)
+	}
+
+	app := &App{DB: db}
+	rec := httptest.NewRecorder()
+	app.Overview(rec, httptest.NewRequest(http.MethodGet, "/api/overview", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		AttentionSites []struct {
+			Name string `json:"name"`
+		} `json:"attention_sites"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(payload.AttentionSites) != 2 || payload.AttentionSites[0].Name != "failed" {
+		t.Fatalf("attention order = %+v", payload.AttentionSites)
 	}
 }
 

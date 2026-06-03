@@ -35,6 +35,11 @@ func (r CheckinSchedulerRunner) Run(ctx context.Context) {
 
 	var lastRunDate string
 	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
 		r.RunDue(ctx, &lastRunDate)
 		select {
 		case <-ctx.Done():
@@ -45,6 +50,9 @@ func (r CheckinSchedulerRunner) Run(ctx context.Context) {
 }
 
 func (r CheckinSchedulerRunner) RunDue(ctx context.Context, lastRunDate *string) bool {
+	if ctx.Err() != nil || r.App == nil || r.App.DB == nil {
+		return false
+	}
 	settings, err := r.App.systemSettings()
 	if err != nil {
 		log.Printf("自动签到调度: 读取设置失败: %v", err)
@@ -80,7 +88,7 @@ func (r CheckinSchedulerRunner) RunDue(ctx context.Context, lastRunDate *string)
 		}
 		return false
 	}
-	runs, err := r.App.runCheckinBatch(ctx, nil, settings.OnlyEnabledSites, "scheduled", settings)
+	runs, err := r.App.runCheckinBatchAt(ctx, nil, settings.OnlyEnabledSites, "scheduled", settings, now.UTC())
 	if err != nil {
 		log.Printf("自动签到调度: 执行失败: %v", err)
 		return false
@@ -94,8 +102,10 @@ func (r CheckinSchedulerRunner) RunDue(ctx context.Context, lastRunDate *string)
 }
 
 func (r CheckinSchedulerRunner) scheduledRunExists(now time.Time, location *time.Location) (bool, error) {
-	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, location).UTC()
-	end := start.Add(24 * time.Hour)
+	startLocal := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, location)
+	endLocal := startLocal.AddDate(0, 0, 1)
+	start := startLocal.UTC()
+	end := endLocal.UTC()
 	var count int64
 	err := r.App.DB.Model(&models.CheckinRun{}).
 		Where("trigger_type = ? AND started_at >= ? AND started_at < ?", "scheduled", start, end).

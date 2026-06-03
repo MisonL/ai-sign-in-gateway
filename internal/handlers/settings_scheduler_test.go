@@ -238,6 +238,57 @@ func TestCheckinSchedulerRunsDueBatchOncePerLocalDay(t *testing.T) {
 	}
 }
 
+func TestCheckinSchedulerRunDueShortCircuitsWhenCanceledOrMissingApp(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if (CheckinSchedulerRunner{}).RunDue(ctx, nil) {
+		t.Fatal("canceled nil runner reported a run")
+	}
+	if (CheckinSchedulerRunner{App: &App{}}).RunDue(context.Background(), nil) {
+		t.Fatal("runner without db reported a run")
+	}
+}
+
+func TestCheckinSchedulerScheduledRunExistsUsesLocalDayWindow(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:settings-scheduler-dst-window?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(models.All()...); err != nil {
+		t.Fatalf("auto migrate: %v", err)
+	}
+	location, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatalf("load location: %v", err)
+	}
+	runAt := time.Date(2026, 3, 9, 0, 30, 0, 0, location).UTC()
+	if err := db.Create(&models.CheckinRun{
+		TriggerType: "scheduled",
+		Status:      "success",
+		StartedAt:   runAt,
+	}).Error; err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+
+	runner := CheckinSchedulerRunner{App: &App{DB: db}}
+	previousDay := time.Date(2026, 3, 8, 12, 0, 0, 0, location)
+	exists, err := runner.scheduledRunExists(previousDay, location)
+	if err != nil {
+		t.Fatalf("scheduledRunExists previous day: %v", err)
+	}
+	if exists {
+		t.Fatal("spring-forward day included the next local day run")
+	}
+	nextDay := time.Date(2026, 3, 9, 12, 0, 0, 0, location)
+	exists, err = runner.scheduledRunExists(nextDay, location)
+	if err != nil {
+		t.Fatalf("scheduledRunExists next day: %v", err)
+	}
+	if !exists {
+		t.Fatal("next local day did not include scheduled run")
+	}
+}
+
 func schedulerNowTestSite(baseURL string, enabled bool) models.Site {
 	return models.Site{
 		Name:      "enabled",
