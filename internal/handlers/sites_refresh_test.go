@@ -896,6 +896,231 @@ func TestSiteDraftPayloadPreservesExistingSiteContextWithoutSavingDraft(t *testi
 	}
 }
 
+func TestSiteDraftTestDoesNotPersistExistingSiteRuntimeOrBackfill(t *testing.T) {
+	upstream, requests := newDraftBackfillServer()
+	defer upstream.Close()
+
+	db := newDraftBackfillDB(t)
+	site, runAt := createStoredDraftBackfillSite(t, db)
+	response := runDraftBackfillTest(t, db, site.ID, upstream.URL)
+
+	assertDraftBackfillResponse(t, response, site.ID)
+	assertStoredDraftBackfillUnchanged(t, db, site.ID, runAt)
+	assertDraftBackfillRequests(t, requests)
+}
+
+func runDraftBackfillTest(t *testing.T, db *gorm.DB, siteID uint, baseURL string) schemas.SiteHealthResponse {
+	t.Helper()
+	payload := map[string]any{
+		"site_id":    siteID,
+		"name":       "draft-site",
+		"base_url":   baseURL,
+		"plugin_key": "yellowpeach-newapi",
+		"credentials": map[string]any{
+			"username": "draft@example.test",
+			"password": "draft-password",
+		},
+		"plugin_config": map[string]any{},
+	}
+	data, _ := json.Marshal(payload)
+	rec := httptest.NewRecorder()
+	(&App{DB: db, PluginManager: plugins.NewManager()}).TestSiteDraft(rec, httptest.NewRequest(http.MethodPost, "/api/sites/test-draft", bytes.NewReader(data)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response schemas.SiteHealthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	return response
+}
+
+func assertDraftBackfillResponse(t *testing.T, response schemas.SiteHealthResponse, siteID uint) {
+	t.Helper()
+	if !response.LoggedIn || response.SiteID != siteID {
+		t.Fatalf("response logged_in/site_id = %v/%d", response.LoggedIn, response.SiteID)
+	}
+	if got := jsonMapString(response.UpdatedCredentials, "api_key"); got != "sk-draft" {
+		t.Fatalf("response api_key = %q, credentials = %#v", got, response.UpdatedCredentials)
+	}
+	if response.PackageDisplay == nil || !strings.Contains(*response.PackageDisplay, "Draft Plan") {
+		got := "<nil>"
+		if response.PackageDisplay != nil {
+			got = *response.PackageDisplay
+		}
+		t.Fatalf("response package display = %q", got)
+	}
+}
+
+func assertStoredDraftBackfillUnchanged(t *testing.T, db *gorm.DB, siteID uint, runAt time.Time) {
+	t.Helper()
+	var stored models.Site
+	if err := db.First(&stored, siteID).Error; err != nil {
+		t.Fatalf("reload site: %v", err)
+	}
+	if stored.BaseURL != "https://stored.example" || stored.PluginKey != "yellowpeach-newapi" {
+		t.Fatalf("stored base/plugin mutated = %q/%q", stored.BaseURL, stored.PluginKey)
+	}
+	if stored.LastStatus == nil || *stored.LastStatus != "success" {
+		t.Fatalf("stored last_status = %v", stored.LastStatus)
+	}
+	if stored.LastMessage == nil || *stored.LastMessage != "stored message" {
+		t.Fatalf("stored last_message = %v", stored.LastMessage)
+	}
+	if stored.LastBalance == nil || *stored.LastBalance != 3.0 {
+		t.Fatalf("stored last_balance = %v", stored.LastBalance)
+	}
+	if stored.LastRunAt == nil || !stored.LastRunAt.Equal(runAt) {
+		t.Fatalf("stored last_run_at = %v", stored.LastRunAt)
+	}
+	if got := jsonMapString(stored.Credentials, "api_key"); got != "sk-stored" {
+		t.Fatalf("stored api_key mutated = %q", got)
+	}
+	if got := jsonMapString(stored.Credentials, "access_token"); got != "stored-access-token" {
+		t.Fatalf("stored access_token mutated = %q", got)
+	}
+	if got := jsonMapString(stored.PluginConfig, "package_display"); got != "Stored Plan" {
+		t.Fatalf("stored package_display mutated = %q", got)
+	}
+	if got := jsonMapString(stored.PluginConfig, "balance_unit"); got != "USD" {
+		t.Fatalf("stored balance_unit mutated = %q", got)
+	}
+}
+
+func assertDraftBackfillRequests(t *testing.T, requests map[string]int) {
+	t.Helper()
+	if requests["/api/user/login"] != 1 || requests["/api/user/self"] != 1 ||
+		requests["/api/subscription/self"] != 1 || requests["/api/token/"] != 1 {
+		t.Fatalf("unexpected upstream requests: %#v", requests)
+	}
+}
+
+func newDraftBackfillDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open("file:sites-draft-test-no-persist?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(models.All()...); err != nil {
+		t.Fatalf("auto migrate: %v", err)
+	}
+	if err := db.Create(&models.SystemSetting{ID: 1, RequestTimeout: 5}).Error; err != nil {
+		t.Fatalf("create settings: %v", err)
+	}
+	return db
+}
+
+func createStoredDraftBackfillSite(t *testing.T, db *gorm.DB) (models.Site, time.Time) {
+	t.Helper()
+	lastStatus := "success"
+	lastMessage := "stored message"
+	lastBalance := 3.0
+	runAt := time.Date(2026, 6, 1, 1, 2, 3, 0, time.UTC)
+	site := models.Site{
+		Name:        "stored-site",
+		BaseURL:     "https://stored.example",
+		PluginKey:   "yellowpeach-newapi",
+		IsEnabled:   true,
+		LastStatus:  &lastStatus,
+		LastMessage: &lastMessage,
+		LastBalance: &lastBalance,
+		LastRunAt:   &runAt,
+		Credentials: draftStoredCredentials(),
+		PluginConfig: models.JSONMap{
+			"balance_unit":    "USD",
+			"package_display": "Stored Plan",
+		},
+	}
+	if err := db.Create(&site).Error; err != nil {
+		t.Fatalf("create site: %v", err)
+	}
+	return site, runAt
+}
+
+func draftStoredCredentials() models.JSONMap {
+	return models.JSONMap{
+		"username":     "stored@example.test",
+		"password":     "stored-password",
+		"cookie":       "session=stored",
+		"access_token": "stored-access-token",
+		"api_key":      "sk-stored",
+	}
+}
+
+func newDraftBackfillServer() (*httptest.Server, map[string]int) {
+	requests := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests[r.URL.Path]++
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/user/login":
+			writeDraftLoginResponse(w)
+		case "/api/user/self":
+			writeDraftSelfResponse(w)
+		case "/api/subscription/self":
+			writeDraftSubscriptionResponse(w)
+		case "/api/token/":
+			writeDraftTokenResponse(w)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	return server, requests
+}
+
+func writeDraftLoginResponse(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{Name: "session", Value: "draft-session"})
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"success": true,
+		"data": map[string]any{
+			"access_token": "draft-access-token",
+			"user_id":      77,
+		},
+	})
+}
+
+func writeDraftSelfResponse(w http.ResponseWriter) {
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"success": true,
+		"message": "draft status ok",
+		"data": map[string]any{
+			"id":      77,
+			"email":   "draft@example.test",
+			"balance": 42.5,
+		},
+	})
+}
+
+func writeDraftSubscriptionResponse(w http.ResponseWriter) {
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"success": true,
+		"data": map[string]any{
+			"subscriptions": []map[string]any{{
+				"subscription": map[string]any{
+					"plan_name":    "Draft Plan",
+					"amount_total": 10,
+					"amount_used":  2,
+					"status":       "active",
+				},
+			}},
+		},
+	})
+}
+
+func writeDraftTokenResponse(w http.ResponseWriter) {
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"success": true,
+		"data": map[string]any{
+			"items": []map[string]any{{
+				"id":     9,
+				"name":   "draft-key",
+				"key":    "sk-draft",
+				"status": "active",
+			}},
+		},
+	})
+}
+
 func testGatewayRouteFingerprint(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])[:16]

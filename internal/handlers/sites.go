@@ -29,6 +29,10 @@ type siteGroupPayload struct {
 	NewName string `json:"new_name"`
 }
 
+type siteHealthOptions struct {
+	Persist bool
+}
+
 func (a *App) SiteRoutes(r chi.Router) {
 	r.Get("/", a.ListSites)
 	r.Post("/", a.CreateSite)
@@ -1417,7 +1421,7 @@ func (a *App) TestSite(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	a.siteHealth(w, r.Context(), site)
+	a.siteHealth(w, r.Context(), site, siteHealthOptions{Persist: true})
 }
 func (a *App) TestSiteDraft(w http.ResponseWriter, r *http.Request) {
 	var payload schemas.SiteDraftTestRequest
@@ -1429,7 +1433,7 @@ func (a *App) TestSiteDraft(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	a.siteHealth(w, r.Context(), site)
+	a.siteHealth(w, r.Context(), site, siteHealthOptions{})
 }
 
 func (a *App) siteFromDraftPayload(w http.ResponseWriter, payload schemas.SiteDraftTestRequest) (models.Site, bool) {
@@ -1503,7 +1507,7 @@ func (a *App) getSite(w http.ResponseWriter, rawID string) (models.Site, bool) {
 	return site, true
 }
 
-func (a *App) siteHealth(w http.ResponseWriter, ctx context.Context, site models.Site) {
+func (a *App) siteHealth(w http.ResponseWriter, ctx context.Context, site models.Site, options siteHealthOptions) {
 	plugin, err := a.PluginManager.Get(site.PluginKey)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
@@ -1511,7 +1515,8 @@ func (a *App) siteHealth(w http.ResponseWriter, ctx context.Context, site models
 	}
 	settings, _ := a.systemSettings()
 	timeout := siteRequestTimeoutSeconds(settings.RequestTimeout)
-	if site.ID != 0 && containsFold(plugin.Meta().Capabilities, "relay_only") {
+	shouldPersist := options.Persist && site.ID != 0
+	if shouldPersist && containsFold(plugin.Meta().Capabilities, "relay_only") {
 		result, err := services.ProbeSiteBalance(ctx, a.DB, site.ID, timeout)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -1558,7 +1563,7 @@ func (a *App) siteHealth(w http.ResponseWriter, ctx context.Context, site models
 	defer cancel()
 	status, err := plugin.FetchAccountStatus(opCtx, site, timeout)
 	if err != nil {
-		if site.ID != 0 {
+		if shouldPersist {
 			status := "failed"
 			message := err.Error()
 			runAt := time.Now().UTC()
@@ -1587,7 +1592,13 @@ func (a *App) siteHealth(w http.ResponseWriter, ctx context.Context, site models
 		pluginConfigUpdates["invite_code"] = strings.TrimSpace(*status.InviteCode)
 	}
 	updatedCredentials := models.JSONMap{}
-	if site.ID != 0 {
+	if len(status.UpdatedCredentials) > 0 {
+		updatedCredentials = mergeCredentialUpdates(&site, status.UpdatedCredentials)
+	}
+	if len(pluginConfigUpdates) > 0 {
+		site.PluginConfig = mergeJSON(site.PluginConfig, pluginConfigUpdates)
+	}
+	if shouldPersist {
 		statusText := "failed"
 		if status.LoggedIn {
 			statusText = "success"
@@ -1600,11 +1611,9 @@ func (a *App) siteHealth(w http.ResponseWriter, ctx context.Context, site models
 			"last_run_at":  &runAt,
 		}
 		if len(status.UpdatedCredentials) > 0 {
-			updatedCredentials = mergeCredentialUpdates(&site, status.UpdatedCredentials)
 			updates["credentials"] = site.Credentials
 		}
 		if len(pluginConfigUpdates) > 0 {
-			site.PluginConfig = mergeJSON(site.PluginConfig, pluginConfigUpdates)
 			updates["plugin_config"] = site.PluginConfig
 		}
 		_ = a.DB.Model(&site).Updates(updates).Error
