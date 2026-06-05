@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"strings"
 
 	"ai-sign-in-gateway/internal/models"
@@ -18,6 +19,13 @@ type duplicateSiteMergeResult struct {
 	DeletedSiteIDs      []uint `json:"deleted_site_ids"`
 }
 
+type duplicateRouteReferenceMigration struct {
+	KeepID            uint
+	RemovedRoutes     []models.GatewayRouteState
+	RemovedRouteIDs   []uint
+	RouteGroupMembers []models.GatewayRouteGroupMember
+}
+
 func mergeDuplicateSites(db *gorm.DB) (duplicateSiteMergeResult, error) {
 	var result duplicateSiteMergeResult
 	groups, err := duplicateSiteGroups(db)
@@ -25,16 +33,19 @@ func mergeDuplicateSites(db *gorm.DB) (duplicateSiteMergeResult, error) {
 		return result, err
 	}
 	err = db.Transaction(func(tx *gorm.DB) error {
+		routeMigrations := []duplicateRouteReferenceMigration{}
 		for _, group := range groups {
-			if err := mergeDuplicateSiteGroup(tx, group, &result); err != nil {
+			if err := mergeDuplicateSiteGroup(tx, group, &result, &routeMigrations); err != nil {
 				return err
 			}
 		}
 		if result.MergedGroupCount == 0 {
 			return nil
 		}
-		_, err := services.SyncGatewayRoutes(tx)
-		return err
+		if _, err := services.SyncGatewayRoutes(tx); err != nil {
+			return err
+		}
+		return reassignDuplicateRouteReferences(tx, routeMigrations)
 	})
 	if err != nil {
 		return result, err
@@ -47,7 +58,7 @@ func mergeDuplicateSites(db *gorm.DB) (duplicateSiteMergeResult, error) {
 	return result, nil
 }
 
-func mergeDuplicateSiteGroup(tx *gorm.DB, group duplicateSiteGroup, result *duplicateSiteMergeResult) error {
+func mergeDuplicateSiteGroup(tx *gorm.DB, group duplicateSiteGroup, result *duplicateSiteMergeResult, routeMigrations *[]duplicateRouteReferenceMigration) error {
 	var keep models.Site
 	if err := tx.First(&keep, group.SuggestedKeepID).Error; err != nil {
 		return err
@@ -67,7 +78,7 @@ func mergeDuplicateSiteGroup(tx *gorm.DB, group duplicateSiteGroup, result *dupl
 	if err := tx.Save(&keep).Error; err != nil {
 		return err
 	}
-	if err := deleteDuplicateSiteRecords(tx, keep.ID, removedIDs); err != nil {
+	if err := deleteDuplicateSiteRecords(tx, keep.ID, removedIDs, routeMigrations); err != nil {
 		return err
 	}
 	result.KeptSiteIDs = append(result.KeptSiteIDs, keep.ID)
@@ -87,19 +98,26 @@ func mergeDuplicateSiteData(keep *models.Site, duplicate models.Site) {
 	}
 }
 
-func deleteDuplicateSiteRecords(tx *gorm.DB, keepID uint, siteIDs []uint) error {
+func deleteDuplicateSiteRecords(tx *gorm.DB, keepID uint, siteIDs []uint, routeMigrations *[]duplicateRouteReferenceMigration) error {
 	siteIDs = uniqueUintIDs(siteIDs)
 	if keepID == 0 || len(siteIDs) == 0 {
 		return nil
 	}
-	var routeIDs []uint
-	if err := tx.Model(&models.GatewayRouteState{}).Where("site_id IN ?", siteIDs).Pluck("id", &routeIDs).Error; err != nil {
-		return err
-	}
-	routeIDMap, err := duplicateRouteIDMap(tx, keepID, siteIDs)
+	removedRoutes, err := duplicateRouteStatesForSites(tx, siteIDs)
 	if err != nil {
 		return err
 	}
+	routeIDs := routeStateIDs(removedRoutes)
+	routeGroupMembers, err := duplicateRouteGroupMembersForRoutes(tx, routeIDs)
+	if err != nil {
+		return err
+	}
+	*routeMigrations = append(*routeMigrations, duplicateRouteReferenceMigration{
+		KeepID:            keepID,
+		RemovedRoutes:     removedRoutes,
+		RemovedRouteIDs:   routeIDs,
+		RouteGroupMembers: routeGroupMembers,
+	})
 	if len(routeIDs) > 0 {
 		if err := tx.Where("route_state_id IN ?", routeIDs).Delete(&models.GatewayRouteGroupMember{}).Error; err != nil {
 			return err
@@ -111,22 +129,43 @@ func deleteDuplicateSiteRecords(tx *gorm.DB, keepID uint, siteIDs []uint) error 
 	if err := tx.Where("site_id IN ?", siteIDs).Delete(&models.SiteQueueTask{}).Error; err != nil {
 		return err
 	}
-	if err := reassignDuplicateSiteReferences(tx, keepID, siteIDs, routeIDs, routeIDMap); err != nil {
+	if err := reassignDuplicateSiteReferences(tx, keepID, siteIDs); err != nil {
 		return err
 	}
 	return tx.Where("id IN ?", siteIDs).Delete(&models.Site{}).Error
 }
 
-func duplicateRouteIDMap(tx *gorm.DB, keepID uint, siteIDs []uint) (map[uint]uint, error) {
-	var removed []models.GatewayRouteState
-	if err := tx.Where("site_id IN ?", siteIDs).Find(&removed).Error; err != nil {
-		return nil, err
+func duplicateRouteStatesForSites(tx *gorm.DB, siteIDs []uint) ([]models.GatewayRouteState, error) {
+	var routes []models.GatewayRouteState
+	err := tx.Preload("Site").Where("site_id IN ?", siteIDs).Find(&routes).Error
+	return routes, err
+}
+
+func routeStateIDs(routes []models.GatewayRouteState) []uint {
+	ids := make([]uint, 0, len(routes))
+	for _, route := range routes {
+		if route.ID != 0 {
+			ids = append(ids, route.ID)
+		}
 	}
+	return ids
+}
+
+func duplicateRouteGroupMembersForRoutes(tx *gorm.DB, routeIDs []uint) ([]models.GatewayRouteGroupMember, error) {
+	if len(routeIDs) == 0 {
+		return nil, nil
+	}
+	var members []models.GatewayRouteGroupMember
+	err := tx.Where("route_state_id IN ?", routeIDs).Find(&members).Error
+	return members, err
+}
+
+func duplicateRouteIDMap(tx *gorm.DB, keepID uint, removed []models.GatewayRouteState) (map[uint]uint, error) {
 	if len(removed) == 0 {
 		return map[uint]uint{}, nil
 	}
 	var kept []models.GatewayRouteState
-	if err := tx.Where("site_id = ?", keepID).Find(&kept).Error; err != nil {
+	if err := tx.Preload("Site").Where("site_id = ?", keepID).Find(&kept).Error; err != nil {
 		return nil, err
 	}
 	keptByRouteSignature := map[string]uint{}
@@ -146,25 +185,65 @@ func duplicateRouteIDMap(tx *gorm.DB, keepID uint, siteIDs []uint) (map[uint]uin
 	return out, nil
 }
 
+func reassignDuplicateRouteReferences(tx *gorm.DB, migrations []duplicateRouteReferenceMigration) error {
+	for _, migration := range migrations {
+		routeIDMap, err := duplicateRouteIDMap(tx, migration.KeepID, migration.RemovedRoutes)
+		if err != nil {
+			return err
+		}
+		if err := reassignDuplicateRouteGroupMembers(tx, migration.RouteGroupMembers, routeIDMap); err != nil {
+			return err
+		}
+		if err := reassignDuplicateRouteLogReferences(tx, routeIDMap); err != nil {
+			return err
+		}
+		if err := clearUnmappedDuplicateRouteReferences(tx, migration.RemovedRouteIDs, routeIDMap); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func reassignDuplicateRouteGroupMembers(tx *gorm.DB, members []models.GatewayRouteGroupMember, routeIDMap map[uint]uint) error {
+	for _, member := range members {
+		targetRouteID := routeIDMap[member.RouteStateID]
+		if targetRouteID == 0 {
+			continue
+		}
+		moved := models.GatewayRouteGroupMember{GroupID: member.GroupID, RouteStateID: targetRouteID}
+		if err := tx.Where("group_id = ? AND route_state_id = ?", moved.GroupID, moved.RouteStateID).
+			FirstOrCreate(&moved).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func duplicateRouteSignature(route models.GatewayRouteState) string {
-	fingerprint := strings.TrimSpace(route.KeyFingerprint)
-	if fingerprint == "" {
+	routeKey := duplicateRouteSignatureKey(route)
+	if routeKey == "" {
 		return ""
 	}
 	return strings.Join([]string{
-		fingerprint,
+		routeKey,
 		normalizeGatewayRouteType(route.RouteType),
 		services.NormalizeGatewayRoutePath(route.RoutePath),
 	}, "\x00")
 }
 
-func reassignDuplicateSiteReferences(tx *gorm.DB, keepID uint, siteIDs []uint, removedRouteIDs []uint, routeIDMap map[uint]uint) error {
-	if err := reassignDuplicateRouteLogReferences(tx, routeIDMap); err != nil {
-		return err
+func duplicateRouteSignatureKey(route models.GatewayRouteState) string {
+	apiKey := strings.TrimSpace(services.GatewayRouteAPIKeyForState(route))
+	if apiKey != "" {
+		return "key:" + apiKey
 	}
-	if err := clearUnmappedDuplicateRouteReferences(tx, removedRouteIDs, routeIDMap); err != nil {
-		return err
+	fingerprint := strings.TrimSpace(route.KeyFingerprint)
+	if fingerprint == "" {
+		return ""
 	}
+	return "fp:" + fingerprint
+}
+
+func reassignDuplicateSiteReferences(tx *gorm.DB, keepID uint, siteIDs []uint) error {
 	updates := []func() error{
 		func() error {
 			return updateCheckinRunsInBatches(tx, "site_id IN ?", []any{siteIDs}, "site_id", keepID)
@@ -352,7 +431,7 @@ func mergeMissingJSONFields(base models.JSONMap, updates models.JSONMap) models.
 	out := cloneJSONMap(nonNilJSON(base))
 	for key, value := range nonNilJSON(updates) {
 		if key == "api_keys" {
-			out[key] = mergeAPIKeyLists(out[key], value)
+			out[key] = mergeDuplicateAPIKeyLists(out[key], value)
 			continue
 		}
 		if jsonValueIsEmpty(out[key]) && !jsonValueIsEmpty(value) {
@@ -360,6 +439,173 @@ func mergeMissingJSONFields(base models.JSONMap, updates models.JSONMap) models.
 		}
 	}
 	return out
+}
+
+type duplicateAPIKeyMergeIndex struct {
+	byIdentity map[string]int
+	byConfig   map[string]int
+	byValue    map[string]int
+}
+
+const duplicateAPIKeyAmbiguousValueIndex = -1
+
+func newDuplicateAPIKeyMergeIndex() duplicateAPIKeyMergeIndex {
+	return duplicateAPIKeyMergeIndex{
+		byIdentity: map[string]int{},
+		byConfig:   map[string]int{},
+		byValue:    map[string]int{},
+	}
+}
+
+func mergeDuplicateAPIKeyLists(preferredValue any, extraValue any) []map[string]any {
+	merged := []map[string]any{}
+	index := newDuplicateAPIKeyMergeIndex()
+	for _, item := range apiKeyListFromAny(preferredValue) {
+		index.add(&merged, item)
+	}
+	for _, item := range apiKeyListFromAny(extraValue) {
+		index.add(&merged, item)
+	}
+	return merged
+}
+
+func (i duplicateAPIKeyMergeIndex) add(merged *[]map[string]any, item map[string]any) {
+	identity := apiKeyEntryIdentity(item)
+	if identity == "" {
+		return
+	}
+	if i.preserveExisting(merged, item, identity) {
+		return
+	}
+	pos := len(*merged)
+	*merged = append(*merged, item)
+	i.byIdentity[identity] = pos
+	signature := apiKeyEntryConfigSignature(item)
+	if signature != "" {
+		i.byConfig[signature] = pos
+	}
+	if value := apiKeyEntryValue(item); value != "" {
+		i.addValue(value, pos)
+	}
+}
+
+func (i duplicateAPIKeyMergeIndex) addValue(value string, pos int) {
+	current, ok := i.byValue[value]
+	if !ok {
+		i.byValue[value] = pos
+		return
+	}
+	if current != pos {
+		i.byValue[value] = duplicateAPIKeyAmbiguousValueIndex
+	}
+}
+
+func (i duplicateAPIKeyMergeIndex) preserveExisting(merged *[]map[string]any, item map[string]any, identity string) bool {
+	if pos, ok := i.byIdentity[identity]; ok {
+		mergeDuplicateAPIKeyMetadata((*merged)[pos], item)
+		return true
+	}
+	signature := apiKeyEntryConfigSignature(item)
+	if signature != "" {
+		if pos, ok := i.byConfig[signature]; ok {
+			mergeDuplicateAPIKeyMetadata((*merged)[pos], item)
+			return true
+		}
+	}
+	value := apiKeyEntryValue(item)
+	if value != "" {
+		if pos, ok := i.byValue[value]; ok && pos >= 0 && apiKeyEntryValueFallbackAllowed((*merged)[pos], item) {
+			mergeDuplicateAPIKeyMetadata((*merged)[pos], item)
+			return true
+		}
+	}
+	return false
+}
+
+func mergeDuplicateAPIKeyMetadata(target map[string]any, item map[string]any) {
+	if apiKeyEntryMetadataStrength(item) > apiKeyEntryMetadataStrength(target) {
+		for _, key := range []string{"id", "name", "source", "status"} {
+			if value := apiKeyEntryOptionalString(item, key); value != "" {
+				target[key] = item[key]
+			}
+		}
+	}
+	fillMissingDuplicateAPIKeyRouteMetadata(target, item)
+	preserveLocalAPIKeyRequestBaseURLs(target, item)
+}
+
+func apiKeyEntryMetadataStrength(item map[string]any) int {
+	score := 0
+	if apiKeyEntryOptionalString(item, "id") != "" {
+		score += 4
+	}
+	source := strings.ToLower(apiKeyEntryOptionalString(item, "source"))
+	if source != "" && source != "manual" && source != "custom" && source != "user" {
+		score += 2
+	}
+	if apiKeyEntryOptionalString(item, "status") != "" {
+		score++
+	}
+	return score
+}
+
+func fillMissingDuplicateAPIKeyRouteMetadata(target map[string]any, item map[string]any) {
+	for _, key := range []string{"route_type", "api_type", "api_format", "type", "route_path", "request_path", "gateway_route_path", "image_generation_path", "image_edit_path"} {
+		if apiKeyEntryOptionalString(target, key) == "" && apiKeyEntryOptionalString(item, key) != "" {
+			target[key] = item[key]
+		}
+	}
+}
+
+func apiKeyEntryValueFallbackAllowed(existing map[string]any, item map[string]any) bool {
+	if apiKeyEntryRouteConfigSignature(existing) == "" || apiKeyEntryRouteConfigSignature(item) == "" {
+		return true
+	}
+	return apiKeyEntryRouteIdentitySignature(existing) == apiKeyEntryRouteIdentitySignature(item)
+}
+
+func apiKeyEntryRouteConfigSignature(item map[string]any) string {
+	parts := []string{
+		apiKeyRouteType(item),
+		apiKeyRoutePath(item),
+		strings.Join(apiKeyRequestBaseURLValues(item), "\n"),
+		apiKeyEntryOptionalString(item, "image_generation_path"),
+		apiKeyEntryOptionalString(item, "image_edit_path"),
+	}
+	if stringPartsEmpty(parts) {
+		return ""
+	}
+	return strings.Join(parts, "\x00")
+}
+
+func apiKeyEntryRouteIdentitySignature(item map[string]any) string {
+	parts := []string{
+		apiKeyRouteType(item),
+		apiKeyRoutePath(item),
+		apiKeyEntryOptionalString(item, "image_generation_path"),
+		apiKeyEntryOptionalString(item, "image_edit_path"),
+	}
+	if stringPartsEmpty(parts) {
+		return ""
+	}
+	return strings.Join(parts, "\x00")
+}
+
+func stringPartsEmpty(parts []string) bool {
+	for _, part := range parts {
+		if strings.TrimSpace(part) != "" {
+			return false
+		}
+	}
+	return true
+}
+
+func apiKeyEntryOptionalString(item map[string]any, key string) string {
+	value, ok := item[key]
+	if !ok || value == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
 }
 
 func uniqueUintIDs(values []uint) []uint {
