@@ -69,7 +69,7 @@ func duplicateSiteBuckets(sites []models.Site) []duplicateSiteBucket {
 	buckets := []duplicateSiteBucket{}
 	for _, site := range sites {
 		key := duplicateSiteGroupKey(site)
-		if key.BaseURL == "" {
+		if key.BaseURL == "" || key.Account == "" {
 			continue
 		}
 		pos, ok := index[key]
@@ -159,6 +159,9 @@ func duplicateSiteAccount(site models.Site) string {
 	}
 	if apiKeysHash := apiKeysIdentityHash(site.Credentials["api_keys"]); apiKeysHash != "" {
 		return "api_keys:" + apiKeysHash
+	}
+	if credentialHash := credentialIdentityHash(site.Credentials); credentialHash != "" {
+		return "credential:" + credentialHash
 	}
 	return ""
 }
@@ -260,6 +263,28 @@ func apiKeysIdentityHash(value any) string {
 		return ""
 	}
 	data, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	return shortHash(string(data))
+}
+
+func credentialIdentityHash(values models.JSONMap) string {
+	keys := []string{"cookie", "access_token", "refresh_token", "auth_token", "token", "authorization", "session", "session_id", "session_token", "jwt", "bearer"}
+	type identityPart struct {
+		Key   string `json:"key"`
+		Value string `json:"value"`
+	}
+	parts := make([]identityPart, 0, len(keys))
+	for _, key := range keys {
+		if value := strings.TrimSpace(jsonMapString(values, key)); value != "" {
+			parts = append(parts, identityPart{Key: key, Value: value})
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	data, err := json.Marshal(parts)
 	if err != nil {
 		return ""
 	}
