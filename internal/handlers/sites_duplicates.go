@@ -14,10 +14,11 @@ import (
 )
 
 type duplicateSiteKey struct {
-	PluginKey       string
-	BaseURL         string
-	Account         string
-	PasswordPresent bool
+	PluginKey           string
+	BaseURL             string
+	Account             string
+	PasswordPresent     bool
+	PasswordFingerprint string
 }
 
 type duplicateSiteItem struct {
@@ -84,10 +85,11 @@ func duplicateSiteBuckets(sites []models.Site) []duplicateSiteBucket {
 
 func duplicateSiteGroupKey(site models.Site) duplicateSiteKey {
 	return duplicateSiteKey{
-		PluginKey:       strings.TrimSpace(site.PluginKey),
-		BaseURL:         normalizeDuplicateBaseURL(site.BaseURL),
-		Account:         duplicateSiteAccount(site),
-		PasswordPresent: duplicatePasswordPresent(site),
+		PluginKey:           strings.TrimSpace(site.PluginKey),
+		BaseURL:             normalizeDuplicateBaseURL(site.BaseURL),
+		Account:             duplicateSiteAccount(site),
+		PasswordPresent:     duplicatePasswordPresent(site),
+		PasswordFingerprint: duplicatePasswordFingerprint(site),
 	}
 }
 
@@ -177,6 +179,28 @@ func duplicatePasswordPresent(site models.Site) bool {
 		}
 	}
 	return false
+}
+
+func duplicatePasswordFingerprint(site models.Site) string {
+	keys := []string{"password", "passwd", "pass"}
+	type passwordPart struct {
+		Key   string `json:"key"`
+		Value string `json:"value"`
+	}
+	parts := make([]passwordPart, 0, len(keys))
+	for _, key := range keys {
+		if value := strings.TrimSpace(jsonMapString(site.Credentials, key)); value != "" {
+			parts = append(parts, passwordPart{Key: key, Value: value})
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	data, err := json.Marshal(parts)
+	if err != nil {
+		return ""
+	}
+	return shortHash(string(data))
 }
 
 func normalizeDuplicateBaseURL(raw string) string {

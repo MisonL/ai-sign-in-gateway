@@ -113,6 +113,52 @@ func TestDuplicateSitesKeepsDifferentPluginsSeparate(t *testing.T) {
 	}
 }
 
+func TestDuplicateSitesKeepsSameAccountDifferentPasswordsSeparate(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:sites-duplicates-password-boundary?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(models.All()...); err != nil {
+		t.Fatalf("auto migrate: %v", err)
+	}
+	sites := []models.Site{
+		{
+			Name: "password-a", BaseURL: "https://example.com", PluginKey: "yellowpeach-newapi",
+			IsEnabled: true, Credentials: models.JSONMap{"email": "user@example.com", "password": "old-password"},
+		},
+		{
+			Name: "password-b", BaseURL: "https://example.com/", PluginKey: "yellowpeach-newapi",
+			IsEnabled: true, Credentials: models.JSONMap{"email": "USER@example.com", "password": "new-password"},
+		},
+	}
+	if err := db.Create(&sites).Error; err != nil {
+		t.Fatalf("create sites: %v", err)
+	}
+
+	groups, err := duplicateSiteGroups(db)
+	if err != nil {
+		t.Fatalf("duplicate groups: %v", err)
+	}
+	if len(groups) != 0 {
+		t.Fatalf("password-conflicting accounts were grouped: %+v", groups)
+	}
+
+	result, err := mergeDuplicateSites(db)
+	if err != nil {
+		t.Fatalf("merge duplicates: %v", err)
+	}
+	if result.DeletedSiteCount != 0 || result.MergedGroupCount != 0 {
+		t.Fatalf("password-conflicting merge result = %+v", result)
+	}
+	var siteCount int64
+	if err := db.Model(&models.Site{}).Count(&siteCount).Error; err != nil {
+		t.Fatalf("count sites: %v", err)
+	}
+	if siteCount != 2 {
+		t.Fatalf("site count after merge = %d", siteCount)
+	}
+}
+
 func TestDuplicateSitesKeepsDifferentCredentialOnlyAccountsSeparate(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:sites-duplicates-credential-boundary?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
