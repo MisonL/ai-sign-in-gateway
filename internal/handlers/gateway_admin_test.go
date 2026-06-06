@@ -135,6 +135,46 @@ func TestUpdateGatewaySettingsRejectsInvalidEnums(t *testing.T) {
 	}
 }
 
+func TestUpdateGatewaySettingsRejectsOutOfRangeRuntimeValues(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{name: "failure threshold low", body: `{"failure_threshold":0}`},
+		{name: "failure threshold high", body: `{"failure_threshold":21}`},
+		{name: "cooldown low", body: `{"cooldown_seconds":9}`},
+		{name: "cooldown high", body: `{"cooldown_seconds":3601}`},
+		{name: "timeout low", body: `{"request_timeout":4}`},
+		{name: "timeout high", body: `{"request_timeout":181}`},
+		{name: "max attempts low", body: `{"max_attempts":-1}`},
+		{name: "max attempts high", body: `{"max_attempts":51}`},
+		{name: "concurrency low", body: `{"route_concurrency_limit":-1}`},
+		{name: "concurrency high", body: `{"route_concurrency_limit":1001}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := newGatewayAdminTestDB(t)
+			seedGatewayAdminSettings(t, db, models.SystemSetting{})
+			app := &App{DB: db}
+
+			rec := httptest.NewRecorder()
+			app.UpdateGatewaySettings(rec, httptest.NewRequest(http.MethodPut, "/settings", strings.NewReader(tc.body)))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+			}
+			var stored models.SystemSetting
+			if err := db.First(&stored, 1).Error; err != nil {
+				t.Fatalf("reload settings: %v", err)
+			}
+			if stored.GatewayFailureThreshold != 3 || stored.GatewayCooldownSeconds != 180 ||
+				stored.GatewayRequestTimeout != 60 || stored.GatewayMaxAttempts != 0 ||
+				stored.GatewayRouteConcurrencyLimit != 5 {
+				t.Fatalf("out-of-range value was persisted: %+v", stored)
+			}
+		})
+	}
+}
+
 func TestUpdateGatewaySettingsPreservesGatewayAPIKeyCase(t *testing.T) {
 	db := newGatewayAdminTestDB(t)
 	seedGatewayAdminSettings(t, db, models.SystemSetting{})

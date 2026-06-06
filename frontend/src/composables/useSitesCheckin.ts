@@ -12,8 +12,9 @@ import {
 import { formatBalance } from '../format'
 import {
   availableCheckinSiteIds,
+  batchCheckinTargetCount as readBatchCheckinTargetCount,
+  batchCheckinTargetSites as readBatchCheckinTargetSites,
   filterCheckinRuns,
-  includedCheckinCount as readIncludedCheckinCount,
   siteCanCheckin as readSiteCanCheckin,
   siteCheckinActionLabel as readSiteCheckinActionLabel,
   siteIncludedInCheckin as readSiteIncludedInCheckin,
@@ -47,6 +48,7 @@ export function useSitesCheckin(options: UseSitesCheckinOptions) {
   const checkinRunSearch = ref('')
   const checkinBatchProgress = ref<{ total: number; done: number; success: number; failed: number } | null>(null)
   const checkinConfigForm = reactive<SettingsData>(createDefaultCheckinConfig())
+  const savedCheckinOnlyEnabledSites = ref(checkinConfigForm.only_enabled_sites)
 
   function siteCanCheckin(site: Site) {
     return readSiteCanCheckin(site, checkinMeta.value)
@@ -68,7 +70,9 @@ export function useSitesCheckin(options: UseSitesCheckinOptions) {
     return readSiteCheckinActionLabel(site, checkinMeta.value)
   }
 
-  const includedCheckinCount = computed(() => readIncludedCheckinCount(options.sites.value, checkinMeta.value))
+  const checkinBatchTargetCount = computed(() =>
+    readBatchCheckinTargetCount(options.sites.value, checkinMeta.value, savedCheckinOnlyEnabledSites.value),
+  )
   const checkinAllIncludedLabel = computed(() => formatProgressLabel(checkinBatchProgress.value, '签到全部已加入', '签到中'))
   const checkinSelectedLabel = computed(() => formatProgressLabel(checkinBatchProgress.value, '签到选中', '签到中'))
   const filteredCheckinRuns = computed(() => filterCheckinRuns(checkinRuns.value, checkinRunSearch.value))
@@ -100,6 +104,7 @@ export function useSitesCheckin(options: UseSitesCheckinOptions) {
       checkinMeta.value = map
       checkinRuns.value = runs
       Object.assign(checkinConfigForm, settingsData)
+      savedCheckinOnlyEnabledSites.value = settingsData.only_enabled_sites
       syncSelectedCheckinIds()
     } catch (err) {
       options.toast.error(err instanceof Error ? err.message : '签到信息加载失败')
@@ -125,10 +130,11 @@ export function useSitesCheckin(options: UseSitesCheckinOptions) {
     Object.assign(target, mergeCheckinResult(target, result))
   }
 
-  async function executeCheckinBatch(siteIds: number[], onlyEnabled: boolean) {
+  async function executeCheckinBatch(siteIds: number[], onlyEnabled?: boolean) {
+    const effectiveOnlyEnabled = onlyEnabled ?? savedCheckinOnlyEnabledSites.value
     const targets = siteIds.length
       ? options.sites.value.filter((site) => siteIds.includes(site.id))
-      : options.sites.value.filter((site) => (onlyEnabled ? siteRunnableForCheckin(site) : true))
+      : readBatchCheckinTargetSites(options.sites.value, checkinMeta.value, effectiveOnlyEnabled)
 
     if (!targets.length) {
       options.toast.error('当前没有可执行的站点。')
@@ -165,7 +171,7 @@ export function useSitesCheckin(options: UseSitesCheckinOptions) {
   }
 
   async function handleCheckinAllIncluded() {
-    await executeCheckinBatch([], true)
+    await executeCheckinBatch([], undefined)
   }
 
   async function handleCheckinSelected() {
@@ -191,7 +197,9 @@ export function useSitesCheckin(options: UseSitesCheckinOptions) {
   async function saveCheckinConfig(form?: SettingsData) {
     checkinSettingsBusy.value = true
     try {
-      Object.assign(checkinConfigForm, await updateSettings(form ?? checkinConfigForm))
+      const savedSettings = await updateSettings(form ?? checkinConfigForm)
+      Object.assign(checkinConfigForm, savedSettings)
+      savedCheckinOnlyEnabledSites.value = savedSettings.only_enabled_sites
       options.toast.success('签到配置已保存。')
       checkinConfigOpen.value = false
     } catch (err) {
@@ -227,7 +235,7 @@ export function useSitesCheckin(options: UseSitesCheckinOptions) {
     checkinSettingsBusy,
     checkinRunSearch,
     checkinConfigForm,
-    includedCheckinCount,
+    checkinBatchTargetCount,
     checkinAllIncludedLabel,
     checkinSelectedLabel,
     filteredCheckinRuns,

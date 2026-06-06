@@ -22,7 +22,7 @@ defineProps<{
   <div class="sites-page page-stack page-stack--dashboard">
     <SitesToolbar
       :busy="view.busy"
-      :included-checkin-count="view.includedCheckinCount"
+      :checkin-batch-target-count="view.checkinBatchTargetCount"
       :checkin-all-included-label="view.checkinAllIncludedLabel"
       :connectivity-sweep-label="view.connectivitySweepLabel"
       :duplicate-check-loading="view.duplicateCheckLoading"

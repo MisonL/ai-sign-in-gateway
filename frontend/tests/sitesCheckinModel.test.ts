@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 
 import {
   availableCheckinSiteIds,
+  batchCheckinTargetCount,
+  batchCheckinTargetSites,
   filterCheckinRuns,
   includedCheckinCount,
   siteCanCheckin,
@@ -107,6 +109,24 @@ test('counts included checkin sites and syncs selected ids', () => {
   assert.equal(includedCheckinCount(sites, meta), 2)
   assert.deepEqual([...available], [1])
   assert.deepEqual(syncSelectedCheckinIds([1, 2, 3], available), [1])
+})
+
+test('counts batch checkin targets using the saved include-all mode', () => {
+  const sites = [
+    site({ id: 1 }),
+    site({ id: 2 }),
+    site({ id: 3, is_enabled: false }),
+  ]
+  const meta = new Map([
+    [1, checkin({ id: 1, include_in_checkin: false })],
+    [2, checkin({ id: 2, include_in_checkin: false })],
+    [3, checkin({ id: 3, include_in_checkin: false })],
+  ])
+
+  assert.equal(includedCheckinCount(sites, meta), 0)
+  assert.equal(batchCheckinTargetCount(sites, meta, true), 0)
+  assert.equal(batchCheckinTargetCount(sites, meta, false), 3)
+  assert.deepEqual(batchCheckinTargetSites(sites, meta, false).map((item) => item.id), [1, 2, 3])
 })
 
 test('filters checkin runs by searchable fields', () => {

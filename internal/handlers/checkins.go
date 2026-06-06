@@ -231,7 +231,7 @@ func sleepWithContext(ctx context.Context, duration time.Duration) bool {
 func filterEmptyCheckinResponses(items []schemas.CheckinRunResponse) []schemas.CheckinRunResponse {
 	out := make([]schemas.CheckinRunResponse, 0, len(items))
 	for _, item := range items {
-		if item.ID == 0 {
+		if item.ID == 0 && item.Status == "" && item.Message == "" {
 			continue
 		}
 		out = append(out, item)
@@ -247,8 +247,8 @@ func (a *App) executeSiteCheckinWithRetryAt(ctx context.Context, site models.Sit
 	attempts := retryCount + 1
 	var run models.CheckinRun
 	for attempt := 1; attempt <= attempts; attempt++ {
-		run = a.executeSiteCheckinAt(ctx, site, triggerType, timeoutSeconds, runAt)
-		if strings.EqualFold(strings.TrimSpace(run.Status), "success") || ctx.Err() != nil {
+		run = a.executeSiteCheckinAttemptAt(ctx, site, triggerType, timeoutSeconds, attempt, runAt)
+		if run.ID == 0 || strings.EqualFold(strings.TrimSpace(run.Status), "success") || ctx.Err() != nil {
 			return run
 		}
 	}
@@ -310,6 +310,10 @@ func (a *App) SiteCheckin(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if canCheckin, reason := a.siteCanCheckin(site); !canCheckin {
+		writeError(w, http.StatusBadRequest, reason)
+		return
+	}
 	settings, _ := a.checkinBatchSettings()
 	run := a.executeSiteCheckin(r.Context(), site, "manual", settings.RequestTimeout)
 	var refreshed models.Site
@@ -338,9 +342,22 @@ func (a *App) executeSiteCheckin(ctx context.Context, site models.Site, triggerT
 }
 
 func (a *App) executeSiteCheckinAt(ctx context.Context, site models.Site, triggerType string, timeoutSeconds int, runAt time.Time) models.CheckinRun {
+	return a.executeSiteCheckinAttemptAt(ctx, site, triggerType, timeoutSeconds, 1, runAt)
+}
+
+func (a *App) executeSiteCheckinAttemptAt(ctx context.Context, site models.Site, triggerType string, timeoutSeconds int, attemptCount int, runAt time.Time) models.CheckinRun {
+	if attemptCount < 1 {
+		attemptCount = 1
+	}
 	now := checkinRunTimestamp(runAt)
-	run := models.CheckinRun{SiteID: &site.ID, TriggerType: triggerType, Status: "running", Message: "签到执行中。", StartedAt: now}
-	_ = a.DB.Create(&run).Error
+	run := models.CheckinRun{SiteID: &site.ID, TriggerType: triggerType, Status: "running", Message: "签到执行中。", AttemptCount: attemptCount, StartedAt: now}
+	if err := a.DB.Create(&run).Error; err != nil {
+		finished := time.Now().UTC()
+		run.Status = "failed"
+		run.Message = "创建签到记录失败: " + err.Error()
+		run.FinishedAt = &finished
+		return run
+	}
 	manager := a.PluginManager
 	if manager == nil {
 		manager = plugins.NewManager()

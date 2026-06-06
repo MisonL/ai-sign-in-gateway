@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"sort"
@@ -992,31 +993,31 @@ func (a *App) UpdateGatewaySettings(w http.ResponseWriter, r *http.Request) {
 	} else if ok {
 		settings.GatewayAPIKey = value
 	}
-	if value, ok, err := gatewaySettingsInt(payload, "failure_threshold"); err != nil {
+	if value, ok, err := gatewaySettingsIntInRange(payload, "failure_threshold", 1, 20); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	} else if ok {
 		settings.GatewayFailureThreshold = int(value)
 	}
-	if value, ok, err := gatewaySettingsInt(payload, "cooldown_seconds"); err != nil {
+	if value, ok, err := gatewaySettingsIntInRange(payload, "cooldown_seconds", 10, 3600); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	} else if ok {
 		settings.GatewayCooldownSeconds = int(value)
 	}
-	if value, ok, err := gatewaySettingsInt(payload, "request_timeout"); err != nil {
+	if value, ok, err := gatewaySettingsIntInRange(payload, "request_timeout", 5, 180); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	} else if ok {
 		settings.GatewayRequestTimeout = int(value)
 	}
-	if value, ok, err := gatewaySettingsInt(payload, "max_attempts"); err != nil {
+	if value, ok, err := gatewaySettingsIntInRange(payload, "max_attempts", 0, 50); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	} else if ok {
 		settings.GatewayMaxAttempts = int(value)
 	}
-	if value, ok, err := gatewaySettingsInt(payload, "route_concurrency_limit"); err != nil {
+	if value, ok, err := gatewaySettingsIntInRange(payload, "route_concurrency_limit", 0, 1000); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	} else if ok {
@@ -1073,6 +1074,17 @@ func gatewaySettingsInt(payload map[string]json.RawMessage, key string) (int, bo
 	var value int
 	if err := json.Unmarshal(raw, &value); err != nil {
 		return 0, true, errors.New(key + " 类型必须是整数")
+	}
+	return value, true, nil
+}
+
+func gatewaySettingsIntInRange(payload map[string]json.RawMessage, key string, minValue int, maxValue int) (int, bool, error) {
+	value, ok, err := gatewaySettingsInt(payload, key)
+	if err != nil || !ok {
+		return value, ok, err
+	}
+	if value < minValue || value > maxValue {
+		return 0, true, fmt.Errorf("%s 必须在 %d 到 %d 之间", key, minValue, maxValue)
 	}
 	return value, true, nil
 }

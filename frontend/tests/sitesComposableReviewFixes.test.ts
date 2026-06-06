@@ -115,6 +115,37 @@ test('sites batch checkin uses backend batch endpoint', async () => {
   assert.doesNotMatch(source, /for \(const site of targets\) \{\s+try \{\s+const result = await runSiteCheckin\(site\.id\)/)
 })
 
+test('sites batch checkin preserves backend only-enabled defaults', async () => {
+  const sitesApi = await readFile(apiSitesPath, 'utf8')
+  const sitesCheckin = await readFile(sitesCheckinPath, 'utf8')
+
+  assert.match(sitesApi, /runBatch\(siteIds: number\[\] = \[\], onlyEnabled\?: boolean\)/)
+  assert.match(sitesApi, /const payload: \{ site_ids: number\[\]; only_enabled\?: boolean \} = \{ site_ids: siteIds \}/)
+  assert.match(sitesApi, /if \(onlyEnabled !== undefined\) \{\s+payload\.only_enabled = onlyEnabled\s+\}/)
+  assert.match(sitesCheckin, /const checkinConfigForm = reactive<SettingsData>\(createDefaultCheckinConfig\(\)\)/)
+  assert.match(sitesCheckin, /const savedCheckinOnlyEnabledSites = ref\(checkinConfigForm\.only_enabled_sites\)/)
+  assert.doesNotMatch(sitesCheckin, /const defaultCheckinConfig =/)
+  assert.match(sitesCheckin, /savedCheckinOnlyEnabledSites\.value = settingsData\.only_enabled_sites/)
+  assert.match(sitesCheckin, /savedCheckinOnlyEnabledSites\.value = savedSettings\.only_enabled_sites/)
+  assert.match(sitesCheckin, /const effectiveOnlyEnabled = onlyEnabled \?\? savedCheckinOnlyEnabledSites\.value/)
+  assert.match(sitesCheckin, /readBatchCheckinTargetSites\(options\.sites\.value, checkinMeta\.value, effectiveOnlyEnabled\)/)
+  assert.match(sitesCheckin, /checkinBatchTargetCount = computed/)
+  assert.match(sitesCheckin, /readBatchCheckinTargetCount\(options\.sites\.value, checkinMeta\.value, savedCheckinOnlyEnabledSites\.value\)/)
+  assert.match(sitesCheckin, /executeCheckinBatch\(\[\], undefined\)/)
+  assert.match(sitesCheckin, /executeCheckinBatch\(\[\.\.\.selectedCheckinIds\.value\], false\)/)
+})
+
+test('sites toolbar enables the batch checkin button from the resolved target count', async () => {
+  const toolbar = await readFile(sitesToolbarPath, 'utf8')
+  const page = await readFile(sitesPageContentPath, 'utf8')
+
+  assert.match(toolbar, /checkinBatchTargetCount: number/)
+  assert.match(toolbar, /:disabled="!checkinBatchTargetCount"/)
+  assert.match(page, /:checkin-batch-target-count="view\.checkinBatchTargetCount"/)
+  assert.doesNotMatch(toolbar, /includedCheckinCount/)
+  assert.doesNotMatch(page, /included-checkin-count/)
+})
+
 test('unused frontend wrappers are not reintroduced', async () => {
   const overviewApi = await readFile(apiOverviewPath, 'utf8')
   const settingsApi = await readFile(apiSettingsPath, 'utf8')

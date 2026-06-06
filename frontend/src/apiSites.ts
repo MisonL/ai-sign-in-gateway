@@ -210,9 +210,13 @@ export function updateCheckinParticipation(
   })
 }
 
-export function runBatch(siteIds: number[] = [], onlyEnabled = true): Promise<CheckinRun[]> {
+export function runBatch(siteIds: number[] = [], onlyEnabled?: boolean): Promise<CheckinRun[]> {
+  const payload: { site_ids: number[]; only_enabled?: boolean } = { site_ids: siteIds }
+  if (onlyEnabled !== undefined) {
+    payload.only_enabled = onlyEnabled
+  }
   return request('/checkins/batch', {
     method: 'POST',
-    body: JSON.stringify({ site_ids: siteIds, only_enabled: onlyEnabled }),
+    body: JSON.stringify(payload),
   })
 }

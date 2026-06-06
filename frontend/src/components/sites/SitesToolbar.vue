@@ -8,7 +8,7 @@ import {
 
 defineProps<{
   busy: boolean
-  includedCheckinCount: number
+  checkinBatchTargetCount: number
   checkinAllIncludedLabel: string
   connectivitySweepLabel: string
   duplicateCheckLoading: boolean
@@ -45,7 +45,7 @@ const emit = defineEmits<{
         type="primary"
         class="sites-toolbar__seg-btn sites-toolbar__seg-btn--primary"
         :loading="busy"
-        :disabled="!includedCheckinCount"
+        :disabled="!checkinBatchTargetCount"
         @click="emit('checkin-all-included')"
       >
         {{ checkinAllIncludedLabel }}

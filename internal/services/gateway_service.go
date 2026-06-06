@@ -1382,10 +1382,10 @@ func filterAndOrderCandidates(routes []GatewayRoute, group, routeType string, po
 	}
 
 	if len(overflowClosed) > 0 {
-		ordered = append(ordered, sortConcurrencyOverflow(overflowClosed)...)
+		ordered = append(ordered, sortConcurrencyOverflow(overflowClosed, policy)...)
 	}
 	if len(overflowHalf) > 0 {
-		ordered = append(ordered, sortByLoadAndPriority(overflowHalf)...)
+		ordered = append(ordered, sortConcurrencyOverflow(overflowHalf, policy)...)
 	}
 	return ordered
 }
@@ -1507,8 +1507,11 @@ func preferActiveWithinLimit(in []GatewayRoute, policy GatewayPolicy) []GatewayR
 	return out
 }
 
-func sortConcurrencyOverflow(in []GatewayRoute) []GatewayRoute {
-	return sortByStrictPriority(in)
+func sortConcurrencyOverflow(in []GatewayRoute, policy GatewayPolicy) []GatewayRoute {
+	if strings.ToLower(strings.TrimSpace(policy.ConcurrencyOverflowStrategy)) == "sequential" {
+		return sortByStrictPriority(in)
+	}
+	return sortByLatency(in)
 }
 
 func candidateHealthRank(r GatewayRoute) int {

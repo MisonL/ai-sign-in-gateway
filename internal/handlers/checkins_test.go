@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -414,6 +415,22 @@ func TestSub2APIPlatformCanDisableCheckin(t *testing.T) {
 	if got, _ := runs[0]["site_id"].(float64); uint(got) != enabledSite.ID {
 		t.Fatalf("batch site_id = %v", runs[0]["site_id"])
 	}
+
+	router := chi.NewRouter()
+	router.Post("/sites/{siteID}/checkin", app.SiteCheckin)
+	singleReq := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/sites/%d/checkin", disabledSite.ID), nil)
+	singleRec := httptest.NewRecorder()
+	router.ServeHTTP(singleRec, singleReq)
+	if singleRec.Code != http.StatusBadRequest {
+		t.Fatalf("single status = %d, body = %s", singleRec.Code, singleRec.Body.String())
+	}
+	var runCount int64
+	if err := db.Model(&models.CheckinRun{}).Where("site_id = ?", disabledSite.ID).Count(&runCount).Error; err != nil {
+		t.Fatalf("count disabled runs: %v", err)
+	}
+	if runCount != 0 {
+		t.Fatalf("disabled single-site runs = %d", runCount)
+	}
 }
 
 func TestRunBatchCheckinRejectsMalformedJSON(t *testing.T) {
@@ -740,6 +757,80 @@ func TestCheckinLimiterIsSharedAcrossAppInstances(t *testing.T) {
 	}
 }
 
+func TestRunBatchCheckinStopsBeforeExternalRequestWhenRunCreateFails(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"message": "signed",
+		})
+	}))
+	defer server.Close()
+
+	db, err := gorm.Open(sqlite.Open("file:checkin-run-create-fails?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(models.All()...); err != nil {
+		t.Fatalf("auto migrate: %v", err)
+	}
+	if err := db.Create(&models.SystemSetting{
+		ID:                       1,
+		RequestTimeout:           5,
+		OnlyEnabledSites:         true,
+		CheckinConcurrency:       1,
+		CheckinGlobalConcurrency: 1,
+		CheckinIntervalSeconds:   0,
+		RetryCount:               2,
+	}).Error; err != nil {
+		t.Fatalf("create settings: %v", err)
+	}
+	site := checkinBatchTestSite("broken-run", server.URL, true)
+	if err := db.Create(&site).Error; err != nil {
+		t.Fatalf("create site: %v", err)
+	}
+	const createMessage = "forced checkin run create failure"
+	db.Callback().Create().Before("gorm:create").Register("test_fail_checkin_run_create", func(tx *gorm.DB) {
+		if tx.Statement.Table == "checkin_runs" {
+			tx.AddError(errors.New(createMessage))
+		}
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/checkins/batch", bytes.NewReader([]byte(`{"only_enabled":true}`)))
+	rec := httptest.NewRecorder()
+	(&App{DB: db, PluginManager: plugins.NewManager()}).RunBatchCheckin(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var payload []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(payload) != 1 {
+		t.Fatalf("payload len = %d, body = %s", len(payload), rec.Body.String())
+	}
+	if got, _ := payload[0]["status"].(string); got != "failed" {
+		t.Fatalf("status = %q, body = %s", got, rec.Body.String())
+	}
+	if got, _ := payload[0]["message"].(string); !strings.Contains(got, createMessage) {
+		t.Fatalf("message = %q", got)
+	}
+	if got, _ := payload[0]["attempt_count"].(float64); got != 1 {
+		t.Fatalf("attempt_count = %v", payload[0]["attempt_count"])
+	}
+	if requestCount != 0 {
+		t.Fatalf("external checkin request count = %d", requestCount)
+	}
+	var runCount int64
+	if err := db.Model(&models.CheckinRun{}).Where("site_id = ?", site.ID).Count(&runCount).Error; err != nil {
+		t.Fatalf("count runs: %v", err)
+	}
+	if runCount != 0 {
+		t.Fatalf("persisted runs = %d", runCount)
+	}
+}
+
 func checkinBatchTestSite(name, baseURL string, enabled bool) models.Site {
 	return models.Site{
 		Name:      name,
@@ -756,7 +847,7 @@ func checkinBatchTestSite(name, baseURL string, enabled bool) models.Site {
 	}
 }
 
-func TestSiteCheckinUpdatesSiteStatusWhenPluginIsMissing(t *testing.T) {
+func TestSiteCheckinRejectsMissingPlugin(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:checkin-missing-plugin-status?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -775,7 +866,7 @@ func TestSiteCheckinUpdatesSiteStatusWhenPluginIsMissing(t *testing.T) {
 	req = contextWithRoute(req, routeCtx)
 	rec := httptest.NewRecorder()
 	(&App{DB: db, PluginManager: plugins.NewManager()}).SiteCheckin(rec, req)
-	if rec.Code != http.StatusOK {
+	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 
@@ -783,11 +874,18 @@ func TestSiteCheckinUpdatesSiteStatusWhenPluginIsMissing(t *testing.T) {
 	if err := db.First(&stored, site.ID).Error; err != nil {
 		t.Fatalf("reload site: %v", err)
 	}
-	if stored.LastStatus == nil || *stored.LastStatus != "failed" {
+	if stored.LastStatus != nil {
 		t.Fatalf("last status = %v", stored.LastStatus)
 	}
-	if stored.LastMessage == nil || !strings.Contains(*stored.LastMessage, "Plugin 'missing-plugin' not found") {
+	if stored.LastMessage != nil {
 		t.Fatalf("last message = %v", stored.LastMessage)
+	}
+	var runCount int64
+	if err := db.Model(&models.CheckinRun{}).Where("site_id = ?", site.ID).Count(&runCount).Error; err != nil {
+		t.Fatalf("count runs: %v", err)
+	}
+	if runCount != 0 {
+		t.Fatalf("missing plugin runs = %d", runCount)
 	}
 }
 

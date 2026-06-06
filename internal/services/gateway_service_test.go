@@ -760,7 +760,7 @@ func TestGatewayConcurrencyTransferLimitOnlyMovesAfterRouteLimit(t *testing.T) {
 	}
 }
 
-func TestGatewayConcurrencyOverflowUsesPriorityWhenEveryRouteIsFull(t *testing.T) {
+func TestGatewayConcurrencyOverflowUsesLatencyFirstWhenEveryRouteIsFull(t *testing.T) {
 	ResetGatewayCountersForTest()
 	firstCalls := 0
 	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -820,11 +820,79 @@ func TestGatewayConcurrencyOverflowUsesPriorityWhenEveryRouteIsFull(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	if result.StatusCode != http.StatusOK || !strings.Contains(string(result.Body), `"route":"third"`) {
+		t.Fatalf("unexpected proxy result: status=%d body=%s", result.StatusCode, result.Body)
+	}
+	if firstCalls != 0 || secondCalls != 0 || thirdCalls != 1 {
+		t.Fatalf("expected latency-first overflow to choose lowest-latency route, first=%d second=%d third=%d", firstCalls, secondCalls, thirdCalls)
+	}
+}
+
+func TestGatewayConcurrencyOverflowUsesSequentialPriorityWhenEveryRouteIsFull(t *testing.T) {
+	ResetGatewayCountersForTest()
+	firstCalls := 0
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstCalls++
+		_, _ = w.Write([]byte(`{"route":"first"}`))
+	}))
+	defer first.Close()
+	secondCalls := 0
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondCalls++
+		_, _ = w.Write([]byte(`{"route":"second"}`))
+	}))
+	defer second.Close()
+	thirdCalls := 0
+	third := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		thirdCalls++
+		_, _ = w.Write([]byte(`{"route":"third"}`))
+	}))
+	defer third.Close()
+
+	db := newGatewayTestDB(t)
+	createGatewaySite(t, db, "aaa-first", first.URL, "first-key")
+	createGatewaySite(t, db, "mmm-second", second.URL, "second-key")
+	createGatewaySite(t, db, "zzz-third", third.URL, "third-key")
+	if _, err := SyncGatewayRoutes(db); err != nil {
+		t.Fatal(err)
+	}
+	var states []models.GatewayRouteState
+	if err := db.Order("route_priority asc, id asc").Find(&states).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(states) != 3 {
+		t.Fatalf("route count = %d", len(states))
+	}
+	latencies := []float64{300, 200, 10}
+	for idx := range states {
+		states[idx].RoutePriority = idx * 100
+		states[idx].EWMALatencyMS = &latencies[idx]
+		if err := db.Save(&states[idx]).Error; err != nil {
+			t.Fatal(err)
+		}
+		for range 2 {
+			acquireRoute(states[idx].ID)
+			defer releaseRoute(states[idx].ID)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/v1/models", nil)
+	result, err := ProxyGatewayRequest(req.Context(), db, req, "models", "", "", GatewayPolicy{
+		RouteStrategy:               "round_robin",
+		RequestTimeout:              5,
+		RouteConcurrencyLimit:       2,
+		ConcurrencyTransferStrategy: "limit_only",
+		ConcurrencyOverflowStrategy: "sequential",
+		FailureThreshold:            5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if result.StatusCode != http.StatusOK || !strings.Contains(string(result.Body), `"route":"first"`) {
 		t.Fatalf("unexpected proxy result: status=%d body=%s", result.StatusCode, result.Body)
 	}
 	if firstCalls != 1 || secondCalls != 0 || thirdCalls != 0 {
-		t.Fatalf("expected overflow to continue from priority route when all are full, first=%d second=%d third=%d", firstCalls, secondCalls, thirdCalls)
+		t.Fatalf("expected sequential overflow to keep priority route, first=%d second=%d third=%d", firstCalls, secondCalls, thirdCalls)
 	}
 }
 

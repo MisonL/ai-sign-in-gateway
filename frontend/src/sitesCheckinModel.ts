@@ -31,6 +31,22 @@ export function includedCheckinCount(sites: readonly Site[], checkinMeta: Readon
   return sites.filter((site) => siteIncludedInCheckin(site, checkinMeta)).length
 }
 
+export function batchCheckinTargetSites(
+  sites: readonly Site[],
+  checkinMeta: ReadonlyMap<number, CheckinSite>,
+  onlyEnabled: boolean,
+): Site[] {
+  return sites.filter((site) => (onlyEnabled ? siteRunnableForCheckin(site, checkinMeta) : siteCanCheckin(site, checkinMeta)))
+}
+
+export function batchCheckinTargetCount(
+  sites: readonly Site[],
+  checkinMeta: ReadonlyMap<number, CheckinSite>,
+  onlyEnabled: boolean,
+): number {
+  return batchCheckinTargetSites(sites, checkinMeta, onlyEnabled).length
+}
+
 export function availableCheckinSiteIds(sites: readonly Site[], checkinMeta: ReadonlyMap<number, CheckinSite>): Set<number> {
   return new Set(sites.filter((site) => siteRunnableForCheckin(site, checkinMeta)).map((site) => site.id))
 }
