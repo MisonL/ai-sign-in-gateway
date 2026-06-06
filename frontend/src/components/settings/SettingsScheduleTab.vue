@@ -113,6 +113,7 @@ defineProps<{
             </span>
             <a-switch
               id="settings-schedule-enabled"
+              class="app-switch app-switch--text"
               v-model:checked="view.form.schedule_enabled"
               aria-labelledby="settings-schedule-enabled-label"
               aria-describedby="settings-schedule-enabled-help"
@@ -127,6 +128,7 @@ defineProps<{
             </span>
             <a-switch
               id="settings-only-enabled-sites"
+              class="app-switch app-switch--text"
               v-model:checked="view.form.only_enabled_sites"
               aria-labelledby="settings-only-enabled-sites-label"
               aria-describedby="settings-only-enabled-sites-help"

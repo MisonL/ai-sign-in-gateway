@@ -36,7 +36,7 @@
 
 .route-management-toolbar {
   display: grid;
-  grid-template-columns: minmax(220px, auto) minmax(420px, 1fr);
+  grid-template-columns: minmax(140px, auto) minmax(0, 1fr);
   align-items: center;
   gap: var(--rhythm-2);
   min-width: 0;
@@ -75,7 +75,7 @@
 
 .gateway-access--route {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) max-content max-content minmax(160px, 0.64fr) max-content;
+  grid-template-columns: minmax(200px, 1fr) max-content max-content minmax(120px, 0.5fr) max-content;
   align-items: center;
   gap: 8px;
   min-width: 0;
@@ -84,16 +84,80 @@
 
 .gateway-access--route .ant-btn {
   width: auto !important;
-  min-width: 72px !important;
+  min-width: 64px !important;
   height: var(--control-height) !important;
 }
 
 .gateway-access--route code:first-child {
-  max-width: min(28vw, 380px);
+  max-width: min(38vw, 520px);
 }
 
 .gateway-access--route code:nth-of-type(2) {
-  max-width: min(18vw, 220px);
+  max-width: min(20vw, 240px);
+}
+
+.gateway-route-page.gateway-route-page .page-toolbar--actions {
+  grid-template-columns: minmax(0, 1fr) !important;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.gateway-route-page.gateway-route-page .page-toolbar--actions > :last-child {
+  justify-self: start;
+  width: 100%;
+}
+
+.gateway-route-page.gateway-route-page .gateway-toolbar-actions.ant-space {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  gap: 8px !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  overflow: visible !important;
+}
+
+.gateway-route-page.gateway-route-page .gateway-toolbar-actions.ant-space .ant-space-item {
+  display: inline-flex;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.gateway-route-page.gateway-route-page .gateway-toolbar-actions.ant-space .ant-btn,
+.gateway-route-page.gateway-route-page .gateway-toolbar-actions.ant-space .route-probe-control {
+  min-width: 104px;
+  max-width: 100%;
+}
+
+.gateway-route-page.gateway-route-page .gateway-toolbar-actions.ant-space .ant-btn {
+  height: var(--control-height) !important;
+  min-height: var(--control-height) !important;
+  padding: 0 14px !important;
+  line-height: 1.2 !important;
+  white-space: nowrap !important;
+}
+
+.gateway-route-page.gateway-route-page .gateway-toolbar-actions.ant-space .ant-btn-primary {
+  min-width: 132px;
+}
+
+@media (max-width: 1280px) {
+  .route-management-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .gateway-access--route {
+    grid-template-columns: minmax(0, 1fr) max-content max-content;
+  }
+
+  .gateway-access--route code:first-child,
+  .gateway-access--route code:nth-of-type(2) {
+    max-width: none;
+  }
+
+  .gateway-access--route code:nth-of-type(2) {
+    grid-column: 1 / 2;
+  }
 }
 
 @media (max-width: 1500px) {
@@ -115,6 +179,7 @@
   }
 
   .gateway-route-page.gateway-route-page .gateway-toolbar-actions.ant-space .ant-space-item {
+    flex: 0 1 auto;
     min-width: 0;
   }
 
@@ -144,8 +209,10 @@
 .route-probe-control {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
 }
 
 .route-probe-progress {

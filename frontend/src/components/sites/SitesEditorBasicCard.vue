@@ -36,6 +36,7 @@ defineProps<{
         <div class="site-editor-subblock__head site-editor-subblock__head--between">
           <h4>批量注册生成账号</h4>
           <a-switch
+            class="app-switch app-switch--text"
             v-model:checked="batchRegisterEnabled"
             aria-label="启用批量注册生成账号"
             checked-children="启用"
@@ -134,6 +135,7 @@ defineProps<{
 
       <a-form-item label="启用状态" class="site-editor-switch-item">
         <a-switch
+          class="app-switch app-switch--text"
           v-model:checked="editor.is_enabled"
           aria-label="启用站点"
           checked-children="启用"

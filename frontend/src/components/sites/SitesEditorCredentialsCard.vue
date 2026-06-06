@@ -22,6 +22,20 @@ const emit = defineEmits<{
   openAuth: []
   previewTotp: []
 }>()
+
+const longCredentialFieldPattern = /(api_?key|access_?token|refresh_?token|secret|cookie|credential)/i
+
+function credentialFieldSpan(field: PluginMeta['credential_fields'][number], fieldCount: number): number {
+  if (
+    fieldCount === 1
+    || field.type === 'textarea'
+    || field.type === 'password'
+    || longCredentialFieldPattern.test(field.name)
+  ) {
+    return 24
+  }
+  return 12
+}
 </script>
 
 <template>
@@ -53,7 +67,7 @@ const emit = defineEmits<{
           v-for="field in primaryFields"
           :key="field.name"
           :xs="24"
-          :md="field.type === 'textarea' ? 24 : 12"
+          :md="credentialFieldSpan(field, primaryFields.length)"
         >
           <a-form-item :label="field.label">
             <a-textarea
@@ -95,7 +109,7 @@ const emit = defineEmits<{
             v-for="field in manualLoginFields"
             :key="field.name"
             :xs="24"
-            :md="12"
+            :md="credentialFieldSpan(field, manualLoginFields.length)"
           >
             <a-form-item :label="field.label">
               <a-input-password

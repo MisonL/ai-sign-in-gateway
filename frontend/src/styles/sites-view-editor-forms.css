@@ -22,7 +22,7 @@
 .api-key-dialog-item {
   display: grid;
   gap: 8px;
-  padding: 10px;
+  padding: 14px;
   border: 1px solid rgba(130, 156, 232, 0.24);
   border-radius: 8px;
   background: rgba(248, 251, 255, 0.72);
@@ -64,8 +64,8 @@
 
 .manual-api-key-editor {
   display: grid;
-  grid-template-columns: minmax(140px, 1fr) 150px 200px;
-  gap: 8px;
+  grid-template-columns: minmax(220px, 1fr) minmax(180px, 0.76fr) minmax(220px, 0.86fr);
+  gap: 12px;
   align-items: start;
 }
 
@@ -96,7 +96,19 @@
 }
 
 .site-editor-shell .ant-form-item {
-  margin-bottom: 14px;
+  margin-bottom: 16px;
+}
+
+.site-editor-shell .ant-row {
+  min-width: 0;
+}
+
+.site-editor-shell .ant-col {
+  min-width: var(--field-min-width);
+}
+
+.site-editor-shell .ant-col.ant-col-24 {
+  min-width: 0;
 }
 
 .site-editor-shell .ant-form-item-label > label {
@@ -122,11 +134,59 @@
 .site-editor-shell .ant-input-number,
 .site-editor-shell .ant-input-number-affix-wrapper,
 .site-editor-shell .ant-select-selector {
-  min-height: var(--control-height);
+  min-height: var(--control-height-comfort);
+}
+
+.site-editor-shell .ant-input:not(textarea),
+.site-editor-shell .ant-input-affix-wrapper,
+.site-editor-shell .ant-input-number,
+.site-editor-shell .ant-input-number-affix-wrapper,
+.site-editor-shell .ant-select-single .ant-select-selector {
+  height: var(--control-height-comfort) !important;
+}
+
+.site-editor-shell .ant-input-affix-wrapper .ant-input {
+  height: auto !important;
+  min-height: 0 !important;
+  line-height: 1.35 !important;
+}
+
+.site-editor-shell .ant-input:not(textarea),
+.site-editor-shell .ant-input-number-input {
+  line-height: calc(var(--control-height-comfort) - 2px) !important;
+}
+
+.site-editor-shell .ant-input-affix-wrapper {
+  align-items: center;
+  padding-block: 0;
 }
 
 .site-editor-shell textarea.ant-input {
-  min-height: 94px;
+  height: auto !important;
+  min-height: 124px !important;
+  padding: 10px 12px;
+  line-height: 1.5 !important;
+  resize: vertical;
+}
+
+.site-editor-shell textarea.ant-input[rows='3'] {
+  min-height: 132px !important;
+}
+
+.site-editor-storage-grid textarea.ant-input {
+  min-height: 220px !important;
+}
+
+.site-editor-column--config textarea.ant-input {
+  min-height: 156px !important;
+}
+
+.site-editor-grid--relay .site-editor-column--config textarea.ant-input {
+  min-height: 188px !important;
+}
+
+.site-editor-grid--relay .site-editor-storage-grid textarea.ant-input {
+  min-height: 240px !important;
 }
 
 .site-editor-shell .ant-input:focus,
@@ -150,11 +210,11 @@
   box-shadow: none;
 }
 
-.site-editor-shell .ant-switch {
+.site-editor-shell .ant-switch:not(.app-switch) {
   background: rgba(65, 119, 217, 0.32);
 }
 
-.site-editor-shell .ant-switch.ant-switch-checked {
+.site-editor-shell .ant-switch:not(.app-switch).ant-switch-checked {
   background: var(--accent);
 }
 
@@ -164,12 +224,34 @@
 }
 
 @media (max-width: 1280px) {
-  .site-editor-grid {
+  .site-editor-grid,
+  .site-editor-grid--relay {
     grid-template-columns: 1fr;
+  }
+
+  .site-editor-grid--relay .site-editor-column--storage {
+    grid-column: 1 / -1;
   }
 }
 
 @media (max-width: 900px) {
+  .manual-api-key-editor,
+  .api-key-dialog-item__paths {
+    grid-template-columns: 1fr;
+  }
+
+  .manual-api-key-editor__key,
+  .manual-api-key-editor__urls,
+  .manual-api-key-editor__generation,
+  .manual-api-key-editor__edit,
+  .manual-api-key-editor__action {
+    grid-column: 1 / -1;
+  }
+
+  .manual-api-key-editor__action .api-key-dialog-field__label--spacer {
+    display: none;
+  }
+
   .site-editor-storage-grid {
     grid-template-columns: 1fr;
   }

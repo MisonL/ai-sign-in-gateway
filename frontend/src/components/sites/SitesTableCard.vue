@@ -175,6 +175,7 @@ function asSite(record: unknown): Site {
             </template>
             <template v-else-if="column.key === 'enabled'">
               <a-switch
+                class="app-switch app-switch--compact"
                 :checked="asSite(record).is_enabled"
                 :aria-label="`${asSite(record).name}启用状态`"
                 checked-children="开"
@@ -185,6 +186,7 @@ function asSite(record: unknown): Site {
             </template>
             <template v-else-if="column.key === 'participation'">
               <a-switch
+                class="app-switch app-switch--text"
                 :checked="siteIncludedInCheckin(asSite(record))"
                 :disabled="!siteCanCheckin(asSite(record))"
                 :aria-label="`${asSite(record).name}签到参与状态`"

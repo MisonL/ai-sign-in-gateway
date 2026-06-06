@@ -59,6 +59,7 @@ defineProps<{
         <a-form-item label="自动备份数据库">
           <a-space direction="vertical" size="middle" class="runtime-backup-settings">
             <a-switch
+              class="app-switch app-switch--wide"
               v-model:checked="view.form.database_backup_enabled"
               aria-label="自动备份数据库"
               checked-children="已启用"

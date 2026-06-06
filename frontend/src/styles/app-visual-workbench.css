@@ -134,25 +134,6 @@
   line-height: 1.4 !important;
 }
 
-.gateway-route-page.gateway-route-page .route-pool-filter-switch.ant-switch {
-  min-width: 62px !important;
-  height: 30px !important;
-  line-height: 30px !important;
-  border-radius: var(--radius-pill) !important;
-}
-
-.gateway-route-page.gateway-route-page .route-pool-filter-switch.ant-switch .ant-switch-handle {
-  top: 6px !important;
-}
-
-.gateway-route-page.gateway-route-page .route-pool-filter-switch.ant-switch .ant-switch-inner {
-  min-height: 28px !important;
-  line-height: 28px !important;
-  padding-inline: 24px 8px !important;
-  font-size: 12px !important;
-  font-weight: 700 !important;
-}
-
 .sites-list-toolbar {
   display: grid !important;
   grid-template-columns: minmax(220px, 1fr) auto auto auto auto;

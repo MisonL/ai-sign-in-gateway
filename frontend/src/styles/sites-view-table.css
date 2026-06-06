@@ -232,17 +232,6 @@
   gap: 8px;
 }
 
-.sites-page .ant-switch {
-  min-width: 56px;
-  height: var(--control-height);
-  line-height: var(--control-height);
-  border-radius: var(--radius-control);
-}
-
-.sites-page .ant-switch.ant-switch-checked {
-  background: var(--accent);
-}
-
 .sites-page .plugin-tag.ant-tag,
 .sites-page .ant-tag {
   font-size: 12px;

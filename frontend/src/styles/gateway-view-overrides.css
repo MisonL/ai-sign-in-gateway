@@ -145,8 +145,7 @@
   background: var(--bg-panel) !important;
 }
 
-.gateway-route-page .route-pool-clear.ant-btn,
-.gateway-route-page .route-pool-filter-switch {
+.gateway-route-page .route-pool-clear.ant-btn {
   border-radius: var(--radius-control);
 }
 

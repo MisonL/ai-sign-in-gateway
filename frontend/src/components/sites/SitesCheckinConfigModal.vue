@@ -89,6 +89,7 @@ function handleSave() {
         <a-col :xs="24" :md="12">
           <a-form-item label="定时签到">
             <a-switch
+              class="app-switch app-switch--text"
               v-model:checked="localForm.schedule_enabled"
               aria-label="启用定时签到"
               checked-children="启用"
@@ -102,6 +103,7 @@ function handleSave() {
         <a-col :xs="24" :md="12">
           <a-form-item label="仅执行启用站点">
             <a-switch
+              class="app-switch app-switch--text"
               v-model:checked="localForm.only_enabled_sites"
               aria-label="仅执行启用站点"
               checked-children="是"

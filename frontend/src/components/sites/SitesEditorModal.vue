@@ -81,12 +81,13 @@ const emit = defineEmits<{
   <a-modal
     v-model:open="open"
     :title="null"
-    width="1180px"
+    width="1280px"
     centered
     :mask-closable="false"
     :destroy-on-close="false"
     wrap-class-name="site-editor-modal-wrap"
     class="site-editor-modal"
+    :class="{ 'site-editor-modal--relay': isRelayOnlyEditor }"
   >
     <template #closeIcon>
       <span class="site-editor-modal__close"><CloseOutlined /></span>
@@ -135,8 +136,8 @@ const emit = defineEmits<{
           </a-alert>
 
           <a-form layout="vertical">
-            <div class="site-editor-grid">
-              <div class="site-editor-column site-editor-column--primary">
+            <div class="site-editor-grid" :class="{ 'site-editor-grid--relay': isRelayOnlyEditor }">
+              <div class="site-editor-column site-editor-column--basic">
                 <SitesEditorBasicCard
                   v-model:group-names="groupNames"
                   v-model:batch-register-enabled="batchRegisterEnabled"
@@ -148,15 +149,6 @@ const emit = defineEmits<{
                   :plugin-options="pluginOptions"
                   :group-options="groupOptions"
                   :email-pattern-examples="emailPatternExamples"
-                />
-
-                <SitesEditorStorageCard
-                  v-model:raw-text="rawText"
-                  :collector-script="collectorScript"
-                  :analyzing="analyzingStorage"
-                  @copy-script="emit('copyScript')"
-                  @analyze="emit('analyzeStorage')"
-                  @paste-payload="emit('pastePayload')"
                 />
 
                 <SitesEditorCredentialsCard
@@ -180,7 +172,7 @@ const emit = defineEmits<{
                 />
               </div>
 
-              <div class="site-editor-column site-editor-column--secondary">
+              <div class="site-editor-column site-editor-column--config">
                 <SitesEditorPluginConfigCard
                   v-if="currentPlugin"
                   :plugin="currentPlugin"
@@ -188,6 +180,17 @@ const emit = defineEmits<{
                   :config-text-value="configTextValue"
                   :config-number-value="configNumberValue"
                   @update-config="(key, value) => emit('updateConfig', key, value)"
+                />
+              </div>
+
+              <div class="site-editor-column site-editor-column--storage">
+                <SitesEditorStorageCard
+                  v-model:raw-text="rawText"
+                  :collector-script="collectorScript"
+                  :analyzing="analyzingStorage"
+                  @copy-script="emit('copyScript')"
+                  @analyze="emit('analyzeStorage')"
+                  @paste-payload="emit('pastePayload')"
                 />
               </div>
             </div>

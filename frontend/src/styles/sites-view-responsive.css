@@ -81,25 +81,6 @@
     pointer-events: none;
   }
 
-  .sites-page.sites-page .ant-switch {
-    min-width: 64px !important;
-    height: 34px !important;
-    line-height: 34px !important;
-    border-radius: var(--radius-pill) !important;
-  }
-
-  .sites-page.sites-page .ant-switch .ant-switch-handle {
-    top: 8px !important;
-  }
-
-  .sites-page.sites-page .ant-switch .ant-switch-inner,
-  .sites-page.sites-page .ant-switch-inner-checked,
-  .sites-page.sites-page .ant-switch-inner-unchecked {
-    min-height: 32px !important;
-    line-height: 32px !important;
-    font-size: 12px !important;
-  }
-
   .sites-page.sites-page .sites-toolbar__segment .ant-btn,
   .sites-page.sites-page .sites-toolbar__actions .ant-btn,
   .sites-page.sites-page .sites-list-toolbar__btn.ant-btn {

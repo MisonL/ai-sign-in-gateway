@@ -16,6 +16,7 @@ defineProps<{
             <a-list-item>
               <a-list-item-meta :title="item.name" :description="item.description || item.key" />
               <a-switch
+                class="app-switch app-switch--text"
                 :checked="Boolean(view.form.feature_flags[item.key] ?? item.default_enabled)"
                 :aria-label="`切换${item.name}`"
                 checked-children="启用"

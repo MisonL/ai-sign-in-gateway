@@ -22,6 +22,12 @@
   }
 
   .route-pool-filter-switch.ant-switch {
+    --switch-height: 34px;
+    --switch-handle-size: 26px;
+    --switch-handle-offset: 4px;
+    --switch-handle-gap: 7px;
+    --switch-text-pad: 8px;
+    --switch-width-text: 80px;
     justify-self: start;
   }
 }
@@ -42,6 +48,15 @@
     --page-gutter-y: 10px;
     --content-gutter: 10px;
     --control-height: 40px;
+    /* Baseline switch variables live in app-visual-rhythm.css; these are touch-size overrides. */
+    --switch-height: 34px;
+    --switch-handle-size: 26px;
+    --switch-handle-offset: 4px;
+    --switch-handle-gap: 7px;
+    --switch-text-pad: 8px;
+    --switch-width-compact: 68px;
+    --switch-width-text: 80px;
+    --switch-width-wide: 96px;
   }
 
   .app-sider.ant-layout-sider-collapsed .sider-collapse-button.ant-btn {

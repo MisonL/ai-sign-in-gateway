@@ -94,7 +94,7 @@ function updateIncludeDisabled(value: boolean) {
         <span>停用</span>
         <a-switch
           :checked="includeDisabled"
-          class="route-pool-filter-switch"
+          class="app-switch app-switch--text route-pool-filter-switch"
           aria-label="包含停用路由"
           checked-children="含"
           un-checked-children="不含"

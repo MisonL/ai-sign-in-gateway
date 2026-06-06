@@ -1,3 +1,5 @@
+@import './management-site-editor-overrides.css';
+
 .gateway-monitor-page.gateway-monitor-page .gateway-overview-shell,
 .gateway-monitor-page.gateway-monitor-page .gateway-panel,
 .gateway-monitor-page.gateway-monitor-page .gateway-metric-card,
@@ -128,30 +130,74 @@
 .sites-page.sites-page .sites-toolbar__ghost-btn.ant-btn,
 .sites-page.sites-page .sites-toolbar__create-btn.ant-btn,
 .sites-page.sites-page .sites-list-toolbar__btn.ant-btn,
+.gateway-route-page.gateway-route-page .gateway-toolbar-actions.ant-space .ant-btn,
+.gateway-route-page.gateway-route-page .route-probe-control .ant-btn,
+.gateway-route-page.gateway-route-page .gateway-access--route .ant-btn,
 .gateway-route-page.gateway-route-page .route-pool-type-tabs .ant-btn,
 .gateway-route-page.gateway-route-page .route-pool-clear.ant-btn {
-  height: 34px !important;
-  padding: 0 12px !important;
+  height: var(--control-height) !important;
+  min-height: var(--control-height) !important;
+  padding: 0 14px !important;
   border-color: var(--border-soft) !important;
   border-radius: var(--radius-control) !important;
   background: var(--bg-panel) !important;
   color: var(--text-main) !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  line-height: 1.2 !important;
   box-shadow: none !important;
+  white-space: nowrap !important;
 }
 
-.gateway-route-page.gateway-route-page .route-pool-switch-field .route-pool-filter-switch.ant-switch {
-  height: 30px !important;
-  min-height: 30px !important;
-  border-radius: var(--radius-pill) !important;
+.sites-page.sites-page .sites-toolbar__seg-btn.ant-btn,
+.sites-page.sites-page .sites-toolbar__ghost-btn.ant-btn,
+.sites-page.sites-page .sites-list-toolbar__btn.ant-btn,
+.gateway-route-page.gateway-route-page .gateway-toolbar-actions.ant-space .ant-btn,
+.gateway-route-page.gateway-route-page .route-probe-control .ant-btn {
+  min-width: 104px !important;
 }
 
 .sites-page.sites-page .sites-toolbar__seg-btn--primary.ant-btn,
 .sites-page.sites-page .sites-toolbar__ghost-btn--strong.ant-btn,
 .sites-page.sites-page .sites-toolbar__create-btn.ant-btn,
+.gateway-route-page.gateway-route-page .gateway-toolbar-actions.ant-space .ant-btn-primary,
 .gateway-route-page.gateway-route-page .route-pool-type-tabs .ant-btn-primary {
+  min-width: 132px !important;
   border-color: var(--accent) !important;
   background: var(--accent) !important;
   color: var(--accent-foreground) !important;
+}
+
+.sites-page.sites-page .sites-toolbar__ghost-btn--strong.ant-btn {
+  min-width: 152px !important;
+}
+
+.sites-page.sites-page .sites-toolbar__actions > span,
+.sites-page.sites-page .sites-toolbar__actions .ant-tooltip,
+.gateway-route-page.gateway-route-page .gateway-toolbar-actions.ant-space .ant-space-item {
+  display: inline-flex !important;
+  align-items: center !important;
+}
+
+.gateway-route-page.gateway-route-page .gateway-toolbar-actions.ant-space .ant-space-item {
+  flex: 0 0 auto !important;
+}
+
+.sites-page.sites-page .sites-toolbar__actions > span {
+  min-width: 104px !important;
+}
+
+.sites-page.sites-page .sites-toolbar__segment .ant-btn-icon,
+.sites-page.sites-page .sites-toolbar__actions .ant-btn-icon,
+.gateway-route-page.gateway-route-page .gateway-toolbar-actions.ant-space .ant-btn-icon,
+.gateway-route-page.gateway-route-page .route-probe-control .ant-btn-icon {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 16px !important;
+  min-width: 16px !important;
+  margin-inline-end: 6px !important;
+  line-height: 1 !important;
 }
 
 .gateway-route-page.gateway-route-page .table-fill--management .ant-table-thead > tr > th,
@@ -182,49 +228,6 @@
   background: var(--bg-subtle) !important;
 }
 
-.site-editor-modal.site-editor-modal .site-editor-card__art,
-.site-editor-modal.site-editor-modal .site-editor-section-head__badge {
-  display: none !important;
-}
-
-.site-editor-modal.site-editor-modal .ant-modal-content,
-.site-editor-modal.site-editor-modal .site-editor-modal__frame {
-  overflow: hidden !important;
-  background: var(--bg-panel) !important;
-}
-
-.site-editor-modal.site-editor-modal .site-editor-modal__body {
-  padding: 16px !important;
-  background: var(--bg-subtle) !important;
-}
-
-.site-editor-modal.site-editor-modal .site-editor-modal__footer {
-  padding: 12px 16px !important;
-  border-top: 1px solid var(--border-muted) !important;
-  background: var(--bg-panel) !important;
-  backdrop-filter: none !important;
-}
-
-.site-editor-modal.site-editor-modal .site-editor-card__content {
-  padding: 16px !important;
-}
-
-.site-editor-modal.site-editor-modal .site-editor-shell .ant-input,
-.site-editor-modal.site-editor-modal .site-editor-shell .ant-input-affix-wrapper,
-.site-editor-modal.site-editor-modal .site-editor-shell .ant-input-number,
-.site-editor-modal.site-editor-modal .site-editor-shell .ant-select-selector,
-.site-editor-modal.site-editor-modal .site-editor-shell textarea.ant-input {
-  border-color: var(--border-soft) !important;
-  border-radius: var(--radius-control) !important;
-  background: var(--bg-panel) !important;
-  box-shadow: none !important;
-}
-
-.site-editor-modal.site-editor-modal .site-editor-shell .ant-btn,
-.site-editor-modal.site-editor-modal .site-editor-modal__close {
-  border-radius: var(--radius-control) !important;
-}
-
 .ant-modal .ant-modal-close,
 .ant-drawer .ant-drawer-close {
   display: inline-flex !important;
@@ -232,22 +235,6 @@
   justify-content: center !important;
   width: var(--control-height) !important;
   height: var(--control-height) !important;
-}
-
-.site-editor-modal.site-editor-modal .site-editor-shell .ant-switch {
-  min-width: 56px !important;
-  height: var(--control-height) !important;
-  line-height: var(--control-height) !important;
-  border-radius: var(--radius-control) !important;
-}
-
-.site-editor-modal.site-editor-modal .site-editor-shell .ant-switch .ant-switch-handle {
-  top: 7px !important;
-}
-
-.site-editor-modal.site-editor-modal .site-editor-shell .ant-switch .ant-switch-inner {
-  min-height: calc(var(--control-height) - 2px) !important;
-  line-height: calc(var(--control-height) - 2px) !important;
 }
 
 .ant-drawer-body .table-fill--management {

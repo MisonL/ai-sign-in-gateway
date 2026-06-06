@@ -47,6 +47,7 @@ const emit = defineEmits<{
     v-model:open="open"
     title="查看 API Key 与请求 URL"
     width="820px"
+    class="api-key-dialog-modal"
     :confirm-loading="saving"
     ok-text="保存配置"
     @ok="emit('ok')"

@@ -99,6 +99,7 @@ const isPasswordMismatch = computed(() =>
                 :options="view.roleOptions"
               />
               <a-switch
+                class="app-switch app-switch--text"
                 v-model:checked="view.adminUserCreateForm.is_enabled"
                 aria-label="新管理员启用状态"
                 checked-children="启用"
@@ -143,6 +144,7 @@ const isPasswordMismatch = computed(() =>
               <a-table-column title="状态" key="is_enabled" :width="120">
                 <template #default="{ record }">
                   <a-switch
+                    class="app-switch app-switch--text"
                     v-model:checked="view.asAdminUser(record).is_enabled"
                     :aria-label="`${view.asAdminUser(record).username || '管理员'}启用状态`"
                     checked-children="启用"

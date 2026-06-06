@@ -6,8 +6,25 @@
   --rhythm-3: 21px;
   --rhythm-4: 34px;
   --rhythm-5: 55px;
-  --control-height: 34px;
-  --control-height-comfort: 38px;
+  --control-height: 36px;
+  --control-height-comfort: 40px;
+  --control-height-roomy: 44px;
+  --field-min-width: 220px;
+  --switch-height: 28px;
+  --switch-handle-size: 20px;
+  --switch-handle-offset: 4px;
+  --switch-handle-gap: 7px;
+  --switch-text-pad: 8px;
+  --switch-width-compact: 62px;
+  --switch-width-text: 76px;
+  --switch-width-wide: 88px;
+  --switch-track-off: #dbe3ef;
+  --switch-track-off-hover: #cbd5e1;
+  --switch-track-disabled: #e2e8f0;
+  --switch-track-disabled-checked: #cbd5e1;
+  --switch-text-off: #334155;
+  --switch-text-on: var(--accent-foreground);
+  --switch-text-disabled: #475569;
   --rhythm-page-gutter-x: 21px;
   --rhythm-content-gutter: 13px;
 }
@@ -116,7 +133,7 @@ body {
   padding-inline: 0 !important;
 }
 
-.ant-input,
+.ant-input:not(textarea),
 .ant-input-affix-wrapper,
 .ant-select:not(.ant-select-customize-input) .ant-select-selector,
 .ant-input-number,
@@ -125,9 +142,58 @@ body {
   min-height: var(--control-height) !important;
 }
 
-.ant-input,
+.ant-input:not(textarea),
 .ant-input-number-input {
   line-height: calc(var(--control-height) - 2px) !important;
+}
+
+.ant-input-affix-wrapper .ant-input {
+  min-width: 0 !important;
+  height: auto !important;
+  min-height: 0 !important;
+  line-height: 1.35 !important;
+}
+
+.ant-input-password.ant-input-affix-wrapper {
+  display: inline-flex !important;
+  gap: 8px;
+}
+
+.ant-input-password .ant-input-suffix {
+  flex: 0 0 auto;
+  margin-inline-start: 4px !important;
+}
+
+textarea.ant-input {
+  height: auto !important;
+  min-height: 96px !important;
+  padding: 10px 12px !important;
+  line-height: 1.5 !important;
+  resize: vertical;
+}
+
+textarea.ant-input[rows='2'] {
+  min-height: 72px !important;
+}
+
+textarea.ant-input[rows='3'] {
+  min-height: 96px !important;
+}
+
+textarea.ant-input[rows='4'] {
+  min-height: 120px !important;
+}
+
+textarea.ant-input[rows='8'] {
+  min-height: 180px !important;
+}
+
+textarea.ant-input[rows='12'] {
+  min-height: 240px !important;
+}
+
+textarea.ant-input[rows='20'] {
+  min-height: 360px !important;
 }
 
 .ant-input-affix-wrapper {
@@ -151,20 +217,4 @@ body {
 .ant-input-number-handler {
   min-width: var(--control-height) !important;
   height: 17px !important;
-}
-
-.ant-switch:not(.route-pool-filter-switch) {
-  min-width: 56px !important;
-  height: var(--control-height) !important;
-  line-height: var(--control-height) !important;
-  border-radius: var(--radius-control) !important;
-}
-
-.ant-switch:not(.route-pool-filter-switch) .ant-switch-handle {
-  top: 7px !important;
-}
-
-.ant-switch:not(.route-pool-filter-switch) .ant-switch-inner {
-  min-height: calc(var(--control-height) - 2px) !important;
-  line-height: calc(var(--control-height) - 2px) !important;
 }

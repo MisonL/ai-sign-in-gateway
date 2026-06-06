@@ -132,14 +132,60 @@
 
 .app-header__actions {
   justify-self: end;
+  display: flex !important;
+  align-items: center;
+  gap: 8px !important;
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
 }
 
-.app-header__user {
+.app-header__actions .ant-space-item {
+  display: inline-flex;
+  min-width: 0;
+}
+
+.app-header__user.ant-tag {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  height: 32px;
-  line-height: 30px;
+  justify-content: center;
+  gap: 5px;
+  min-width: 72px;
+  height: var(--control-height);
+  margin-inline-end: 0;
+  padding: 0 12px;
+  border: 1px solid var(--border-soft) !important;
+  border-radius: var(--radius-control) !important;
+  background: var(--bg-panel) !important;
+  color: var(--text-secondary) !important;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: calc(var(--control-height) - 2px);
+  box-shadow: none;
+  white-space: nowrap;
+}
+
+.app-header__actions .app-header__user.app-header__user.ant-tag {
+  border-radius: var(--radius-control) !important;
+  height: var(--control-height) !important;
+  min-height: var(--control-height) !important;
+  line-height: 1.2 !important;
+}
+
+.app-header__user.ant-tag-processing {
+  border-color: rgba(37, 99, 235, 0.22) !important;
+  background: var(--accent-soft) !important;
+  color: var(--accent-strong) !important;
+}
+
+.app-header__user.ant-tag-gold {
+  border-color: rgba(245, 158, 11, 0.28) !important;
+  background: var(--warning-soft) !important;
+  color: var(--warning-strong) !important;
+}
+
+.app-header__user .anticon {
+  font-size: 14px;
 }
 
 @media (max-width: 1180px) {

@@ -40,9 +40,20 @@
   .sites-page.sites-page .sites-toolbar__segment .ant-btn,
   .sites-page.sites-page .sites-toolbar__actions .ant-btn,
   .gateway-route-page.gateway-route-page .gateway-toolbar-actions.ant-space .ant-btn,
+  .gateway-route-page.gateway-route-page .route-pool-type-tabs .ant-btn,
   .gateway-route-page.gateway-route-page .gateway-toolbar-actions.ant-space .route-probe-control {
     flex: 1 1 132px !important;
     width: auto !important;
+    min-width: 0 !important;
+  }
+
+  .gateway-route-page.gateway-route-page .route-pool-type-tabs .ant-btn {
+    flex: none !important;
+    width: 100% !important;
+  }
+
+  .sites-page.sites-page .sites-toolbar__actions > span {
+    flex: 1 1 132px !important;
     min-width: 0 !important;
   }
 

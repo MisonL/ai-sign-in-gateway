@@ -153,21 +153,6 @@
 
   .route-pool-filter-switch.ant-switch {
     justify-self: start;
-    width: auto !important;
-    min-width: 66px !important;
-    height: 34px !important;
-    line-height: 34px !important;
-  }
-
-  .route-pool-filter-switch.ant-switch .ant-switch-handle {
-    top: 8px !important;
-  }
-
-  .route-pool-filter-switch.ant-switch .ant-switch-inner,
-  .route-pool-filter-switch.ant-switch .ant-switch-inner-checked,
-  .route-pool-filter-switch.ant-switch .ant-switch-inner-unchecked {
-    min-height: 32px !important;
-    line-height: 32px !important;
   }
 
   .route-pool-clear.ant-btn {

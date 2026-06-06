@@ -1,5 +1,6 @@
 .gateway-usage-input {
-  height: 34px;
+  height: var(--control-height);
+  min-height: var(--control-height);
   min-width: 196px;
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-control);

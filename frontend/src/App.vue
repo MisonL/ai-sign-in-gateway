@@ -23,7 +23,7 @@ const theme = {
     colorTextSecondary: '#64748b',
     colorTextTertiary: '#94a3b8',
     fontFamily: "'IBM Plex Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-    controlHeight: 34,
+    controlHeight: 36,
     controlHeightLG: 40,
     controlHeightSM: 28,
     controlOutline: 'rgba(37, 99, 235, 0.16)',
@@ -35,19 +35,19 @@ const theme = {
     },
     Button: {
       borderRadius: 8,
-      controlHeight: 34,
+      controlHeight: 36,
     },
     Input: {
       borderRadius: 8,
-      controlHeight: 34,
+      controlHeight: 36,
     },
     InputNumber: {
       borderRadius: 8,
-      controlHeight: 34,
+      controlHeight: 36,
     },
     Select: {
       borderRadius: 8,
-      controlHeight: 34,
+      controlHeight: 36,
     },
     Table: {
       borderColor: '#e2e8f0',

@@ -19,14 +19,16 @@ defineProps<{
           :description="view.form.security_warnings.join('；')"
           class="settings-security-alert"
         />
-        <a-space direction="vertical" size="middle">
+        <a-form-item label="关闭桌面后保留本地服务">
           <a-switch
+            class="app-switch app-switch--wide"
             v-model:checked="view.form.desktop_keep_running"
             aria-label="关闭桌面后保留本地服务"
-            checked-children="关闭桌面后保留本地服务"
-            un-checked-children="退出桌面时停止本地服务"
+            checked-children="保留"
+            un-checked-children="停止"
           />
-        </a-space>
+          <small class="field-help">启用后关闭桌面窗口时，本地后端服务仍会继续运行。</small>
+        </a-form-item>
 
         <a-row :gutter="16" class="desktop-runtime-row">
           <a-col :xs="24" :md="12">

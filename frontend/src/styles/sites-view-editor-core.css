@@ -13,15 +13,23 @@
 
 .site-editor-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(360px, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(440px, 0.9fr);
   gap: var(--rhythm-3);
   align-items: start;
+}
+
+.site-editor-grid--relay {
+  grid-template-columns: minmax(0, 0.82fr) minmax(520px, 1fr);
 }
 
 .site-editor-column {
   display: grid;
   gap: var(--rhythm-3);
   min-width: 0;
+}
+
+.site-editor-column--storage {
+  grid-column: 1 / -1;
 }
 
 .site-editor-card {
@@ -129,8 +137,8 @@
 
 .site-editor-storage-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--rhythm-2);
+  grid-template-columns: repeat(2, minmax(420px, 1fr));
+  gap: var(--rhythm-3);
 }
 
 .site-editor-subblock {
