@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strconv"
 	"strings"
@@ -33,14 +34,14 @@ func (r CheckinSchedulerRunner) Run(ctx context.Context) {
 	ticker := time.NewTicker(sleepFor)
 	defer ticker.Stop()
 
-	var lastRunDate string
+	lastRun := CheckinSchedulerLastRun{}
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
 		}
-		r.RunDue(ctx, &lastRunDate)
+		r.RunDue(ctx, &lastRun)
 		select {
 		case <-ctx.Done():
 			return
@@ -49,7 +50,12 @@ func (r CheckinSchedulerRunner) Run(ctx context.Context) {
 	}
 }
 
-func (r CheckinSchedulerRunner) RunDue(ctx context.Context, lastRunDate *string) bool {
+type CheckinSchedulerLastRun struct {
+	DatabaseKey string
+	Date        string
+}
+
+func (r CheckinSchedulerRunner) RunDue(ctx context.Context, lastRun *CheckinSchedulerLastRun) bool {
 	if ctx.Err() != nil || r.App == nil || r.App.DB == nil {
 		return false
 	}
@@ -74,7 +80,8 @@ func (r CheckinSchedulerRunner) RunDue(ctx context.Context, lastRunDate *string)
 	now := r.now().In(location)
 	dueAt := time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, location)
 	runDate := now.Format("2006-01-02")
-	if now.Before(dueAt) || (lastRunDate != nil && *lastRunDate == runDate) {
+	databaseKey := r.databaseKey()
+	if now.Before(dueAt) || (lastRun != nil && lastRun.DatabaseKey == databaseKey && lastRun.Date == runDate) {
 		return false
 	}
 	alreadyRun, err := r.scheduledRunExists(now, location)
@@ -83,8 +90,8 @@ func (r CheckinSchedulerRunner) RunDue(ctx context.Context, lastRunDate *string)
 		return false
 	}
 	if alreadyRun {
-		if lastRunDate != nil {
-			*lastRunDate = runDate
+		if lastRun != nil {
+			*lastRun = CheckinSchedulerLastRun{DatabaseKey: databaseKey, Date: runDate}
 		}
 		return false
 	}
@@ -95,8 +102,8 @@ func (r CheckinSchedulerRunner) RunDue(ctx context.Context, lastRunDate *string)
 	}
 	successCount, failedCount := checkinRunStatusCounts(runs)
 	log.Printf("自动签到调度: 已执行一次签到，成功 %d，失败 %d", successCount, failedCount)
-	if lastRunDate != nil {
-		*lastRunDate = runDate
+	if lastRun != nil {
+		*lastRun = CheckinSchedulerLastRun{DatabaseKey: databaseKey, Date: runDate}
 	}
 	return true
 }
@@ -118,6 +125,13 @@ func (r CheckinSchedulerRunner) now() time.Time {
 		return r.Now()
 	}
 	return time.Now()
+}
+
+func (r CheckinSchedulerRunner) databaseKey() string {
+	if r.App == nil || r.App.DB == nil {
+		return ""
+	}
+	return fmt.Sprintf("%p", r.App.DB)
 }
 
 func parseDailyRunTime(value string) (int, int, error) {

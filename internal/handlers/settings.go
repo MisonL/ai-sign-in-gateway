@@ -21,6 +21,7 @@ import (
 	"ai-sign-in-gateway/internal/models"
 	"ai-sign-in-gateway/internal/runtimecontrol"
 	"ai-sign-in-gateway/internal/schemas"
+	"ai-sign-in-gateway/internal/seed"
 	"ai-sign-in-gateway/internal/services"
 	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm"
@@ -584,7 +585,7 @@ func (a *App) importRuntimeDatabaseFromFile(w http.ResponseWriter, sourcePath st
 		writeError(w, http.StatusInternalServerError, "复制数据库失败: "+err.Error())
 		return
 	}
-	if err := validateImportedDatabase(tmpPath); err != nil {
+	if err := validateImportedDatabase(tmpPath, a.Cfg); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -731,8 +732,13 @@ func (a *App) reopenDatabase(databasePath string) error {
 		_ = database.Close(newDB)
 		return err
 	}
+	if err := seed.EnsureSystemSettings(newDB, cfg); err != nil {
+		_ = database.Close(newDB)
+		return err
+	}
 	oldDB := a.DB
 	a.DB = newDB
+	a.Cfg = cfg
 	if oldDB != nil {
 		_ = database.Close(oldDB)
 	}
@@ -798,8 +804,8 @@ func validateSQLiteDatabaseFile(path string) error {
 	return nil
 }
 
-func validateImportedDatabase(path string) error {
-	cfg := config.Config{DatabaseURL: "sqlite:///" + filepath.ToSlash(path)}
+func validateImportedDatabase(path string, cfg config.Config) error {
+	cfg.DatabaseURL = "sqlite:///" + filepath.ToSlash(path)
 	db, err := database.Open(cfg)
 	if err != nil {
 		return fmt.Errorf("无法打开导入数据库: %w", err)
@@ -814,6 +820,9 @@ func validateImportedDatabase(path string) error {
 	}
 	if adminCount == 0 {
 		return fmt.Errorf("导入数据库没有管理员账号，无法重新登录")
+	}
+	if err := seed.EnsureSystemSettings(db, cfg); err != nil {
+		return fmt.Errorf("导入数据库初始化默认设置失败: %w", err)
 	}
 	return nil
 }

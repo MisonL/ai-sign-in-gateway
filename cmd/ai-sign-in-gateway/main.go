@@ -195,7 +195,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	defer database.Close(db)
+	app := handlers.NewApp(db, cfg)
+	defer func() {
+		_ = database.Close(app.DB)
+	}()
 	if err := migrations.Apply(db); err != nil {
 		return err
 	}
@@ -203,7 +206,7 @@ func run() error {
 		return err
 	}
 
-	api := handlers.NewRouter(db, cfg)
+	api := app.Router()
 	backendURL := browserURL(host, actualBackendPort)
 	gatewayURL := backendURL + "/api/gateway"
 
@@ -248,9 +251,9 @@ func run() error {
 
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		go handlers.RunCheckinSchedulerLoop(ctx, &handlers.App{DB: db, Cfg: cfg})
-		go services.RunDatabaseBackupLoop(ctx, cfg.SQLitePath())
-		go services.RunLogCleanupLoop(ctx, cfg.SQLitePath())
+		go handlers.RunCheckinSchedulerLoop(ctx, app)
+		go services.RunDatabaseBackupLoopWithProvider(ctx, runtimeDatabasePathProvider(cfg))
+		go services.RunLogCleanupLoopWithProvider(ctx, runtimeDatabasePathProvider(cfg))
 		log.Printf("%s 前端正在监听 %s", appName, frontendURL)
 		log.Printf("%s 后端正在监听 %s", appName, backendURL)
 		log.Printf("网关请求地址: %s", gatewayURL)
@@ -270,7 +273,7 @@ func run() error {
 			BackendURL:  backendURL,
 			GatewayURL:  gatewayURL,
 			ConfigDir:   configDir,
-			DB:          db,
+			App:         app,
 			Backend:     backendServer,
 			Frontend:    frontendServer,
 			BackendLn:   backendLn,
@@ -301,9 +304,9 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	go handlers.RunCheckinSchedulerLoop(ctx, &handlers.App{DB: db, Cfg: cfg})
-	go services.RunDatabaseBackupLoop(ctx, cfg.SQLitePath())
-	go services.RunLogCleanupLoop(ctx, cfg.SQLitePath())
+	go handlers.RunCheckinSchedulerLoop(ctx, app)
+	go services.RunDatabaseBackupLoopWithProvider(ctx, runtimeDatabasePathProvider(cfg))
+	go services.RunLogCleanupLoopWithProvider(ctx, runtimeDatabasePathProvider(cfg))
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -332,6 +335,15 @@ func run() error {
 		return nil
 	}
 	return err
+}
+
+func runtimeDatabasePathProvider(cfg config.Config) func() string {
+	return func() string {
+		if path := strings.TrimSpace(handlers.GetRuntimeInfo().DatabasePath); path != "" {
+			return path
+		}
+		return cfg.SQLitePath()
+	}
 }
 
 func parseCommand(args []string) (commandOptions, error) {
