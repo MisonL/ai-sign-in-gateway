@@ -60,7 +60,34 @@ body {
 .ant-btn {
   border-radius: var(--radius-control) !important;
   font-weight: 500;
-  transition: background 0.15s ease, color 0.15s ease, border 0.15s ease, box-shadow 0.15s ease;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.15s ease;
+}
+
+.ant-btn:not(:disabled):not(.ant-btn-disabled):hover {
+  box-shadow: var(--shadow-control-hover);
+  transform: translateY(-1px);
+}
+
+.ant-btn:not(:disabled):not(.ant-btn-disabled):active {
+  box-shadow: var(--shadow-control-active);
+  transform: translateY(0);
+}
+
+.ant-btn:focus-visible {
+  box-shadow: var(--focus-ring) !important;
+}
+
+.ant-btn[disabled],
+.ant-btn.ant-btn-disabled {
+  cursor: not-allowed;
+  transform: none !important;
+  box-shadow: none !important;
 }
 
 .ant-btn-primary {
@@ -74,6 +101,10 @@ body {
 .ant-btn-primary:focus {
   background: var(--accent-strong) !important;
   border-color: var(--accent-strong) !important;
+}
+
+.ant-btn-primary:not(:disabled):not(.ant-btn-disabled):hover {
+  box-shadow: 0 6px 14px rgba(37, 99, 235, 0.24);
 }
 
 .ant-btn-default {
@@ -99,6 +130,59 @@ body {
 
 .ant-btn-dangerous:hover {
   background: var(--danger-soft) !important;
+}
+
+button:not(.ant-btn):not(:disabled) {
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.15s ease;
+}
+
+button:not(.ant-btn):not(:disabled):hover {
+  box-shadow: var(--shadow-control-hover);
+  transform: translateY(-1px);
+}
+
+button:not(.ant-btn):not(:disabled):active {
+  box-shadow: var(--shadow-control-active);
+  transform: translateY(0);
+}
+
+button:not(.ant-btn):focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.ant-input-number-handler {
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.ant-input-number-handler:not(.ant-input-number-handler-up-disabled):not(.ant-input-number-handler-down-disabled) {
+  cursor: pointer;
+}
+
+.ant-input-number-handler-up-disabled,
+.ant-input-number-handler-down-disabled {
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.ant-input-number-handler:not(.ant-input-number-handler-up-disabled):not(.ant-input-number-handler-down-disabled):hover,
+.ant-input-number-handler:not(.ant-input-number-handler-up-disabled):not(.ant-input-number-handler-down-disabled):focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.18);
+}
+
+.ant-input-number-handler:not(.ant-input-number-handler-up-disabled):not(.ant-input-number-handler-down-disabled):active {
+  background: rgba(37, 99, 235, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.28);
 }
 
 .ant-input,

@@ -34,6 +34,18 @@
   color: #1d4ed8;
 }
 
+.chat-workbench.chat-workbench .image-ratio-preset:not(:disabled):hover,
+.chat-workbench.chat-workbench .image-ratio-preset:not(:disabled):focus-visible {
+  border-color: rgba(37, 99, 235, 0.36) !important;
+  background: var(--accent-soft) !important;
+  color: var(--accent-strong) !important;
+  box-shadow: var(--shadow-control-hover) !important;
+}
+
+.chat-workbench.chat-workbench .image-ratio-preset:not(:disabled):active {
+  box-shadow: var(--shadow-control-active) !important;
+}
+
 .image-ratio-preset.is-detected:not(.is-locked) {
   border-style: dashed;
   background: rgba(246, 251, 255, 0.92);

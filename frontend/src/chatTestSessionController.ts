@@ -27,6 +27,7 @@ type ChatSessionForm = {
 type Toast = {
   error: (message: string) => void
   success: (message: string) => void
+  info: (message: string) => void
 }
 
 type ChatTestSessionOptions = {
@@ -104,12 +105,21 @@ export function useChatTestSessionController(options: ChatTestSessionOptions) {
     }
   }
 
-  function startNewSession() {
+  function resetCurrentSessionState() {
     options.stopAllActivityTimers()
     activeSessionId.value = null
     options.messages.value = []
     options.referenceImages.value = []
     options.form.input = ''
+  }
+
+  function startNewSession() {
+    if (!options.messages.value.length && !options.referenceImages.value.length && !options.form.input.trim() && !activeSessionId.value) {
+      options.toast.info('当前已经是新会话。')
+      return
+    }
+    resetCurrentSessionState()
+    options.toast.success('已新建空白会话。')
   }
 
   async function restoreChatSession(id: number) {
@@ -157,7 +167,7 @@ export function useChatTestSessionController(options: ChatTestSessionOptions) {
       await deleteChatSession(session.id)
       chatSessions.value = chatSessions.value.filter((item) => item.id !== session.id)
       if (activeSessionId.value === session.id) {
-        startNewSession()
+        resetCurrentSessionState()
       }
       options.toast.success('会话已删除。')
     } catch (err) {

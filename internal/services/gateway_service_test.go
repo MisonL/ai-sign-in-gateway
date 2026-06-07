@@ -4445,6 +4445,29 @@ func TestRedactGatewayURLCoversQuerySecretAliases(t *testing.T) {
 	}
 }
 
+func TestRedactGatewayTextCoversDelimitedUnquotedSecrets(t *testing.T) {
+	for _, input := range []string{
+		"upstream failed token=abc123,def456",
+		"upstream failed token=abc123;def456",
+		"upstream failed api_key=abc123,def456",
+	} {
+		redacted := RedactGatewayText(input)
+		for _, secret := range []string{"abc123", "def456"} {
+			if strings.Contains(redacted, secret) {
+				t.Fatalf("redacted text leaked %s: input=%q redacted=%q", secret, input, redacted)
+			}
+		}
+		if !strings.Contains(redacted, gatewayRedactedValue) {
+			t.Fatalf("redacted text missing marker: input=%q redacted=%q", input, redacted)
+		}
+	}
+
+	nonSensitive := RedactGatewayText("upstream failed status=429, retry later")
+	if !strings.Contains(nonSensitive, "status=429") {
+		t.Fatalf("non-sensitive text was unexpectedly redacted: %q", nonSensitive)
+	}
+}
+
 func TestGatewaySub2APIModelProbeExcludesRoutesWithoutUsableKey(t *testing.T) {
 	ResetGatewayCountersForTest()
 

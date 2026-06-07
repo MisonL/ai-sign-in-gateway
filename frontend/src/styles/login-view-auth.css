@@ -150,6 +150,17 @@
   backdrop-filter: none;
 }
 
+.login-screen.login-screen .invite-entry:hover,
+.login-screen.login-screen .invite-entry:focus-visible {
+  border-color: rgba(37, 99, 235, 0.28) !important;
+  background: #eff6ff !important;
+  box-shadow: var(--shadow-control-hover) !important;
+}
+
+.login-screen.login-screen .invite-entry:active {
+  box-shadow: var(--shadow-control-active) !important;
+}
+
 .invite-entry strong,
 .invite-entry small {
   display: block;

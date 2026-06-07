@@ -213,6 +213,7 @@ export function useSitesApiKeyDialog(options: UseSitesApiKeyDialogOptions) {
       return
     }
     const entry = buildManualApiKeyEntry(manualApiKeyForm, site, manualApiKeyEntries.value.length)
+    let apiKeyAdded = false
     upsertApiKeyDialogSiteCredentials((currentSite, credentials) => {
       const entries = storedApiKeyEntriesForEdit({ ...currentSite, credentials })
       if (equivalentApiKeyEntryExists(entries, entry)) {
@@ -220,14 +221,19 @@ export function useSitesApiKeyDialog(options: UseSitesApiKeyDialogOptions) {
         return credentials
       }
       const next = mergeApiKeyEntries([...entries, entry])
+      apiKeyAdded = true
       return {
         ...credentials,
         api_keys: next,
         api_key: String(credentials.api_key ?? '').trim() || key,
       }
     })
+    if (!apiKeyAdded) {
+      return
+    }
     resetManualApiKeyForm(manualApiKeyForm, site)
     resetApiKeyRequestUrlDrafts(siteApiKeyEntries(site))
+    options.toast.success('自定义 API Key 已加入本地配置，保存后生效。')
   }
 
   function removeApiKey(entry: SiteApiKeyEntry) {

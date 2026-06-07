@@ -367,8 +367,8 @@ const (
 )
 
 var (
-	gatewaySensitiveTextPattern      = regexp.MustCompile(`(?i)\b(authorization|cookie|password|secret|token|key|api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|client[_-]?secret|session|session[_-]?id|session[_-]?token|jwt|bearer|csrf|csrf[_-]?token|xsrf|xsrf[_-]?token|private[_-]?key)\b(\s*[:=]\s*)("[^"]*"|'[^']*'|[^,;\r\n}]+)`)
-	gatewaySensitiveQuotedKeyPattern = regexp.MustCompile(`(?i)(["'])(authorization|cookie|password|secret|token|key|api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|client[_-]?secret|session|session[_-]?id|session[_-]?token|jwt|bearer|csrf|csrf[_-]?token|xsrf|xsrf[_-]?token|private[_-]?key)(["'])(\s*[:=]\s*)("[^"]*"|'[^']*'|[^,;\r\n}]+)`)
+	gatewaySensitiveTextPattern      = regexp.MustCompile(`(?i)\b(authorization|cookie|password|secret|token|key|api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|client[_-]?secret|session|session[_-]?id|session[_-]?token|jwt|bearer|csrf|csrf[_-]?token|xsrf|xsrf[_-]?token|private[_-]?key)\b(\s*[:=]\s*)("[^"]*"|'[^']*'|[^\r\n}]+)`)
+	gatewaySensitiveQuotedKeyPattern = regexp.MustCompile(`(?i)(["'])(authorization|cookie|password|secret|token|key|api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|client[_-]?secret|session|session[_-]?id|session[_-]?token|jwt|bearer|csrf|csrf[_-]?token|xsrf|xsrf[_-]?token|private[_-]?key)(["'])(\s*[:=]\s*)("[^"]*"|'[^']*'|[^\r\n}]+)`)
 )
 
 type gatewayUpstreamFailureKind string

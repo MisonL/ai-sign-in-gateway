@@ -74,9 +74,14 @@ export function useChatTestController() {
   }
 
   function clearConversation() {
+    if (!messages.value.length && !imageControls.referenceImages.value.length) {
+      toast.info('当前会话已为空。')
+      return
+    }
     stopAllActivityTimers()
     messages.value = []
     imageControls.referenceImages.value = []
+    toast.success('会话内容已清空。')
   }
 
   function stopActivityTimer(messageID: string) {

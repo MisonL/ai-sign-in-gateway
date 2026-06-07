@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises'
 const sitesViewControllerPath = new URL('../src/composables/useSitesViewController.ts', import.meta.url)
 const sitesApiKeyDialogPath = new URL('../src/composables/useSitesApiKeyDialog.ts', import.meta.url)
 const sitesRuntimeChecksPath = new URL('../src/composables/useSitesRuntimeChecks.ts', import.meta.url)
+const sitesDataPath = new URL('../src/composables/useSitesData.ts', import.meta.url)
 const sitesInvitesPath = new URL('../src/composables/useSitesInvites.ts', import.meta.url)
 const sitesCheckinConfigModalPath = new URL('../src/components/sites/SitesCheckinConfigModal.vue', import.meta.url)
 const sitesApiKeyDialogComponentPath = new URL('../src/components/sites/SitesApiKeyDialog.vue', import.meta.url)
@@ -45,6 +46,20 @@ test('sites runtime checks prevent duplicate balance probes per site', async () 
   assert.match(source, /nextProbeIds\.splice\(probeIndex, 1\)/)
 })
 
+test('sites manual refresh reports success only after data and summary refresh succeed', async () => {
+  const sitesView = await readFile(sitesViewControllerPath, 'utf8')
+  const sitesData = await readFile(sitesDataPath, 'utf8')
+  const runtimeChecks = await readFile(sitesRuntimeChecksPath, 'utf8')
+
+  assert.match(sitesData, /throwOnError\?: boolean/)
+  assert.match(sitesData, /if \(loadOptions\.throwOnError\) \{\s+throw err\s+\}/)
+  assert.match(runtimeChecks, /type RefreshTableSummariesOptions = \{\s+throwOnError\?: boolean\s+\}/)
+  assert.match(runtimeChecks, /if \(refreshOptions\.throwOnError\) \{\s+throw err\s+\}/)
+  assert.match(sitesView, /await loadData\(preferredId, \{ throwOnError: true \}\)/)
+  assert.match(sitesView, /await runtime\.refreshTableSummaries\(\{ throwOnError: true \}\)/)
+  assert.match(sitesView, /try \{[\s\S]*toast\.success\('站点数据已刷新。'\)[\s\S]*\} catch \{\s+return\s+\}/)
+})
+
 test('sites invites prevent duplicate invite loads per site', async () => {
   const source = await readFile(sitesInvitesPath, 'utf8')
 
@@ -68,6 +83,15 @@ test('sites api key dialog passes Ant Design password visibility prop in camelCa
 
   assert.match(source, /visibilityToggle/)
   assert.doesNotMatch(source, /visibility-toggle/)
+})
+
+test('sites api key dialog does not report success when manual key already exists', async () => {
+  const source = await readFile(sitesApiKeyDialogPath, 'utf8')
+
+  assert.match(source, /let apiKeyAdded = false/)
+  assert.match(source, /apiKeyAdded = true/)
+  assert.match(source, /if \(!apiKeyAdded\) \{\s+return\s+\}/)
+  assert.match(source, /resetManualApiKeyForm\(manualApiKeyForm, site\)[\s\S]*options\.toast\.success\('自定义 API Key 已加入本地配置，保存后生效。'\)/)
 })
 
 test('sites editor totp textarea uses centralized autocomplete helper', async () => {

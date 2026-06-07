@@ -66,6 +66,15 @@
   cursor: pointer;
 }
 
+.chat-workbench.chat-workbench .session-sidebar__actions button:hover,
+.chat-workbench.chat-workbench .session-sidebar__actions button:focus-visible,
+.chat-workbench.chat-workbench .session-history-delete:hover,
+.chat-workbench.chat-workbench .session-history-delete:focus-visible {
+  border-color: rgba(37, 99, 235, 0.34) !important;
+  background: #eff6ff !important;
+  color: #1d4ed8 !important;
+}
+
 .session-sidebar__actions button {
   width: var(--control-height);
   height: var(--control-height);
@@ -108,6 +117,10 @@
 .session-history-item.is-active {
   border-color: rgba(37, 99, 235, 0.18);
   background: rgba(232, 241, 255, 0.86);
+}
+
+.session-history-item:hover {
+  box-shadow: var(--shadow-control-hover);
 }
 
 .session-history-item__main {
@@ -204,6 +217,13 @@
 .session-tool-button:disabled {
   cursor: not-allowed;
   opacity: 0.58;
+}
+
+.chat-workbench.chat-workbench .session-clear-button:not(:disabled):hover,
+.chat-workbench.chat-workbench .session-clear-button:not(:disabled):focus-visible {
+  border-color: rgba(37, 99, 235, 0.36) !important;
+  background: #eff6ff !important;
+  color: #1d4ed8 !important;
 }
 
 .session-main {

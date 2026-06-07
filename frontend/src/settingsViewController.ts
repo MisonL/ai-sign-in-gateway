@@ -82,7 +82,10 @@ export function useSettingsViewController() {
 
   function duplicateActivePricingScheme() {
     const source = activePricingScheme.value
-    if (!source) return
+    if (!source) {
+      toast.error('当前没有可复制的价格方案。')
+      return
+    }
     const next = clonePricingScheme(source)
     next.id = `custom-${Date.now()}`
     next.name = source.readonly ? '官方价格副本' : `${source.name} 副本`
@@ -90,18 +93,35 @@ export function useSettingsViewController() {
     next.source = 'custom'
     form.gateway_pricing_schemes.push(next)
     form.gateway_pricing_active_scheme_id = next.id
+    toast.success('已复制为自定义价格方案，保存设置后生效。')
   }
 
   function addPricingRow() {
     const scheme = activePricingScheme.value
-    if (!scheme || scheme.readonly) return
+    if (!scheme) {
+      toast.error('当前没有可编辑的价格方案。')
+      return
+    }
+    if (scheme.readonly) {
+      toast.error('官方价格方案只读，请先复制为自定义方案。')
+      return
+    }
     scheme.prices.push(createPricingRow())
+    toast.success('已添加价格行，保存设置后生效。')
   }
 
   function removePricingRow(index: number) {
     const scheme = activePricingScheme.value
-    if (!scheme || scheme.readonly) return
+    if (!scheme) {
+      toast.error('当前没有可编辑的价格方案。')
+      return
+    }
+    if (scheme.readonly) {
+      toast.error('官方价格方案只读，请先复制为自定义方案。')
+      return
+    }
     scheme.prices.splice(index, 1)
+    toast.success('已移除价格行，保存设置后生效。')
   }
 
   async function save() {

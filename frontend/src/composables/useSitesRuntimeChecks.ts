@@ -22,6 +22,10 @@ type UseSitesRuntimeChecksOptions = {
   runSiteBatch: <T>(items: T[], worker: (item: T) => Promise<void>, concurrency?: number) => Promise<void>
 }
 
+type RefreshTableSummariesOptions = {
+  throwOnError?: boolean
+}
+
 export function useSitesRuntimeChecks(options: UseSitesRuntimeChecksOptions) {
   const connectivitySweepProgress = ref<{ total: number; done: number; success: number; failed: number } | null>(null)
   const balanceProbeIds = ref<number[]>([])
@@ -43,7 +47,7 @@ export function useSitesRuntimeChecks(options: UseSitesRuntimeChecksOptions) {
     Object.assign(target, mergeBalanceProbeResult(target, result))
   }
 
-  async function refreshTableSummaries() {
+  async function refreshTableSummaries(refreshOptions: RefreshTableSummariesOptions = {}) {
     if (!options.sites.value.length) {
       return
     }
@@ -52,6 +56,9 @@ export function useSitesRuntimeChecks(options: UseSitesRuntimeChecksOptions) {
       summaries.forEach(applySiteSummary)
     } catch (err) {
       options.toast.error(err instanceof Error ? err.message : '站点摘要刷新失败')
+      if (refreshOptions.throwOnError) {
+        throw err
+      }
     }
   }
 

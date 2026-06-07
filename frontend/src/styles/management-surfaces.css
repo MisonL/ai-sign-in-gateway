@@ -187,6 +187,59 @@
   min-width: 104px !important;
 }
 
+.sites-page.sites-page .sites-toolbar__seg-btn.ant-btn:not(:disabled):not(.ant-btn-disabled):hover,
+.sites-page.sites-page .sites-toolbar__ghost-btn.ant-btn:not(:disabled):not(.ant-btn-disabled):hover,
+.sites-page.sites-page .sites-list-toolbar__btn.ant-btn:not(:disabled):not(.ant-btn-disabled):hover,
+.gateway-route-page.gateway-route-page .gateway-toolbar-actions.ant-space .ant-btn:not(:disabled):not(.ant-btn-disabled):hover,
+.gateway-route-page.gateway-route-page .route-probe-control .ant-btn:not(:disabled):not(.ant-btn-disabled):hover,
+.gateway-route-page.gateway-route-page .gateway-access--route .ant-btn:not(:disabled):not(.ant-btn-disabled):hover,
+.gateway-route-page.gateway-route-page .route-pool-type-tabs .ant-btn:not(:disabled):not(.ant-btn-disabled):hover,
+.gateway-route-page.gateway-route-page .route-pool-clear.ant-btn:not(:disabled):not(.ant-btn-disabled):hover,
+.sites-page.sites-page .sites-toolbar__seg-btn.ant-btn:not(:disabled):not(.ant-btn-disabled):focus-visible,
+.sites-page.sites-page .sites-toolbar__ghost-btn.ant-btn:not(:disabled):not(.ant-btn-disabled):focus-visible,
+.sites-page.sites-page .sites-list-toolbar__btn.ant-btn:not(:disabled):not(.ant-btn-disabled):focus-visible,
+.gateway-route-page.gateway-route-page .gateway-toolbar-actions.ant-space .ant-btn:not(:disabled):not(.ant-btn-disabled):focus-visible,
+.gateway-route-page.gateway-route-page .route-probe-control .ant-btn:not(:disabled):not(.ant-btn-disabled):focus-visible,
+.gateway-route-page.gateway-route-page .gateway-access--route .ant-btn:not(:disabled):not(.ant-btn-disabled):focus-visible,
+.gateway-route-page.gateway-route-page .route-pool-type-tabs .ant-btn:not(:disabled):not(.ant-btn-disabled):focus-visible,
+.gateway-route-page.gateway-route-page .route-pool-clear.ant-btn:not(:disabled):not(.ant-btn-disabled):focus-visible {
+  border-color: rgba(37, 99, 235, 0.34) !important;
+  background: var(--accent-soft) !important;
+  color: var(--accent-strong) !important;
+  box-shadow: var(--shadow-control-hover) !important;
+  transform: translateY(-1px);
+}
+
+.sites-page.sites-page .sites-toolbar__seg-btn--primary.ant-btn:not(:disabled):not(.ant-btn-disabled):hover,
+.sites-page.sites-page .sites-toolbar__ghost-btn--strong.ant-btn:not(:disabled):not(.ant-btn-disabled):hover,
+.sites-page.sites-page .sites-toolbar__create-btn.ant-btn:not(:disabled):not(.ant-btn-disabled):hover,
+.gateway-route-page.gateway-route-page .gateway-toolbar-actions.ant-space .ant-btn-primary:not(:disabled):not(.ant-btn-disabled):hover,
+.gateway-route-page.gateway-route-page .route-pool-type-tabs .ant-btn-primary:not(:disabled):not(.ant-btn-disabled):hover,
+.sites-page.sites-page .sites-toolbar__seg-btn--primary.ant-btn:not(:disabled):not(.ant-btn-disabled):focus-visible,
+.sites-page.sites-page .sites-toolbar__ghost-btn--strong.ant-btn:not(:disabled):not(.ant-btn-disabled):focus-visible,
+.sites-page.sites-page .sites-toolbar__create-btn.ant-btn:not(:disabled):not(.ant-btn-disabled):focus-visible,
+.gateway-route-page.gateway-route-page .gateway-toolbar-actions.ant-space .ant-btn-primary:not(:disabled):not(.ant-btn-disabled):focus-visible,
+.gateway-route-page.gateway-route-page .route-pool-type-tabs .ant-btn-primary:not(:disabled):not(.ant-btn-disabled):focus-visible {
+  border-color: var(--accent-strong) !important;
+  background: var(--accent-strong) !important;
+  color: var(--accent-foreground) !important;
+  box-shadow: 0 6px 14px rgba(37, 99, 235, 0.24) !important;
+  transform: translateY(-1px);
+}
+
+.sites-page.sites-page .sites-toolbar__seg-btn.ant-btn:not(:disabled):not(.ant-btn-disabled):active,
+.sites-page.sites-page .sites-toolbar__ghost-btn.ant-btn:not(:disabled):not(.ant-btn-disabled):active,
+.sites-page.sites-page .sites-toolbar__create-btn.ant-btn:not(:disabled):not(.ant-btn-disabled):active,
+.sites-page.sites-page .sites-list-toolbar__btn.ant-btn:not(:disabled):not(.ant-btn-disabled):active,
+.gateway-route-page.gateway-route-page .gateway-toolbar-actions.ant-space .ant-btn:not(:disabled):not(.ant-btn-disabled):active,
+.gateway-route-page.gateway-route-page .route-probe-control .ant-btn:not(:disabled):not(.ant-btn-disabled):active,
+.gateway-route-page.gateway-route-page .gateway-access--route .ant-btn:not(:disabled):not(.ant-btn-disabled):active,
+.gateway-route-page.gateway-route-page .route-pool-type-tabs .ant-btn:not(:disabled):not(.ant-btn-disabled):active,
+.gateway-route-page.gateway-route-page .route-pool-clear.ant-btn:not(:disabled):not(.ant-btn-disabled):active {
+  box-shadow: var(--shadow-control-active) !important;
+  transform: translateY(0);
+}
+
 .sites-page.sites-page .sites-toolbar__segment .ant-btn-icon,
 .sites-page.sites-page .sites-toolbar__actions .ant-btn-icon,
 .gateway-route-page.gateway-route-page .gateway-toolbar-actions.ant-space .ant-btn-icon,

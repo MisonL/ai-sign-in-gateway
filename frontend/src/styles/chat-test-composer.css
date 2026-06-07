@@ -63,6 +63,13 @@
   box-shadow: none;
 }
 
+.chat-workbench.chat-workbench .session-tool-button:not(:disabled):hover,
+.chat-workbench.chat-workbench .session-tool-button:not(:disabled):focus-visible {
+  border-color: rgba(37, 99, 235, 0.36) !important;
+  background: var(--accent-soft) !important;
+  color: var(--accent-strong) !important;
+}
+
 .session-send-button {
   align-self: center;
   gap: 8px;
@@ -75,6 +82,12 @@
   font-size: 13px;
   font-weight: 600;
   box-shadow: none;
+}
+
+.chat-workbench.chat-workbench .session-send-button:not(:disabled):hover,
+.chat-workbench.chat-workbench .session-send-button:not(:disabled):focus-visible {
+  background: var(--accent-strong) !important;
+  box-shadow: 0 6px 14px rgba(37, 99, 235, 0.24) !important;
 }
 
 .session-footnote {
@@ -137,6 +150,14 @@
   background: #ffffff;
   color: #dc2626;
   cursor: pointer;
+}
+
+.chat-workbench.chat-workbench .session-attachment button:hover,
+.chat-workbench.chat-workbench .session-attachment button:focus-visible {
+  border-color: rgba(220, 38, 38, 0.28) !important;
+  background: var(--danger-soft) !important;
+  color: var(--danger) !important;
+  box-shadow: var(--shadow-control-hover) !important;
 }
 
 .chat-workbench .ant-select-selector {

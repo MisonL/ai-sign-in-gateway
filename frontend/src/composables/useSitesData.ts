@@ -8,6 +8,7 @@ type Toast = ReturnType<typeof useToast>
 
 type LoadDataOptions = {
   preserveEditor?: boolean
+  throwOnError?: boolean
 }
 
 type UseSitesDataOptions = {
@@ -49,6 +50,9 @@ export function useSitesData(options: UseSitesDataOptions) {
       }
     } catch (err) {
       options.toast.error(err instanceof Error ? err.message : '加载失败')
+      if (loadOptions.throwOnError) {
+        throw err
+      }
     } finally {
       options.busy.value = false
     }

@@ -108,7 +108,7 @@ export function useSitesViewController() {
   const apiKeyDialog = useSitesApiKeyDialog({ sites, toast, loadData, syncRoutesAfterApiKeyUpdate })
   const runtime = useSitesRuntimeChecks({ sites, busy, toast, runSiteBatch })
   const queue = useSitesQueue({ toast })
-  const { schedule: scheduleSummaryRefresh } = useDebouncedTask(runtime.refreshTableSummaries)
+  const { schedule: scheduleSummaryRefresh } = useDebouncedTask(() => runtime.refreshTableSummaries())
   const ccSwitch = useSitesCCSwitch({
     fileInput: ccSwitchFileInput,
     selectedId,
@@ -181,8 +181,13 @@ export function useSitesViewController() {
   }
 
   async function handleRefresh(preferredId: number | null = selectedId.value) {
-    await loadData(preferredId)
-    await runtime.refreshTableSummaries()
+    try {
+      await loadData(preferredId, { throwOnError: true })
+      await runtime.refreshTableSummaries({ throwOnError: true })
+      toast.success('站点数据已刷新。')
+    } catch {
+      return
+    }
   }
 
   async function handleSiteGroupsChanged() {

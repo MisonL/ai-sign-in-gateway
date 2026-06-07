@@ -207,6 +207,18 @@
   color: #0f766e;
 }
 
+.desktop-console.desktop-console .service-line__copy:not(:disabled):hover,
+.desktop-console.desktop-console .service-line__copy:not(:disabled):focus-visible {
+  border-color: rgba(37, 99, 235, 0.34) !important;
+  background: var(--accent-soft) !important;
+  color: var(--accent-strong) !important;
+  box-shadow: var(--shadow-control-hover) !important;
+}
+
+.desktop-console.desktop-console .service-line__copy:not(:disabled):active {
+  box-shadow: var(--shadow-control-active) !important;
+}
+
 .desktop-alerts {
   display: grid;
   gap: 8px;

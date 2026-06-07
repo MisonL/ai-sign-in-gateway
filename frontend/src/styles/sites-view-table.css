@@ -208,6 +208,13 @@
   box-shadow: none;
 }
 
+.site-action-btn.ant-btn:not(:disabled):hover,
+.site-actions-menu-button.ant-btn:not(:disabled):hover {
+  border-color: rgba(37, 99, 235, 0.34) !important;
+  background: var(--accent-soft) !important;
+  color: var(--accent-strong) !important;
+}
+
 .site-action-btn--edit.ant-btn {
   color: #4a7dff !important;
   border-color: rgba(89, 134, 255, 0.34) !important;
