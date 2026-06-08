@@ -32,10 +32,10 @@
 }
 
 .overview-feed__dot {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
   margin-left: 3px;
-  border-radius: 50%;
+  border-radius: var(--radius-xs);
   background: var(--text-faint);
   box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.14);
 }
@@ -91,7 +91,7 @@
 
 .overview-feed__time {
   padding: 4px 8px;
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-control);
   background: var(--bg-muted);
   font-size: 11px;
   font-feature-settings: 'tnum';

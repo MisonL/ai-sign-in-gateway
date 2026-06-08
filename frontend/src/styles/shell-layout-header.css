@@ -64,7 +64,7 @@
 
 .app-header__summary::-webkit-scrollbar-thumb {
   background: rgba(100, 116, 139, 0.28);
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-xs);
 }
 
 .header-status {

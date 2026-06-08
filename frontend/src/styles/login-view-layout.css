@@ -75,7 +75,7 @@
 
 .brand-lockup em {
   padding: 6px 14px;
-  border-radius: 999px;
+  border-radius: var(--radius-control);
   background: rgba(30, 127, 255, 0.14);
   font-size: 14px;
   font-style: normal;

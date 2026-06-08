@@ -202,7 +202,7 @@
   align-items: center;
   height: 20px;
   padding: 0 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-control);
   background: var(--success-soft);
   color: var(--success);
   font-size: 11px;
@@ -230,9 +230,9 @@
 }
 
 .sider-footer__dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-xs);
   background: var(--success);
   box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.14);
   flex: 0 0 auto;

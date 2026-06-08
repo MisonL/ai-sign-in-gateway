@@ -2,7 +2,7 @@
   min-width: var(--switch-width-text) !important;
   height: var(--switch-height) !important;
   line-height: var(--switch-height) !important;
-  border-radius: var(--radius-pill) !important;
+  border-radius: var(--radius-control) !important;
   background: var(--switch-track-off) !important;
   vertical-align: middle !important;
 }
@@ -63,7 +63,7 @@
 }
 
 .ant-switch.app-switch .ant-switch-handle::before {
-  border-radius: 50% !important;
+  border-radius: var(--radius-xs) !important;
 }
 
 .ant-switch.app-switch:not(.ant-switch-disabled):active .ant-switch-handle::before,
@@ -79,7 +79,7 @@
   height: calc(var(--switch-height) - 2px) !important;
   min-height: calc(var(--switch-height) - 2px) !important;
   padding: 0 !important;
-  border-radius: var(--radius-pill) !important;
+  border-radius: var(--radius-control) !important;
 }
 
 .ant-switch.app-switch .ant-switch-inner-checked,

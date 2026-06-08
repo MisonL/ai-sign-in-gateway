@@ -156,7 +156,7 @@
 
   .settings-tabs .ant-tabs-nav-wrap::-webkit-scrollbar-thumb {
     background: rgba(100, 116, 139, 0.28);
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-xs);
   }
 }
 

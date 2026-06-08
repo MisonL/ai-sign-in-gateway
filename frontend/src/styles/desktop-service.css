@@ -170,9 +170,9 @@
 }
 
 .service-line__dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-xs);
   background: #ef4444;
   box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.12);
 }

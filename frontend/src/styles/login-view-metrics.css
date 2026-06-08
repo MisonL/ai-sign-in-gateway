@@ -73,7 +73,7 @@
 .metric-value em {
   margin-left: auto;
   padding: 3px 9px;
-  border-radius: 999px;
+  border-radius: var(--radius-control);
   color: #0aa76c;
   background: rgba(30, 211, 138, 0.16);
   font-size: 13px;
@@ -100,7 +100,7 @@
   height: 10px;
   margin-top: 24px;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: var(--radius-xs);
   background: rgba(117, 183, 255, 0.22);
 }
 
@@ -123,26 +123,26 @@
   text-align: center;
 }
 
-.score-ring {
+.score-frame {
   display: grid;
   place-items: center;
   width: 72px;
   height: 72px;
   margin: 10px auto 4px;
   border: 8px solid #bfdbfe;
-  border-radius: 50%;
+  border-radius: var(--radius-container);
   background: #ffffff;
   box-shadow: none;
 }
 
-.score-ring span {
+.score-frame span {
   color: #07194a;
   font-size: 30px;
   font-weight: 900;
   line-height: 1;
 }
 
-.score-ring small {
+.score-frame small {
   color: #385c89;
   font-weight: 700;
 }

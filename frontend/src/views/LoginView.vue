@@ -165,7 +165,7 @@ onMounted(loadInvites)
                 </span>
                 <strong>路由健康度</strong>
               </div>
-              <div class="score-ring">
+              <div class="score-frame">
                 <span>96</span>
                 <small>分</small>
               </div>

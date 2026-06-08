@@ -5,7 +5,7 @@
   height: var(--control-height);
   padding: 0 12px;
   border: 1px solid rgba(148, 163, 184, 0.26);
-  border-radius: 999px;
+  border-radius: var(--radius-control);
   background: rgba(255, 255, 255, 0.82);
   color: #64748b;
   font-family: 'IBM Plex Mono', monospace;
@@ -16,9 +16,9 @@
 
 .gateway-active-feed-panel__pulse::before {
   content: '';
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-xs);
   background: currentColor;
 }
 
@@ -76,7 +76,7 @@
   width: 10px;
   height: 10px;
   margin-top: 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-xs);
   background: #39c8ff;
   box-shadow: 0 0 0 4px rgba(57, 200, 255, 0.14);
 }

@@ -165,7 +165,7 @@ function asSite(record: unknown): Site {
             </template>
             <template v-else-if="column.key === 'checkin_status'">
               <StatusPill v-if="visibleCheckinStatus(asSite(record))" :value="visibleCheckinStatus(asSite(record))" />
-              <span v-else class="site-empty-pill">未加入</span>
+              <span v-else class="site-empty-badge">未加入</span>
             </template>
             <template v-else-if="column.key === 'group'">
               <span class="site-group-text">{{ displayGroupName(asSite(record)) }}</span>

@@ -146,7 +146,7 @@
   height: 22px;
   padding: 0;
   border: 1px solid rgba(190, 74, 74, 0.16);
-  border-radius: 999px;
+  border-radius: var(--radius-control);
   background: #ffffff;
   color: #dc2626;
   cursor: pointer;

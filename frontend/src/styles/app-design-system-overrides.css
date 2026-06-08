@@ -26,7 +26,7 @@ body {
 
 ::-webkit-scrollbar-thumb {
   background: rgba(31, 42, 68, 0.16);
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-xs);
   border: 2px solid var(--bg-page);
 }
 
@@ -206,7 +206,7 @@ button:not(.ant-btn):focus-visible {
 }
 
 .ant-tag {
-  border-radius: var(--radius-pill) !important;
+  border-radius: var(--radius-control) !important;
   border: 1px solid transparent;
   padding: 0 10px;
 }

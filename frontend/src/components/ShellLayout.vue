@@ -80,7 +80,7 @@ const view = useShellLayoutController()
       </div>
 
       <div v-else class="sider-footer sider-footer--collapsed">
-        <a-button class="sider-collapse-button" shape="circle" @click="view.toggleCollapsed" aria-label="展开导航">
+        <a-button class="sider-collapse-button" @click="view.toggleCollapsed" aria-label="展开导航">
           <template #icon>
             <MenuUnfoldOutlined aria-hidden="true" />
           </template>

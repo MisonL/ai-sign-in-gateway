@@ -87,7 +87,7 @@ test('shared switch sizing keeps text lanes proportional to the handle', async (
   assert.match(rhythm, /--switch-text-disabled: #475569;/)
   assert.match(rhythm, /--switch-text-on: var\(--accent-foreground\);/)
   assert.match(switches, /\.ant-switch\.app-switch \{/)
-  assert.match(switches, /border-radius: var\(--radius-pill\) !important;/)
+  assert.match(switches, /border-radius: var\(--radius-control\) !important;/)
   assert.match(switches, /\.ant-switch\.app-switch\.ant-switch-disabled \{/)
   assert.match(switches, /color: var\(--switch-text-on\) !important;/)
   assert.match(switches, /inset-inline-end: calc\(var\(--switch-handle-size\) \+ var\(--switch-handle-gap\)\) !important;/)
@@ -172,4 +172,49 @@ test('header tags and sidebar navigation match the rectangular control style', a
   assert.match(navigation, /\.app-menu\.ant-menu-light \.ant-menu-item::after,[\s\S]*display: none !important;/)
   assert.match(navigation, /\.app-menu\.ant-menu-light \.ant-menu-item:not\(\.ant-menu-item-selected\):hover,[\s\S]*background-color: #dbeafe !important;/)
   assert.match(navigation, /transform: translateX\(1px\);/)
+})
+
+test('status markers preserve dot semantics without circular styling', async () => {
+  const navigation = await readFile(join(frontendRoot, 'styles/app-shell-navigation.css'), 'utf8')
+  const desktop = await readFile(join(frontendRoot, 'styles/desktop-service.css'), 'utf8')
+  const gatewayFeed = await readFile(join(frontendRoot, 'styles/gateway-view-feed.css'), 'utf8')
+  const gatewayRouteTable = await readFile(join(frontendRoot, 'styles/gateway-view-route-table.css'), 'utf8')
+  const overviewFeed = await readFile(join(frontendRoot, 'styles/overview-feed.css'), 'utf8')
+  const loginMetrics = await readFile(join(frontendRoot, 'styles/login-view-metrics.css'), 'utf8')
+  const loginView = await readFile(join(frontendRoot, 'views/LoginView.vue'), 'utf8')
+  const legacyScoreClass = ['score', 'ring'].join('-')
+  const legacyRadiusToken = ['radius', 'pi' + 'll'].join('-')
+  const circularRadiusPattern = new RegExp(`border-radius:\\s*(?:50%|999px|var\\(--${legacyRadiusToken}\\))`)
+
+  for (const source of [navigation, desktop, gatewayFeed, gatewayRouteTable, overviewFeed]) {
+    assert.doesNotMatch(source, circularRadiusPattern)
+  }
+
+  assert.match(navigation, /\.sider-footer__dot \{[\s\S]*width: 10px;[\s\S]*height: 10px;[\s\S]*border-radius: var\(--radius-xs\);/)
+  assert.match(desktop, /\.service-line__dot \{[\s\S]*width: 10px;[\s\S]*height: 10px;[\s\S]*border-radius: var\(--radius-xs\);/)
+  assert.match(gatewayFeed, /\.gateway-active-feed-panel__pulse::before \{[\s\S]*width: 10px;[\s\S]*height: 10px;[\s\S]*border-radius: var\(--radius-xs\);/)
+  assert.match(gatewayFeed, /\.gateway-active-feed__dot \{[\s\S]*width: 10px;[\s\S]*height: 10px;[\s\S]*border-radius: var\(--radius-xs\);/)
+  assert.match(gatewayRouteTable, /\.gateway-latency__dot \{[\s\S]*width: 10px;[\s\S]*height: 10px;[\s\S]*border-radius: var\(--radius-xs\);/)
+  assert.match(overviewFeed, /\.overview-feed__dot \{[\s\S]*width: 10px;[\s\S]*height: 10px;[\s\S]*border-radius: var\(--radius-xs\);/)
+  assert.match(loginMetrics, /\.score-frame \{[\s\S]*border-radius: var\(--radius-container\);/)
+  assert.doesNotMatch(loginMetrics, new RegExp(legacyScoreClass))
+  assert.match(loginView, /class="score-frame"/)
+  assert.doesNotMatch(loginView, new RegExp(legacyScoreClass))
+})
+
+test('frontend source no longer references legacy circular control styling', async () => {
+  const legacyScoreClass = ['score', 'ring'].join('-')
+  const legacyRadiusToken = ['radius', 'pi' + 'll'].join('-')
+  const circularRadiusPattern = new RegExp(`border-radius:\\s*(?:50%|999px|var\\(--${legacyRadiusToken}\\))`)
+  const legacyTokenPattern = new RegExp(`${legacyScoreClass}|site-empty-pill|shape="circle"`)
+  const failures: string[] = []
+
+  for (const file of sourceFiles(frontendRoot)) {
+    const source = await readFile(file, 'utf8')
+    if (circularRadiusPattern.test(source) || legacyTokenPattern.test(source)) {
+      failures.push(relative(frontendRoot, file))
+    }
+  }
+
+  assert.deepEqual(failures, [])
 })

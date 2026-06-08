@@ -59,9 +59,9 @@
   box-shadow: var(--shadow-card) !important;
 }
 
-/* Route pool filter pills */
+/* Route pool filter controls */
 .route-pool-title .ant-btn-sm {
-  border-radius: var(--radius-pill) !important;
+  border-radius: var(--radius-control) !important;
   font-weight: 500;
 }
 
